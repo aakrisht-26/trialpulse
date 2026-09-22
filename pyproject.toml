@@ -8,8 +8,12 @@ license-files = ["LICENSE"]
 authors = [{ name = "Aakrisht Yadav" }]
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "duckdb>=1.5.5",
+    "httpx>=0.28.1",
+    "huggingface-hub>=1.32.0",
     "pydantic>=2.13.5",
     "pydantic-settings[yaml]>=2.15.0",
+    "tenacity>=9.1.4",
 ]
 
 [build-system]
@@ -60,5 +64,6 @@ dev = [
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "respx>=0.23.1",
     "ruff>=0.16.8",
 ]
