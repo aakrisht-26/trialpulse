@@ -46,12 +46,12 @@ Evidence below is from Claude's shell on 2026-09-23. It is not a claim about Aak
 | Criterion | Evidence |
 | --- | --- |
 | Lint clean | `ruff check .`: All checks passed |
-| Format clean | `ruff format --check .`: 5 files already formatted |
+| Format clean | `ruff format --check .`: 11 files already formatted (ruff 0.16 also checks Markdown) |
 | Types clean | `mypy src` (strict): no issues in 2 source files |
 | Tests clean, smoke test loads the config | `pytest -q`: 17 passed; `config.py` at 100% line and branch coverage |
 | Postgres container healthy | **Not verified by Claude.** Docker is not installed or not on PATH in Claude's shell. |
 | pre-commit passes on all files | `pre-commit run --all-files`: all 6 hooks passed, no files modified |
-| Public GitHub repo exists and CI is green | Pending: recorded after the push |
+| Public GitHub repo exists and CI is green | https://github.com/aakrisht-26/trialpulse created; CI run 35792432458 on `b7c2a96` passed (lint, format, types, 17 tests, CPython 3.12.3 on ubuntu-latest) |
 
 ### Decisions
 
@@ -78,4 +78,5 @@ Made by Claude, flagged for review:
 - The Postgres health check (`docker compose up -d`, `docker compose ps`) could not be run by Claude. Aakrisht runs it.
 - The dataset revision and cutoff are deferred to Step 2, by design.
 - Note for Step 8: `docs/preregistration.md` exists in git history from Step 1 as a header stub. The test lock must require a substantive registration (for example, the status line changed and hypotheses present), not just any committed version of the file.
+- CI annotation: GitHub will move `ubuntu-latest` to Ubuntu 26 starting 2026-10-19. The workflow still uses `ubuntu-latest`. Pinning `ubuntu-24.04` is an option for review; nothing was changed.
 - Local note: uv warns that it cannot hardlink from its cache (on C:) into the project (on E:) and falls back to copying. This is harmless. `$env:UV_LINK_MODE = "copy"` silences it.
