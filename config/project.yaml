@@ -1,0 +1,56 @@
+# TrialPulse project configuration.
+#
+# Holds every tunable constant from CLAUDE.md Section 6. Code reads these values
+# through trialpulse.config.load_project_config() and never hardcodes them.
+# Environment variables cannot override this file. Changing a locked definition
+# requires an ADR approved by Aakrisht.
+
+dataset:
+  repo_id: brbk/clinical_trials_history
+  config_name: core
+  revision: null   # Git tag of the pinned revision (v2026.MM.DD), set in Step 2
+  cutoff: null     # max last_update_post_date in the pinned revision, recorded once computed
+
+population:
+  study_type: INTERVENTIONAL
+  min_first_post_date: 2008-01-01   # time zero (t0) is study_first_post_date
+
+# Overall-status groups, using canonical API v2 enum names.
+statuses:
+  open: [NOT_YET_RECRUITING, RECRUITING, ENROLLING_BY_INVITATION, ACTIVE_NOT_RECRUITING, SUSPENDED]
+  early_stop: [TERMINATED, WITHDRAWN]   # event of interest
+  competing: [COMPLETED]                # competing event
+  unknown: [UNKNOWN]                    # censored at status_verified_date of the first UNKNOWN version
+
+# Stop-reason groups for the cause-specific secondary targets.
+stop_reasons:
+  operational: [accrual, business, funding, administrative, covid19]
+  scientific: [safety, efficacy]
+
+landmarks:
+  spacing_months: 6   # L_k = t0 + 6k months
+  max_index: 6        # k = 0 to 6
+
+horizons_months: [12, 24]
+
+discrete_time:
+  interval_months: 6   # four 6-month intervals after each landmark (j = 1 to 4)
+  n_intervals: 4
+
+walk_forward:
+  eval_window_months: 12   # evaluation rows: T <= L < T + 12 months
+  origins:
+    - {date: 2016-01-01, role: dev}
+    - {date: 2017-01-01, role: dev}
+    - {date: 2018-01-01, role: test}     # locked test
+    - {date: 2019-01-01, role: test}     # locked test
+    - {date: 2020-01-01, role: stress}   # locked COVID stress test, reported separately
+
+evaluation:
+  bootstrap_resamples: 1000   # cluster bootstrap, resampling trials
+  confidence_level: 0.95
+  calibration_bins: 10        # risk deciles
+  lift_top_fraction: 0.10     # lift at 10%
+
+seeds:
+  default: 42
