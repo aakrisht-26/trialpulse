@@ -1,11 +1,11 @@
 # Progress
 
-Current step: **Step 1, Repo skeleton, tooling, CI** (awaiting review).
+Current step: **Step 2, Feasibility spike** (in progress, unattended overnight run).
 
 | Step | Title | Status |
 | --- | --- | --- |
-| 1 | Repo skeleton, tooling, CI | Awaiting review |
-| 2 | Feasibility spike (go/no-go) | Not started |
+| 1 | Repo skeleton, tooling, CI | Approved 2026-09-23 |
+| 2 | Feasibility spike (go/no-go) | In progress |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
@@ -25,7 +25,7 @@ Current step: **Step 1, Repo skeleton, tooling, CI** (awaiting review).
 
 ## Step 1: Repo skeleton, tooling, CI
 
-Date: 2026-09-23. Status: awaiting review.
+Date: 2026-09-23. Status: approved by Aakrisht on 2026-09-23 (Docker Postgres check pending on his machine).
 
 ### What was built
 
@@ -80,3 +80,9 @@ Made by Claude, flagged for review:
 - Note for Step 8: `docs/preregistration.md` exists in git history from Step 1 as a header stub. The test lock must require a substantive registration (for example, the status line changed and hypotheses present), not just any committed version of the file.
 - CI annotation: GitHub will move `ubuntu-latest` to Ubuntu 26 starting 2026-10-19. The workflow still uses `ubuntu-latest`. Pinning `ubuntu-24.04` is an option for review; nothing was changed.
 - Local note: uv warns that it cannot hardlink from its cache (on C:) into the project (on E:) and falls back to copying. This is harmless. `$env:UV_LINK_MODE = "copy"` silences it.
+
+## Overnight run (2026-09-23)
+
+One line per finished item. On resume, continue after the last line.
+
+- [x] Follow-up 1: CI pinned to ubuntu-24.04; runs on main are never cancelled (commit: chore: pin CI runner).

@@ -8,15 +8,17 @@ on:
 permissions:
   contents: read
 
-# Cancel an in-progress run when a newer commit arrives on the same ref.
+# On other branches and pull requests, a newer commit cancels the older run on the
+# same ref. On main, every run gets its own group (keyed by run id), so no run is
+# ever cancelled or replaced and every main commit keeps its CI result.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   checks:
     name: Lint, types and tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       # Third-party actions are pinned to full commit SHAs; the comment names the release.
