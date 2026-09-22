@@ -237,7 +237,8 @@ def _part_g(r: Mapping[str, Any]) -> list[str]:
         f"{_pct(s['current_why_stopped_coverage'])} of them.",
         f"- Present in the bulk pull: phases {_pct(s['share_with_phases'])}, conditions "
         f"{_pct(s['share_with_conditions'])}, MeSH browse branches "
-        f"{_pct(s['share_with_browse_branches'])}, interventions "
+        f"{_pct(s['share_with_browse_branches'])}, MeSH terms {_pct(s['share_with_mesh_terms'])}, "
+        f"MeSH ancestors {_pct(s['share_with_mesh_ancestors'])}, interventions "
         f"{_pct(s['share_with_interventions'])}, arm groups {_pct(s['share_with_arm_groups'])}, "
         f"locations {_pct(s['share_with_locations'])}.",
         "",

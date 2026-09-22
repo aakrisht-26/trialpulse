@@ -206,6 +206,8 @@ def _bulk_summary(cfg: ProjectConfig, parquet: Path) -> dict[str, Any]:
                 avg(CASE WHEN len(phases) > 0 THEN 1 ELSE 0 END),
                 avg(CASE WHEN len(conditions) > 0 THEN 1 ELSE 0 END),
                 avg(CASE WHEN len(browse_branches) > 0 THEN 1 ELSE 0 END),
+                avg(CASE WHEN len(mesh_terms) > 0 THEN 1 ELSE 0 END),
+                avg(CASE WHEN len(mesh_ancestors) > 0 THEN 1 ELSE 0 END),
                 avg(CASE WHEN n_interventions > 0 THEN 1 ELSE 0 END),
                 avg(CASE WHEN n_arm_groups > 0 THEN 1 ELSE 0 END),
                 avg(CASE WHEN n_locations > 0 THEN 1 ELSE 0 END),
@@ -215,12 +217,14 @@ def _bulk_summary(cfg: ProjectConfig, parquet: Path) -> dict[str, Any]:
             FROM read_parquet('{parquet.as_posix()}')"""
         ).fetchone()
     assert row is not None
-    trials, phases, conds, branches, interv, arms, locs, stops, reasons = row
+    trials, phases, conds, branches, mesh, ancestors, interv, arms, locs, stops, reasons = row
     return {
         "trials": int(trials),
         "share_with_phases": float(phases),
         "share_with_conditions": float(conds),
         "share_with_browse_branches": float(branches),
+        "share_with_mesh_terms": float(mesh),
+        "share_with_mesh_ancestors": float(ancestors),
         "share_with_interventions": float(interv),
         "share_with_arm_groups": float(arms),
         "share_with_locations": float(locs),

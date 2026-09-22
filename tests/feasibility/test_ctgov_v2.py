@@ -39,7 +39,12 @@ def _study(nct_id: str, status: str = "RECRUITING", **extra: Any) -> dict[str, A
         "protocolSection": ps,
         "derivedSection": {
             "conditionBrowseModule": {
-                "browseBranches": [{"abbrev": "BXM"}, {"abbrev": "BC08"}, {"abbrev": "BXM"}]
+                "browseBranches": [{"abbrev": "BXM"}, {"abbrev": "BC08"}, {"abbrev": "BXM"}],
+                "meshes": [{"id": "D001249", "term": "Asthma"}],
+                "ancestors": [
+                    {"id": "D008173", "term": "Lung Diseases"},
+                    {"id": "D012140", "term": "Respiratory Tract Diseases"},
+                ],
             }
         },
     }
@@ -79,6 +84,8 @@ def test_normalize_bulk_record() -> None:
     assert set(row) == set(ctgov_v2.BULK_COLUMNS)
     assert row["phases"] == ["PHASE2", "PHASE3"]
     assert row["browse_branches"] == ["BC08", "BXM"]
+    assert row["mesh_terms"] == ["Asthma"]
+    assert row["mesh_ancestors"] == ["Lung Diseases", "Respiratory Tract Diseases"]
     assert row["intervention_types"] == ["DEVICE", "DRUG"]
     assert row["n_interventions"] == 3
     assert row["n_arm_groups"] == 2

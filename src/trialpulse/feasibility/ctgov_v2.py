@@ -59,6 +59,8 @@ FIELD_PATHS: dict[str, str] = {
     "arm_group_labels": f"{_ARMS}.armGroups.label",
     "location_countries": f"{_PS}.contactsLocationsModule.locations.country",
     "condition_browse_branches": "derivedSection.conditionBrowseModule.browseBranches.abbrev",
+    "condition_mesh_terms": "derivedSection.conditionBrowseModule.meshes.term",
+    "condition_mesh_ancestors": "derivedSection.conditionBrowseModule.ancestors.term",
 }
 
 # Fields that only apply to some records, for honest presence rates.
@@ -97,6 +99,8 @@ BULK_FIELD_NAMES: tuple[str, ...] = (
     "arm_group_labels",
     "location_countries",
     "condition_browse_branches",
+    "condition_mesh_terms",
+    "condition_mesh_ancestors",
 )
 
 # Parquet schema of the normalized bulk pull (DuckDB types).
@@ -114,6 +118,8 @@ BULK_COLUMNS: dict[str, str] = {
     "phases": "VARCHAR[]",
     "conditions": "VARCHAR[]",
     "browse_branches": "VARCHAR[]",
+    "mesh_terms": "VARCHAR[]",
+    "mesh_ancestors": "VARCHAR[]",
     "intervention_types": "VARCHAR[]",
     "n_interventions": "INTEGER",
     "n_arm_groups": "INTEGER",
@@ -244,6 +250,8 @@ def normalize_bulk_record(study: dict[str, Any]) -> dict[str, Any]:
         "phases": sorted(_str_list(field("phases"))),
         "conditions": _str_list(field("conditions")),
         "browse_branches": sorted(set(_str_list(field("condition_browse_branches")))),
+        "mesh_terms": sorted(set(_str_list(field("condition_mesh_terms")))),
+        "mesh_ancestors": sorted(set(_str_list(field("condition_mesh_ancestors")))),
         "intervention_types": sorted(set(interventions)),
         "n_interventions": len(interventions),
         "n_arm_groups": len(_str_list(field("arm_group_labels"))),
