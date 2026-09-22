@@ -1,0 +1,28 @@
+# ruff and mypy run as local hooks through uv, so pre-commit, CI and the terminal
+# all use the exact versions pinned in uv.lock (ADR 0003).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: unsupported
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: unsupported
+        types_or: [python, pyi]
+      - id: mypy
+        name: mypy (strict, src)
+        entry: uv run mypy src
+        language: unsupported
+        types_or: [python, pyi]
+        pass_filenames: false
