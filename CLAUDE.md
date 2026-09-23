@@ -663,3 +663,12 @@ Acceptance: a fresh clone follows the README quickstart successfully on Windows;
 
 1. DeepHit (pycox) as an extra challenger inside the same walk-forward harness.
 2. A per-trial risk memo written by an LLM strictly from stored SHAP drivers and version diffs, with an automated fabrication check: every number and date in the memo must appear in the source payload.
+
+## Amendments
+
+Accepted ADRs that change or refine this file. Where an amendment and an earlier section differ, the amendment applies.
+
+- **ADR 0002, configuration loading** (docs/adr/0002-configuration-loading.md): config/project.yaml is read through the pydantic-settings YAML source, so PyYAML (through the pydantic-settings[yaml] extra) joins the locked stack in Section 15. Environment variables and .env cannot override project.yaml. Secrets come only from the environment or .env (Section 17).
+- **ADR 0003, pre-commit hooks** (docs/adr/0003-local-pre-commit-hooks.md): ruff and mypy run in pre-commit as local hooks through uv run, so their versions come from uv.lock (Section 15, Step 1).
+- **ADR 0004, test lock** (docs/adr/0004-test-lock.md): the Section 10 test lock needs more than the --unlock-test flag and a committed docs/preregistration.md. It also requires an annotated git tag prereg-v1 on a commit whose docs/preregistration.md has a 'Registered: YYYY-MM-DD' line and no placeholder text, and the tagged commit must be an ancestor of HEAD. The tag and commit hashes are recorded with the results.
+- **ADR 0005, local Postgres port** (docs/adr/0005-local-postgres-host-port.md): the local Docker Compose Postgres (Section 15) is published on host port 15432 instead of 5432, and the local DATABASE_URL uses 15432.
