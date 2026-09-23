@@ -249,3 +249,33 @@ One line per finished item. On resume, continue after the last line.
 - [x] Item 1: docs/fallback_options.md written (AACT monthly archives from January 2017, other sources, internal-endpoint cost estimate, ranked recommendation), every claim linked to its source (commit f44abc2).
 - [x] Item 2: ADR 0006 (phase stated in the versioned title; current-record phase only in a sensitivity analysis) and ADR 0007 (versioned count of all open interventional trials) drafted with status Proposed; the cached part g pull holds no titles, so the title evidence waits for Step 7.
 - [x] Item 3: 'Amendments' section appended to the end of CLAUDE.md listing accepted ADRs 0002 to 0005 (9 lines added, none changed).
+- [x] Item 4: this report written.
+
+### Report (break run)
+
+**Done (docs only, on main):**
+
+- Step 1 is fully verified: the Docker check passed on Aakrisht's machine (container healthy on 127.0.0.1:15432).
+- `docs/fallback_options.md`:
+  - AACT has monthly archives from January 2017 (missing: July and September 2021 for dumps, July and August 2021 for flat files, and August 2022 for both), 0.6 to 2.2 GB each.
+  - Each AACT snapshot holds phase, conditions and MeSH terms as of that date.
+  - Every other public source found is a single date, too sparse, or a wrapper around the internal endpoint.
+  - A rebuild through the internal endpoint would take an estimated 109 to 123 days for the full cohort, or 5.2 to 5.9 days for a 20,000-trial sample, at 20 requests per minute.
+  - Ranking: AACT first, waiting for Hugging Face second, an internal-endpoint sample third.
+- ADR 0006 (phase) and ADR 0007 (competition) drafted as Proposed.
+- CLAUDE.md now ends with an Amendments section for ADRs 0002 to 0005.
+
+No code changed, the provisional branch and PR #1 were not touched, and the internal history endpoint was not called. Page fetches were polite, one at a time, and cached under `data/research_cache/`.
+
+**Decisions pending approval:**
+
+1. ADR 0006 parser details: official title with a fallback to the brief title; Arabic and Roman numerals and combined phases; a "not stated" category.
+2. ADR 0007 counts a trial as open at L when its latest version on or before L has an open status, SUSPENDED included, as in `config/project.yaml`.
+3. The Amendments section opens with "Where an amendment and an earlier section differ, the amendment applies."
+4. The AACT download sizes for semiannual (25 to 35 GB) and monthly (150 to 200 GB) snapshots are estimates from the listed file sizes.
+
+**Open questions:**
+
+1. AACT downloads now need a free account. Can you create one and confirm the archives back to 2017 are still downloadable after the redesign?
+2. ClinicalTrials.gov's terms page only renders in a browser, so the licence of the registry data was not verified.
+3. Should someone ask the author of `brbk/clinical_trials_history` about the pending access request? That would be a public post, so it is your call.
