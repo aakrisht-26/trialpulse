@@ -11,6 +11,14 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+# Above this share of invalid resamples the interval would describe a selected subset of
+# resamples, not the sampling distribution, so the bootstrap fails instead.
+MAX_INVALID_SHARE = 0.01
+
+
+class BootstrapError(RuntimeError):
+    """Too many resamples gave a statistic that is not finite."""
+
 
 def cluster_bootstrap(
     clusters: npt.NDArray[Any],
@@ -22,8 +30,10 @@ def cluster_bootstrap(
     """Point estimate and percentile interval of statistic(row_indices).
 
     Each resample draws as many clusters as there are, with replacement, and passes the
-    row indices of the drawn clusters (with repeats) to statistic. Resamples where the
-    statistic is not finite (for example, no cases drawn) are dropped and counted.
+    row indices of the drawn clusters (with repeats) to statistic. A resample whose
+    statistic is not finite (for example, no cases drawn) is invalid. Invalid resamples are
+    always counted and reported; if more than 1% of them are invalid, BootstrapError is
+    raised with the count.
     """
     uniq, inverse = np.unique(np.asarray(clusters), return_inverse=True)
     n_rows = len(inverse)
@@ -38,6 +48,13 @@ def cluster_bootstrap(
         value = statistic(rows)
         if np.isfinite(value):
             values.append(value)
+    invalid = n_resamples - len(values)
+    if invalid > MAX_INVALID_SHARE * n_resamples:
+        raise BootstrapError(
+            f"{invalid} of {n_resamples} bootstrap resamples ({invalid / n_resamples:.1%}) gave "
+            f"a statistic that is not finite, above the {MAX_INVALID_SHARE:.0%} limit; the "
+            "subset is too small or has too few cases for a reliable interval"
+        )
     alpha = (1.0 - confidence) / 2.0
     lo, hi = (
         (float(np.quantile(values, alpha)), float(np.quantile(values, 1.0 - alpha)))
@@ -50,4 +67,5 @@ def cluster_bootstrap(
         "ci_high": hi,
         "resamples": n_resamples,
         "valid_resamples": len(values),
+        "invalid_resamples": invalid,
     }

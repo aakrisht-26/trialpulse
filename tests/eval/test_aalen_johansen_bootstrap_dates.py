@@ -1,10 +1,12 @@
 """Aalen-Johansen (M0), the cluster bootstrap, and calendar-month arithmetic."""
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 
 from trialpulse.dates import add_months, days_between
-from trialpulse.eval.bootstrap import cluster_bootstrap
+from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap
 from trialpulse.models.aalen_johansen import AalenJohansenModel, aalen_johansen
 
 
@@ -75,10 +77,40 @@ def test_cluster_bootstrap_is_reproducible_and_brackets_the_estimate() -> None:
     assert first["ci_high"] - first["ci_low"] == pytest.approx(4 * 2 / np.sqrt(400), rel=0.25)
 
 
-def test_cluster_bootstrap_counts_invalid_resamples() -> None:
-    result = cluster_bootstrap(np.arange(5), lambda idx: float("nan"), 10, seed=0, confidence=0.9)
-    assert result["valid_resamples"] == 0
-    assert np.isnan(result["ci_low"])
+def _statistic_invalid_on(calls: set[int]) -> Callable[[np.ndarray], float]:
+    """A statistic that is NaN on the given call numbers (call 0 is the point estimate)."""
+    count = {"n": -1}
+
+    def statistic(idx: np.ndarray) -> float:
+        count["n"] += 1
+        return float("nan") if count["n"] in calls else float(len(idx))
+
+    return statistic
+
+
+def test_cluster_bootstrap_fails_when_all_resamples_are_invalid() -> None:
+    with pytest.raises(BootstrapError, match=r"10 of 10 bootstrap resamples \(100.0%\)"):
+        cluster_bootstrap(np.arange(5), lambda idx: float("nan"), 10, seed=0, confidence=0.9)
+
+
+def test_cluster_bootstrap_reports_invalid_resamples_up_to_one_percent() -> None:
+    result = cluster_bootstrap(
+        np.arange(5), _statistic_invalid_on({3, 7}), 200, seed=0, confidence=0.9
+    )
+    assert result["invalid_resamples"] == 2  # 1% of 200 is still allowed
+    assert result["valid_resamples"] == 198
+
+    clean = cluster_bootstrap(
+        np.arange(5), _statistic_invalid_on(set()), 50, seed=0, confidence=0.9
+    )
+    assert clean["invalid_resamples"] == 0
+
+
+def test_cluster_bootstrap_fails_above_one_percent_invalid() -> None:
+    with pytest.raises(BootstrapError, match=r"3 of 200 bootstrap resamples \(1.5%\)"):
+        cluster_bootstrap(
+            np.arange(5), _statistic_invalid_on({1, 2, 3}), 200, seed=0, confidence=0.9
+        )
 
 
 def test_add_months_clamps_to_month_end() -> None:
