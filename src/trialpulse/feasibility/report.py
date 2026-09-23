@@ -202,7 +202,10 @@ def _part_f(r: Mapping[str, Any]) -> list[str]:
         f"version); {len(r['failures'])} failed.",
         f"- Mode: `{r['mode']}`; {_num(r['versions_fetched'])} version snapshots fetched of "
         f"{_num(r['versions_in_change_logs'])} versions in the change logs; "
-        f"{_num(r['requests_this_run'])} requests in the last run at 20 per minute or less.",
+        f"{_num(r.get('requests_needed', r['trials_audited'] + r['versions_fetched']))} "
+        "requests in total at 20 per minute or less (one per change log and version); the "
+        f"last run made {_num(r['requests_this_run'])} of them in "
+        f"{r['elapsed_minutes_this_run']} minutes, the rest came from the cache.",
         "",
         "| Field | Changed after version 0 | Share of sampled | 95% interval (Wilson) "
         "| Share among multi-version | Under 3%? |",

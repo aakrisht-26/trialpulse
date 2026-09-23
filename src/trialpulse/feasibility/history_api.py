@@ -197,6 +197,8 @@ def run_stability_audit(
         "estimated_minutes_all_versions": round(full_minutes, 1),
         "versions_in_change_logs": versions_total,
         "versions_fetched": fetched_versions,
+        # One request per change log and per version, whether fetched now or from cache.
+        "requests_needed": len(logs) + fetched_versions,
         "requests_this_run": fetcher.requests_made,
         "elapsed_minutes_this_run": round((time.monotonic() - start) / 60, 1),
         "module_labels_seen": dict(labels.most_common()),

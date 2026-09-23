@@ -54,7 +54,7 @@ Reason: part d must be done before part e
 Status: **done**.
 
 - Sampled 150 trials from the part g bulk pull (API v2 cohort); audited 150 (114 with more than one version); 0 failed.
-- Mode: `all_versions`; 973 version snapshots fetched of 973 versions in the change logs; 1,123 requests in the last run at 20 per minute or less.
+- Mode: `all_versions`; 973 version snapshots fetched of 973 versions in the change logs; 1,123 requests in total at 20 per minute or less (one per change log and version); the last run made 1,123 of them in 56.1 minutes, the rest came from the cache.
 
 | Field | Changed after version 0 | Share of sampled | 95% interval (Wilson) | Share among multi-version | Under 3%? |
 | --- | --- | --- | --- | --- | --- |

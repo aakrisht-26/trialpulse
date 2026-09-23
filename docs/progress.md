@@ -1,11 +1,84 @@
 # Progress
 
-Current step: **Step 2, Feasibility spike** (in progress, unattended overnight run).
+## Morning report (overnight run, 2026-09-23)
+
+**Read first: your working copy of `.env.example` contains a Hugging Face token.** That file is tracked and the repository is public. It was never staged, committed or pushed tonight (every commit staged explicit paths only). Restore the file with the first command below. Consider rotating the token on Hugging Face, since it sat in a tracked file. When pre-commit stashed unstaged changes during commits, it wrote patch files containing the token to `%USERPROFILE%\.cache\pre-commit\`; the second command deletes them.
+
+### Done
+
+- Follow-up 1: CI runs on `ubuntu-24.04`, and runs on main are never cancelled (each gets its own concurrency group).
+- Follow-up 2: ADR 0004 defines the test lock (annotated `prereg-v1` tag on a completed registration).
+- Step 2 code for parts a to h, with 55 tests on synthetic fixtures. Parts g and f ran live; parts a to e are blocked; `docs/feasibility_report.md` is drafted with no decision stated. Details in the Step 2 section below.
+- Provisional work (your extension): the gate was not met, so only the Step 6 subset and Step 8 were built, on branch `provisional/steps-3-8` with a draft PR. See that branch's `docs/progress.md` for its own morning report.
+
+### Decisions made overnight (pending approval)
+
+1. HTTP requests use httpx's default User-Agent, because ClinicalTrials.gov returned 403 for a custom one.
+2. Retries go up to 8 attempts with exponential backoff and jitter capped at 2 minutes. A DNS outage stopped one pull after 182 of 421 pages; it resumed from the cache.
+3. Part d takes the official side from the part g cohort pull, which has the same fields, and calls the API only for trials missing from it.
+4. Part e writes the checklist with dataset version 0 values under `data/` (gitignored). You record pass or fail in `docs/feasibility_manual_check.csv`, which holds ids only.
+5. Part f sampled from the part g API cohort, because the dataset was unavailable (seed 42). The mode is chosen at run time under the 60-minute rule: all versions fit (56.1 minutes). Only projections are cached, never contact data.
+6. Part a never picks a revision silently. It stops until `config/project.yaml` pins one, and `--pin-latest` pins the newest tag when you ask for it.
+7. Spike constants (sample sizes, request rates, the 3% threshold) are documented constants in `feasibility/`, not `project.yaml`: they are Step 2 settings, not Section 6 definitions.
+8. The delta window is the 7 days before the current UTC date.
+9. Parts c and d take study type and status from each trial's latest version. The full population and outcome logic belongs to Step 4.
+10. MeSH terms and MeSH ancestor terms were added to both pulls after browse branches came back empty.
+11. A blank or whitespace-only why_stopped counts as missing.
+12. The stability table shows Wilson 95% intervals next to each share. The under-3% rule is unchanged.
+
+### Open questions for Aakrisht
+
+1. **Dataset access.** Hugging Face reports the request as awaiting the authors' review, so parts a to e cannot run until they approve it. Also, the dataset's main branch was last modified on 2026-05-12, although the card says weekly refreshes. The data cutoff would then be about May 2026, and the live bootstrap (Section 12) would start with about four months of API deltas.
+2. **No list field passes the stability rule** (phases 4.0%, conditions 8.0%, interventions 13.3%, arm count 6.7%, location count 21.3%). By CLAUDE.md, current-record phases are therefore not allowed: M0 would stratify by sponsor class, and the design features lose phase. Phases is the closest (interval 1.8% to 8.5%). Any exception needs an ADR; I recommend keeping the rule as written.
+3. **Therapeutic areas.** API v2 no longer returns MeSH browse branches (0 of 50 full records, 0 of 420,073 cohort trials). MeSH terms (77.5% of the cohort) and ancestors (76.0%) exist, but NLM derives them from the current conditions, which change in 8% of trials, and they have no history to audit. Options:
+   - (a) Keep only the fully versioned competition count: open interventional trials overall. **Recommended.**
+   - (b) Use current MeSH ancestor terms and accept the leakage risk.
+   - (c) Map conditions to MeSH tree branches with NLM's MeSH files. That is a new data source, needs an ADR, and inherits the conditions instability.
+
+   Each option changes Section 8 and needs an ADR.
+
+### Commands to run (PowerShell)
+
+Security clean-up (restores the committed `.env.example`, then deletes pre-commit's stash patches):
+
+```powershell
+git checkout -- .env.example
+Remove-Item "$env:USERPROFILE\.cache\pre-commit\patch*"
+```
+
+Verify main (Step 1 carry-over included):
+
+```powershell
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest -q
+uv run pre-commit run --all-files
+docker compose up -d
+docker compose ps
+uv run python -m trialpulse.feasibility.spike --part all
+gh run list --limit 3
+```
+
+Once Hugging Face grants access (this pins the newest tag in `config/project.yaml`, downloads about 1 GB, and runs every part):
+
+```powershell
+uv run python -m trialpulse.feasibility.spike --part all --pin-latest
+```
+
+Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checklist.csv` and regenerate the report:
+
+```powershell
+uv run python -m trialpulse.feasibility.spike --part h
+```
+
+Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access).
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved 2026-09-23 |
-| 2 | Feasibility spike (go/no-go) | In progress |
+| 2 | Feasibility spike (go/no-go) | Draft done, awaiting review (parts a to e blocked) |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
@@ -81,6 +154,58 @@ Made by Claude, flagged for review:
 - CI annotation: GitHub will move `ubuntu-latest` to Ubuntu 26 starting 2026-10-19. The workflow still uses `ubuntu-latest`. Pinning `ubuntu-24.04` is an option for review; nothing was changed. (Resolved: pinned to ubuntu-24.04 on 2026-09-23.)
 - Local note: uv warns that it cannot hardlink from its cache (on C:) into the project (on E:) and falls back to copying. This is harmless. `$env:UV_LINK_MODE = "copy"` silences it.
 
+## Step 2: Feasibility spike (go/no-go)
+
+Date: 2026-09-23 (unattended overnight run). Status: **draft report written, decision not stated, parts a to e blocked on dataset access**.
+
+### What was built
+
+- `src/trialpulse/feasibility/`, runnable with `uv run python -m trialpulse.feasibility.spike --part <a..h, a list, or all>`:
+  - `fetch.py`: rate limiter, retries with exponential backoff and jitter on 429, 5xx and network errors, an atomic gzip JSON cache, and a scrubber that removes personal-data keys before anything is cached.
+  - `ctgov_v2.py`: the JSON path of every field TrialPulse will ingest, the AREA filters, resumable cursor pagination, normalization of the cohort pull to Parquet, and field-presence statistics.
+  - `dataset.py`: part a (download of a pinned revision, `--pin-latest` to pin the newest tag), part b (DuckDB profile and data dictionary), part c (cohort counts) and the dataset side of part d.
+  - `checks.py`: seeded sampling, the dataset-versus-API comparison (date precision, the cutoff rule), the stability measure and Wilson intervals.
+  - `history_api.py`: the internal history endpoint, verification only, at 20 requests per minute or less; it caches projections, never raw records.
+  - `report.py`: writes `docs/feasibility_report.md` with each criterion's measured value and no GO or NO-GO statement.
+- `tests/feasibility/`: 55 tests on synthetic fixtures, no network. They include the boundary test that no module outside `feasibility/` imports it or names the internal endpoint.
+- Dependencies, all in the locked stack: httpx, tenacity, duckdb, huggingface_hub; dev: respx.
+
+### Results
+
+- **Parts a to e: blocked.** The token works, but Hugging Face reports the access request to `brbk/clinical_trials_history` as awaiting the authors' review (the dataset is gated with manual approval). Parts b to e depend on part a.
+- **Part g: done.**
+  - Delta pull (`AREA[LastUpdatePostDate]RANGE[2026-09-15,MAX]`): 6,047 of 6,047 records, 7 pages, 16.5 s.
+  - Cohort pull (`AREA[StudyType]INTERVENTIONAL AND AREA[StudyFirstPostDate]RANGE[2008-01-01,MAX]`): 420,073 of 420,073 records, 421 pages, 648 s, written to `data/spike/current_fields.parquet` (13.3 MB, not committed).
+  - Official current records: 38,482 of those trials are TERMINATED or WITHDRAWN, with why_stopped present for 91.5%. These are API numbers, not the dataset criteria.
+  - Every ingested field is present at 95% or more of the records it applies to, except `maximum_age` (48.8%, often absent by design), `intervention_types` (87.2%; observational studies are included in the delta) and MeSH browse branches (0%, see open questions).
+- **Part f: done.** 150 seeded trials from the part g cohort, all 973 versions, 1,123 requests in 56.1 minutes. No audited list field changes after version 0 in under 3% of trials: phases 4.0% (Wilson 95% interval 1.8% to 8.5%), conditions 8.0%, interventions 13.3%, arm count 6.7%, location count 21.3%.
+
+### Acceptance criteria
+
+| Criterion | Result |
+| --- | --- |
+| Report complete with numbers and a stated decision | Partial: numbers for parts f and g; parts a to e blocked; decision intentionally not stated (Aakrisht's instruction for this run) |
+| No module outside `feasibility/` imports anything that calls the internal endpoint | Met: `test_no_module_outside_feasibility_uses_the_internal_endpoint` |
+| GO criteria on the dataset (cohort size, post-date coverage, agreement, early stops, why_stopped coverage) | Blocked: dataset access |
+| Manual check, at least 9 of 10 | Blocked until part d runs; then Aakrisht's |
+| API v2 delta pull end to end | Met: 6,047 of 6,047 records |
+| Current-record-only fields under 3% | None pass |
+
+### Files touched
+
+- New: `src/trialpulse/feasibility/{__init__,fetch,ctgov_v2,dataset,checks,history_api,report,spike}.py`, `tests/feasibility/{conftest,test_fetch,test_ctgov_v2,test_dataset,test_checks,test_history_api,test_report_and_spike}.py`, `docs/feasibility_report.md`, `docs/adr/0004-test-lock.md`.
+- Changed: `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`, `docs/progress.md`, `docs/interview_notes.md`.
+- Not created yet: `docs/data_dictionary_history.md` (written by part b once the dataset is available).
+
+### Verify (PowerShell)
+
+```powershell
+uv run python -m trialpulse.feasibility.spike --part all
+uv run pytest -q
+```
+
+Then open `docs/feasibility_report.md`. Until dataset access is granted, parts a to e report "blocked". Part g repeats only the 7-page delta pull (the cohort pull comes from the cache), and part f comes entirely from the cache.
+
 ## Overnight run (2026-09-23)
 
 One line per finished item. On resume, continue after the last line.
@@ -92,3 +217,4 @@ One line per finished item. On resume, continue after the last line.
 - [x] Parts d and e ran: blocked (need the dataset).
 - [x] Part f done: 150 trials, all 973 versions, 1,123 requests in 56.1 min at 20 per minute or less; no audited list field is under 3% (phases 4.0%, conditions 8.0%, interventions 13.3%, arm count 6.7%, location count 21.3%).
 - [x] Part h done: docs/feasibility_report.md drafted, decision not stated (commit: feat(step2): write the draft feasibility report).
+- [x] Step 2 report, interview notes and morning report written (commit: docs(step2): report the feasibility spike).
