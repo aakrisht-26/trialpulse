@@ -9,11 +9,13 @@ ADR 0004 unlocks the locked origins only with an annotated `prereg-v1` tag on a 
 
 ## Decision
 
-The lock adds a fifth condition: `prereg-v1` must also exist on the remote `origin` and point at the same commit as the local tag. The harness checks it with `git ls-remote --tags origin`, taking the peeled `refs/tags/prereg-v1^{}` entry for an annotated tag. The run is refused, and the failed condition named, when:
+The lock adds a fifth condition: `prereg-v1` must also exist on the remote `origin`, as the same annotated tag object as the local tag, pointing at the same commit. The harness checks it with `git ls-remote --tags origin`: `refs/tags/prereg-v1` gives the tag object, and the peeled `refs/tags/prereg-v1^{}` entry gives the commit (it exists only for annotated tags). Requiring the same tag object means the hash recorded with the results is the one that was published. The run is refused, and the failed condition named, when:
 
 - the tags on origin cannot be listed (no origin, or no network);
 - origin has no `prereg-v1`;
-- origin's `prereg-v1` points at a different commit.
+- origin's `prereg-v1` is a lightweight tag;
+- origin's `prereg-v1` points at a different commit;
+- origin's `prereg-v1` is a different tag object at the same commit (the tag was re-created after publishing).
 
 The unlock record gains the remote's name, and it is stored with the results together with the tag and commit hashes (ADR 0004). The code only reads git state; it never pushes or creates tags. Tests use local bare repositories as origin.
 

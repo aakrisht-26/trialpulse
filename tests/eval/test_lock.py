@@ -158,6 +158,24 @@ def test_tag_not_pushed_to_origin_is_refused(tmp_path: Path) -> None:
         check_unlock(repo, unlock_flag=True)
 
 
+def test_lightweight_tag_on_origin_is_refused(tmp_path: Path) -> None:
+    repo = _repo_with(tmp_path, COMPLETE, annotated=False)
+    _add_origin(repo, tmp_path)  # origin receives the lightweight tag
+    _git(repo, "tag", "-d", TAG)
+    _git(repo, "tag", "-a", TAG, "-m", "annotated locally, same commit")
+    with pytest.raises(TestLockError, match="lightweight tag; an annotated"):
+        check_unlock(repo, unlock_flag=True)
+
+
+def test_tag_recreated_after_publishing_is_refused(tmp_path: Path) -> None:
+    repo = _repo_with(tmp_path, COMPLETE)
+    _add_origin(repo, tmp_path)
+    _git(repo, "tag", "-d", TAG)
+    _git(repo, "tag", "-a", TAG, "-m", "re-created at the same commit")
+    with pytest.raises(TestLockError, match="re-created after it was published"):
+        check_unlock(repo, unlock_flag=True)
+
+
 def test_tag_on_origin_at_another_commit_is_refused(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     _add_origin(repo, tmp_path)  # origin's tag points at the first registration commit

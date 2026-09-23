@@ -7,8 +7,9 @@ Locked origins (roles "test" and "stress") are evaluated only when every conditi
 3. in the tagged commit, docs/preregistration.md has a "Registered: YYYY-MM-DD" line and
    no placeholder text;
 4. the tagged commit is an ancestor of HEAD;
-5. the tag also exists on the remote (origin) and points at the same commit, so the
-   registration was public before any test result existed (ADR 0009).
+5. the tag also exists on the remote (origin) as the same annotated tag object, pointing at
+   the same commit, so the registration was public before any test result existed and the
+   recorded tag hash is the published one (ADR 0009).
 
 The tag object hash and the tagged commit hash are returned so the caller records them
 with the results. This module only reads git state; it never creates or pushes tags.
@@ -80,9 +81,10 @@ def registered_date(text: str) -> dt.date:
         raise TestLockError(f"'Registered:' value {match.group(1)!r} is not a valid date") from exc
 
 
-def remote_tag_commit(repo: Path, remote: str = REMOTE) -> str | None:
-    """The commit the remote's prereg-v1 tag points at, or None if the remote lacks it.
-    Annotated tags are peeled (the "^{}" line of ls-remote)."""
+def remote_tag(repo: Path, remote: str = REMOTE) -> tuple[str | None, str | None]:
+    """(tag object, peeled commit) of the remote's prereg-v1, from git ls-remote. The tag
+    object is None when the remote lacks the tag; the peeled commit (the "^{}" line) is None
+    when the remote's tag is lightweight."""
     listing = _git(repo, "ls-remote", "--tags", remote)
     if listing.returncode != 0:
         raise TestLockError(f"cannot list the tags on {remote}: {listing.stderr.strip()}")
@@ -90,7 +92,7 @@ def remote_tag_commit(repo: Path, remote: str = REMOTE) -> str | None:
     for line in listing.stdout.splitlines():
         sha, _, ref = line.partition("\t")
         refs[ref.strip()] = sha.strip()
-    return refs.get(f"refs/tags/{TAG}^{{}}") or refs.get(f"refs/tags/{TAG}")
+    return refs.get(f"refs/tags/{TAG}"), refs.get(f"refs/tags/{TAG}^{{}}")
 
 
 def check_unlock(repo: Path, unlock_flag: bool, remote: str = REMOTE) -> Unlock:
@@ -116,15 +118,24 @@ def check_unlock(repo: Path, unlock_flag: bool, remote: str = REMOTE) -> Unlock:
     ancestor = _git(repo, "merge-base", "--is-ancestor", commit, "HEAD")
     if ancestor.returncode != 0:
         raise TestLockError(f"the commit tagged {TAG} is not an ancestor of HEAD")
-    published = remote_tag_commit(repo, remote)
-    if published is None:
+    tag_object = _git(repo, "rev-parse", TAG).stdout.strip()
+    remote_object, remote_commit = remote_tag(repo, remote)
+    if remote_object is None:
         raise TestLockError(f"git tag {TAG} is not on {remote}; push it before unlocking")
-    if published != commit:
+    if remote_commit is None:
         raise TestLockError(
-            f"git tag {TAG} on {remote} points at {published[:12]}, "
+            f"git tag {TAG} on {remote} is a lightweight tag; an annotated tag is required"
+        )
+    if remote_commit != commit:
+        raise TestLockError(
+            f"git tag {TAG} on {remote} points at {remote_commit[:12]}, "
             f"not at the local tagged commit {commit[:12]}"
         )
-    tag_object = _git(repo, "rev-parse", TAG).stdout.strip()
+    if remote_object != tag_object:
+        raise TestLockError(
+            f"git tag {TAG} on {remote} is tag object {remote_object[:12]}, not the local "
+            f"tag object {tag_object[:12]}; the tag was re-created after it was published"
+        )
     return Unlock(
         tag=TAG, tag_object=tag_object, commit=commit, registered=registered, remote=remote
     )
