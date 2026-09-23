@@ -3,7 +3,7 @@
     uv run streamlit run src/trialpulse/nlp/labeling_app.py
 
 Shows one why_stopped text at a time, with the taxonomy in the sidebar. Each label is
-saved at once to labels/gold_labels.csv (ids and labels only), so labeling can stop and
+saved at once to labels/gold_labels.csv (ids, text hashes and labels only), so labeling can stop and
 resume at any point. TRIALPULSE_GOLD_SAMPLE and TRIALPULSE_GOLD_LABELS override the paths.
 """
 
@@ -43,7 +43,7 @@ def _sidebar() -> None:
 
 
 def _show(item: GoldItem, labels_path: Path, current: str | None) -> None:
-    st.subheader(f"{item.nct_id}, version {item.nct_version}")
+    st.subheader(item.nct_id)
     st.caption(f"{item.status}, stop year {item.stop_year}")
     st.text_area("why_stopped", item.why_stopped, height=160, disabled=True)
     index = LABELS.index(current) if current in LABELS else None
@@ -70,12 +70,14 @@ def main() -> None:
     done = sum(1 for i in items if i.key in labels)
     st.progress(done / len(items) if items else 1.0, text=f"{done} of {len(items)} labeled")
     _sidebar()
+    if items:
+        st.caption(f"Texts: ClinicalTrials.gov current records ({items[0].source}).")
 
     labeled = [i for i in items if i.key in labels]
     revise = st.selectbox(
         "Revise a labeled item (optional)",
         [None, *labeled],
-        format_func=lambda i: "" if i is None else f"{i.nct_id} v{i.nct_version}",
+        format_func=lambda i: "" if i is None else f"{i.nct_id} ({i.text_sha256[:8]})",
     )
     item = revise or next_unlabeled(items, labels)
     if item is None:

@@ -36,4 +36,6 @@ Research demo. Not medical advice. Not for patient decision-making.
 
 ## Where labels are stored
 
-The app writes `labels/gold_labels.csv` with `nct_id`, `nct_version`, `split`, `label` and `labeled_at` only. The texts stay in `data/nlp/gold_sample.csv`, which is gitignored and never committed. The split (100 dev, 300 test) is fixed by the seed in `config/project.yaml`; the test split is never used for prompt or model tuning.
+The gold texts are the `why_stopped` texts of the cohort's early stops, taken from their current ClinicalTrials.gov records (API v2), so labeling does not wait for the version-history dataset. Each text is normalized (lowercase, whitespace collapsed, surrounding punctuation trimmed) and appears only once, so it can be in only one split.
+
+The app writes `labels/gold_labels.csv` with `nct_id`, `text_sha256` (the SHA-256 of the normalized text), `split`, `label`, `source` (the API pull date) and `labeled_at` only. Keying by the text hash keeps the labels valid if the history source changes later. The texts stay in `data/nlp/gold_sample.csv`, which is gitignored and never committed. The split (100 dev, 300 test, stratified by status) is fixed by the seed in `config/project.yaml`. The test split is never used for prompt or model tuning, and no gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).

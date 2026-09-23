@@ -1,11 +1,18 @@
 """The gold set for reason labeling (CLAUDE.md Section 11).
 
-400 why_stopped texts, stratified by status (TERMINATED or WITHDRAWN) and stop year, split
-100 dev and 300 test with a fixed seed. The text of each early stop is the why_stopped of
-its event version: the first version whose status is an early stop (Section 6).
+400 distinct why_stopped texts from the current ClinicalTrials.gov records (API v2) of the
+cohort's early stops (TERMINATED or WITHDRAWN, non-blank why_stopped). Labeling does not
+wait for the version-history dataset.
 
-The sample with texts lives under data/ (gitignored). Labels are written to
-labels/gold_labels.csv, keyed by nct_id and nct_version, without any text.
+- Texts are normalized (lowercase, whitespace collapsed, surrounding punctuation trimmed)
+  and deduplicated before sampling: each normalized text appears once, in one split only.
+- The sample is stratified by status and stop year. The stop year is the year of the
+  actual completion date when present, otherwise the year of the last update post date.
+- The split is 100 dev and 300 test, stratified by status, with a fixed seed.
+- Labels are keyed by (nct_id, text_sha256), where text_sha256 is the SHA-256 of the
+  normalized text, plus a source column with the pull date, so they survive a later
+  switch of history source. The texts stay under data/ (gitignored); labels/ holds ids,
+  hashes and labels only.
 
     uv run python -m trialpulse.nlp.gold --build
 """
@@ -13,66 +20,188 @@ labels/gold_labels.csv, keyed by nct_id and nct_version, without any text.
 import argparse
 import csv
 import datetime as dt
+import hashlib
+import json
 import math
 import random
+import unicodedata
 from collections import defaultdict
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Hashable, Iterable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
-import duckdb
+import httpx
 
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
+from trialpulse.ingest.ctgov_api import (
+    MAX_PAGE_SIZE,
+    VERSION_URL,
+    ApiClient,
+    get_path,
+    iter_study_pages,
+    query_dir,
+)
 from trialpulse.nlp.taxonomy import validate_label
 
 GOLD_SIZE = 400
 DEV_SIZE = 100
-SAMPLE_PATH = REPO_ROOT / "data" / "nlp" / "gold_sample.csv"
+NLP_DIR = REPO_ROOT / "data" / "nlp"
+PULL_CACHE = NLP_DIR / "api_pull"
+SAMPLE_PATH = NLP_DIR / "gold_sample.csv"
 LABELS_PATH = REPO_ROOT / "labels" / "gold_labels.csv"
-LABEL_COLUMNS = ("nct_id", "nct_version", "split", "label", "labeled_at")
+LABEL_COLUMNS = ("nct_id", "text_sha256", "split", "label", "source", "labeled_at")
+SAMPLE_COLUMNS = ("nct_id", "text_sha256", "status", "stop_year", "split", "source", "why_stopped")
+
+_S = "protocolSection.statusModule"
+PULL_FIELDS = (
+    "protocolSection.identificationModule.nctId",
+    f"{_S}.overallStatus",
+    f"{_S}.whyStopped",
+    f"{_S}.completionDateStruct",
+    f"{_S}.lastUpdatePostDateStruct",
+)
+
+
+@dataclass(frozen=True)
+class EarlyStop:
+    """The current record of one early-stopped trial, as pulled."""
+
+    nct_id: str
+    status: str
+    why_stopped: str | None
+    completion_date: str | None
+    completion_date_type: str | None
+    last_update_post_date: str | None
 
 
 @dataclass(frozen=True)
 class GoldItem:
     nct_id: str
-    nct_version: int
+    text_sha256: str
     status: str
     stop_year: int
     why_stopped: str
     split: str = ""
+    source: str = ""
 
     @property
-    def key(self) -> tuple[str, int]:
-        return (self.nct_id, self.nct_version)
+    def key(self) -> tuple[str, str]:
+        return (self.nct_id, self.text_sha256)
 
 
-def early_stop_texts(
-    con: duckdb.DuckDBPyConnection, glob: str, cfg: ProjectConfig
-) -> list[GoldItem]:
-    """The event version of every early stop in the population, with a non-empty reason."""
-    early = ", ".join(f"'{s}'" for s in cfg.statuses.early_stop)
-    study_type = cfg.population.study_type.replace("'", "''")
-    min_date = cfg.population.min_first_post_date.isoformat()
-    rows = con.execute(
-        f"""SELECT nct_id, nct_version, upper(overall_status), year(last_update_post_date),
-                   trim(why_stopped)
-        FROM read_parquet('{glob}')
-        WHERE upper(overall_status) IN ({early})
-          AND upper(study_type) = '{study_type}'
-          AND study_first_post_date >= DATE '{min_date}'
-        QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version) = 1"""
-    ).fetchall()
-    return [
-        GoldItem(str(r[0]), int(r[1]), str(r[2]), int(r[3]), str(r[4]))
-        for r in rows
-        if r[3] is not None and r[4]
+def normalize_text(text: str) -> str:
+    """Lowercase, collapse whitespace, and trim punctuation around the text. Punctuation
+    inside the text is kept."""
+    collapsed = " ".join(text.split()).lower()
+    start, end = 0, len(collapsed)
+    while start < end and _is_trimmable(collapsed[start]):
+        start += 1
+    while end > start and _is_trimmable(collapsed[end - 1]):
+        end -= 1
+    return collapsed[start:end]
+
+
+def _is_trimmable(char: str) -> bool:
+    return char.isspace() or unicodedata.category(char).startswith("P")
+
+
+def text_sha256(normalized: str) -> str:
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def stop_year(
+    completion_date: str | None, completion_type: str | None, last_update_post_date: str | None
+) -> int | None:
+    """The year of the actual completion date when present, otherwise the year of the last
+    update post date."""
+    if completion_date and (completion_type or "").upper() == "ACTUAL":
+        return int(completion_date[:4])
+    if last_update_post_date:
+        return int(last_update_post_date[:4])
+    return None
+
+
+def pull_params(cfg: ProjectConfig) -> dict[str, str | int]:
+    """The cohort's early stops, current records, only the fields the gold set needs."""
+    return {
+        "filter.advanced": (
+            f"AREA[StudyType]{cfg.population.study_type} AND AREA[StudyFirstPostDate]"
+            f"RANGE[{cfg.population.min_first_post_date.isoformat()},MAX]"
+        ),
+        "filter.overallStatus": "|".join(cfg.statuses.early_stop),
+        "fields": ",".join(PULL_FIELDS),
+        "pageSize": MAX_PAGE_SIZE,
+    }
+
+
+def _to_early_stop(study: dict[str, Any]) -> EarlyStop:
+    return EarlyStop(
+        nct_id=str(get_path(study, PULL_FIELDS[0])),
+        status=str(get_path(study, f"{_S}.overallStatus")),
+        why_stopped=get_path(study, f"{_S}.whyStopped"),
+        completion_date=get_path(study, f"{_S}.completionDateStruct.date"),
+        completion_date_type=get_path(study, f"{_S}.completionDateStruct.type"),
+        last_update_post_date=get_path(study, f"{_S}.lastUpdatePostDateStruct.date"),
+    )
+
+
+def pull_early_stops(
+    api: ApiClient, cfg: ProjectConfig, cache_root: Path, today: dt.date
+) -> tuple[list[EarlyStop], dict[str, Any]]:
+    """Pull (or read from the cache) the current records, and the pull's metadata: the pull
+    date and the API data timestamp, both fixed at the first pull."""
+    params = pull_params(cfg)
+    meta_path = query_dir(cache_root, params) / "pull.json"
+    if meta_path.is_file():
+        meta: dict[str, Any] = json.loads(meta_path.read_text(encoding="utf-8"))
+    else:
+        version = api.get_json(VERSION_URL)
+        meta = {"pull_date": today.isoformat(), "data_timestamp": version.get("dataTimestamp")}
+    records = [
+        _to_early_stop(s) for page in iter_study_pages(api, cache_root, params) for s in page
     ]
+    if not meta_path.is_file():
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    meta["records"] = len(records)
+    return records, meta
 
 
-def allocate(sizes: dict[tuple[str, int], int], total: int) -> dict[tuple[str, int], int]:
+def distinct_items(
+    records: Iterable[EarlyStop], early_stop: Sequence[str], source: str
+) -> tuple[list[GoldItem], dict[str, int]]:
+    """One item per distinct normalized text, from early stops with a non-blank reason and
+    a known stop year. For repeated texts the trial with the lowest NCT ID is kept."""
+    kept: dict[str, GoldItem] = {}
+    stats = {"records": 0, "non_blank": 0, "no_stop_year": 0}
+    for record in sorted(records, key=lambda r: r.nct_id):
+        stats["records"] += 1
+        if record.status.upper() not in early_stop or not record.why_stopped:
+            continue
+        normalized = normalize_text(record.why_stopped)
+        if not normalized:
+            continue
+        stats["non_blank"] += 1
+        year = stop_year(
+            record.completion_date, record.completion_date_type, record.last_update_post_date
+        )
+        if year is None:
+            stats["no_stop_year"] += 1
+            continue
+        digest = text_sha256(normalized)
+        if digest not in kept:
+            kept[digest] = GoldItem(
+                record.nct_id, digest, record.status.upper(), year, record.why_stopped.strip(),
+                source=source,
+            )  # fmt: skip
+    stats["distinct_texts"] = len(kept)
+    return sorted(kept.values(), key=lambda i: i.key), stats
+
+
+def allocate[K: Hashable](sizes: dict[K, int], total: int) -> dict[K, int]:
     """Proportional allocation with largest remainders, at least one per non-empty stratum
     when the total allows, and never more than a stratum holds."""
-    strata = sorted(k for k, n in sizes.items() if n > 0)
+    strata = sorted((k for k, n in sizes.items() if n > 0), key=repr)
     population = sum(sizes[k] for k in strata)
     if population <= total:
         return {k: sizes[k] for k in strata}
@@ -81,7 +210,7 @@ def allocate(sizes: dict[tuple[str, int], int], total: int) -> dict[tuple[str, i
     if total >= len(strata):
         for k in strata:
             alloc[k] = max(alloc[k], 1)
-    by_remainder = sorted(strata, key=lambda k: (-(quotas[k] - math.floor(quotas[k])), k))
+    by_remainder = sorted(strata, key=lambda k: (-(quotas[k] - math.floor(quotas[k])), repr(k)))
     while sum(alloc.values()) < total:
         progressed = False
         for k in by_remainder:
@@ -93,7 +222,7 @@ def allocate(sizes: dict[tuple[str, int], int], total: int) -> dict[tuple[str, i
         if not progressed:
             break
     while sum(alloc.values()) > total:  # minimums can overshoot: trim the largest strata
-        k = max(strata, key=lambda s: (alloc[s], s))
+        k = max(strata, key=lambda s: (alloc[s], repr(s)))
         alloc[k] -= 1
     return alloc
 
@@ -112,42 +241,46 @@ def stratified_sample(items: Sequence[GoldItem], total: int, seed: int) -> list[
 
 
 def split_dev_test(items: Sequence[GoldItem], dev_size: int, seed: int) -> list[GoldItem]:
-    """Seeded split: dev_size items for prompt development, the rest held out as test."""
-    order = list(range(len(items)))
-    random.Random(seed).shuffle(order)
-    dev = set(order[:dev_size])
-    return [
-        GoldItem(i.nct_id, i.nct_version, i.status, i.stop_year, i.why_stopped,
-                 "dev" if n in dev else "test")
-        for n, i in enumerate(items)
-    ]  # fmt: skip
+    """Seeded split, stratified by status: dev_size items for prompt development (shared
+    across statuses in proportion), the rest held out as test."""
+    by_status: dict[str, list[GoldItem]] = defaultdict(list)
+    for item in sorted(items, key=lambda i: i.key):
+        by_status[item.status].append(item)
+    dev_alloc = allocate({s: len(v) for s, v in by_status.items()}, dev_size)
+    rng = random.Random(seed)
+    dev_keys: set[tuple[str, str]] = set()
+    for status in sorted(by_status):
+        members = list(by_status[status])
+        rng.shuffle(members)
+        dev_keys |= {m.key for m in members[: dev_alloc.get(status, 0)]}
+    return [replace(i, split="dev" if i.key in dev_keys else "test") for i in items]
 
 
 def write_sample(items: Sequence[GoldItem], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["nct_id", "nct_version", "status", "stop_year", "split", "why_stopped"])
+        writer.writerow(SAMPLE_COLUMNS)
         for i in items:
             writer.writerow(
-                [i.nct_id, i.nct_version, i.status, i.stop_year, i.split, i.why_stopped]
+                [i.nct_id, i.text_sha256, i.status, i.stop_year, i.split, i.source, i.why_stopped]
             )
 
 
 def load_sample(path: Path) -> list[GoldItem]:
     with path.open(newline="", encoding="utf-8") as fh:
         return [
-            GoldItem(r["nct_id"], int(r["nct_version"]), r["status"], int(r["stop_year"]),
-                     r["why_stopped"], r["split"])
+            GoldItem(r["nct_id"], r["text_sha256"], r["status"], int(r["stop_year"]),
+                     r["why_stopped"], r["split"], r["source"])
             for r in csv.DictReader(fh)
         ]  # fmt: skip
 
 
-def read_labels(path: Path) -> dict[tuple[str, int], dict[str, str]]:
+def read_labels(path: Path) -> dict[tuple[str, str], dict[str, str]]:
     if not path.is_file():
         return {}
     with path.open(newline="", encoding="utf-8") as fh:
-        return {(r["nct_id"], int(r["nct_version"])): r for r in csv.DictReader(fh)}
+        return {(r["nct_id"], r["text_sha256"]): r for r in csv.DictReader(fh)}
 
 
 def save_label(path: Path, item: GoldItem, label: str, now: dt.datetime | None = None) -> None:
@@ -157,9 +290,10 @@ def save_label(path: Path, item: GoldItem, label: str, now: dt.datetime | None =
     stamp = (now or dt.datetime.now(dt.UTC)).isoformat(timespec="seconds")
     labels[item.key] = {
         "nct_id": item.nct_id,
-        "nct_version": str(item.nct_version),
+        "text_sha256": item.text_sha256,
         "split": item.split,
         "label": label,
+        "source": item.source,
         "labeled_at": stamp,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,18 +307,24 @@ def save_label(path: Path, item: GoldItem, label: str, now: dt.datetime | None =
 
 
 def next_unlabeled(
-    items: Sequence[GoldItem], labels: dict[tuple[str, int], dict[str, str]]
+    items: Sequence[GoldItem], labels: dict[tuple[str, str], dict[str, str]]
 ) -> GoldItem | None:
     return next((i for i in items if i.key not in labels), None)
 
 
-def build_gold_sample(glob: str, cfg: ProjectConfig, out: Path) -> list[GoldItem]:
-    with duckdb.connect() as con:
-        pool = early_stop_texts(con, glob, cfg)
-    sample = split_dev_test(stratified_sample(pool, GOLD_SIZE, cfg.seeds.default), DEV_SIZE,
-                            cfg.seeds.default)  # fmt: skip
+def source_label(meta: dict[str, Any]) -> str:
+    return f"ctgov-api-v2 pulled {meta['pull_date']}"
+
+
+def build_gold_sample(
+    api: ApiClient, cfg: ProjectConfig, out: Path, today: dt.date, cache_root: Path = PULL_CACHE
+) -> dict[str, Any]:
+    records, meta = pull_early_stops(api, cfg, cache_root, today)
+    items, stats = distinct_items(records, cfg.statuses.early_stop, source_label(meta))
+    seed = cfg.seeds.default
+    sample = split_dev_test(stratified_sample(items, GOLD_SIZE, seed), DEV_SIZE, seed)
     write_sample(sample, out)
-    return sample
+    return {**meta, **stats, "sampled": len(sample), "requests_this_run": api.requests_made}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -192,14 +332,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--build", action="store_true", required=True)
     parser.parse_args(argv)
     cfg = load_project_config()
-    if not cfg.dataset.revision:
-        print("dataset.revision is not pinned; run Step 2 part a first")
-        return 2
-    glob = (
-        REPO_ROOT / "data" / "raw" / "history" / cfg.dataset.revision / cfg.dataset.config_name
-    ).as_posix() + "/*.parquet"
-    sample = build_gold_sample(glob, cfg, SAMPLE_PATH)
-    print(f"wrote {len(sample)} items to {SAMPLE_PATH}")
+    with httpx.Client(timeout=120, follow_redirects=True) as client:
+        summary = build_gold_sample(
+            ApiClient(client), cfg, SAMPLE_PATH, dt.datetime.now(dt.UTC).date()
+        )
+    print(json.dumps(summary, indent=2))
+    print(f"wrote {summary['sampled']} items to {SAMPLE_PATH}")
     return 0
 
 
