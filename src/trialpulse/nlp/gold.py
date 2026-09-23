@@ -13,6 +13,9 @@ wait for the version-history dataset.
   normalized text, plus a source column with the pull date, so they survive a later
   switch of history source. The texts stay under data/ (gitignored); labels/ holds ids,
   hashes and labels only.
+- The labeling app serves the test texts first, blind. Dev texts may show a suggested label
+  from data/nlp/dev_suggestions.csv (gitignored), and each saved label records whether it
+  was assisted. Suggestions exist for dev items only.
 
     uv run python -m trialpulse.nlp.gold --build
 """
@@ -50,7 +53,10 @@ NLP_DIR = REPO_ROOT / "data" / "nlp"
 PULL_CACHE = NLP_DIR / "api_pull"
 SAMPLE_PATH = NLP_DIR / "gold_sample.csv"
 LABELS_PATH = REPO_ROOT / "labels" / "gold_labels.csv"
-LABEL_COLUMNS = ("nct_id", "text_sha256", "split", "label", "source", "labeled_at")
+SUGGESTIONS_PATH = NLP_DIR / "dev_suggestions.csv"
+LABEL_COLUMNS = ("nct_id", "text_sha256", "split", "label", "source", "labeled_at", "assisted")
+SUGGESTION_COLUMNS = ("nct_id", "text_sha256", "suggestion")
+SERVING_ORDER = ("test", "dev")  # all test texts first, then the dev texts
 SAMPLE_COLUMNS = ("nct_id", "text_sha256", "status", "stop_year", "split", "source", "why_stopped")
 
 _S = "protocolSection.statusModule"
@@ -286,9 +292,21 @@ def read_labels(path: Path) -> dict[tuple[str, str], dict[str, str]]:
         return {(r["nct_id"], r["text_sha256"]): r for r in csv.DictReader(fh)}
 
 
-def save_label(path: Path, item: GoldItem, label: str, now: dt.datetime | None = None) -> None:
-    """Record or replace one label. The file is rewritten atomically, sorted by key."""
+def save_label(
+    path: Path,
+    item: GoldItem,
+    label: str,
+    now: dt.datetime | None = None,
+    assisted: bool = False,
+) -> None:
+    """Record or replace one label. The file is rewritten atomically, sorted by key.
+    assisted records whether a suggestion was shown when the label was given; it can only be
+    true for a dev item."""
     validate_label(label)
+    if assisted and item.split != "dev":
+        raise ValueError(
+            f"{item.split or 'unsplit'} items are labeled blind; assisted must be false"
+        )
     labels = read_labels(path)
     stamp = (now or dt.datetime.now(dt.UTC)).isoformat(timespec="seconds")
     labels[item.key] = {
@@ -298,6 +316,7 @@ def save_label(path: Path, item: GoldItem, label: str, now: dt.datetime | None =
         "label": label,
         "source": item.source,
         "labeled_at": stamp,
+        "assisted": "true" if assisted else "false",
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -313,6 +332,47 @@ def next_unlabeled(
     items: Sequence[GoldItem], labels: dict[tuple[str, str], dict[str, str]]
 ) -> GoldItem | None:
     return next((i for i in items if i.key not in labels), None)
+
+
+def serving_order(items: Iterable[GoldItem]) -> list[GoldItem]:
+    """All test items first, then the dev items; sample order (by key) within each split."""
+    rank = {split: n for n, split in enumerate(SERVING_ORDER)}
+    return sorted(items, key=lambda i: (rank.get(i.split, len(rank)), i.key))
+
+
+def write_dev_suggestions(path: Path, suggestions: Sequence[tuple[GoldItem, str]]) -> None:
+    """Save suggested labels for dev items. Test items are labeled blind, so a suggestion
+    for any item outside the dev split is refused."""
+    for item, label in suggestions:
+        validate_label(label)
+        if item.split != "dev":
+            raise ValueError(f"suggestions are for dev items only, not {item.key}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(SUGGESTION_COLUMNS)
+        for item, label in sorted(suggestions, key=lambda s: s[0].key):
+            writer.writerow([item.nct_id, item.text_sha256, label])
+
+
+def suggestion_for(item: GoldItem, suggestions: dict[tuple[str, str], str]) -> str | None:
+    """The suggestion to show for an item, if any. Test items never get one."""
+    return suggestions.get(item.key) if item.split == "dev" else None
+
+
+def load_dev_suggestions(path: Path, items: Iterable[GoldItem]) -> dict[tuple[str, str], str]:
+    """Suggested labels keyed by item, for dev items only. A row for any other item is
+    ignored, so no suggestion can reach a test item even if the file contains one."""
+    if not path.is_file():
+        return {}
+    dev_keys = {i.key for i in items if i.split == "dev"}
+    suggestions: dict[tuple[str, str], str] = {}
+    with path.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            key = (row["nct_id"], row["text_sha256"])
+            if key in dev_keys:
+                suggestions[key] = validate_label(row["suggestion"])
+    return suggestions
 
 
 def source_label(meta: dict[str, Any]) -> str:

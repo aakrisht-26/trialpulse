@@ -20,16 +20,20 @@ from trialpulse.nlp.gold import (
     allocate,
     build_gold_sample,
     distinct_items,
+    load_dev_suggestions,
     load_sample,
     next_unlabeled,
     normalize_text,
     pull_early_stops,
     read_labels,
     save_label,
+    serving_order,
     split_dev_test,
     stop_year,
     stratified_sample,
+    suggestion_for,
     text_sha256,
+    write_dev_suggestions,
 )
 from trialpulse.nlp.taxonomy import LABELS, group_of, validate_label
 
@@ -182,10 +186,54 @@ def test_labels_are_keyed_by_trial_and_text_hash(tmp_path: Path) -> None:
             "label",
             "source",
             "labeled_at",
+            "assisted",
         ]
     assert next_unlabeled(items, labels) == items[2]
     with pytest.raises(ValueError, match="unknown label"):
         save_label(path, items[2], "vague")
+
+
+def test_serving_order_puts_all_test_items_before_dev() -> None:
+    items = split_dev_test(_pool(40), 10, seed=1)
+    order = serving_order(reversed(items))
+    splits = [i.split for i in order]
+    assert splits == ["test"] * 30 + ["dev"] * 10
+    assert order[:30] == sorted(order[:30], key=lambda i: i.key)
+
+
+def test_suggestions_exist_for_dev_items_only(tmp_path: Path) -> None:
+    dev = GoldItem("NCT1", text_sha256("a"), "TERMINATED", 2015, "x", "dev")
+    test = GoldItem("NCT2", text_sha256("b"), "WITHDRAWN", 2016, "y", "test")
+    path = tmp_path / "dev_suggestions.csv"
+
+    with pytest.raises(ValueError, match="dev items only"):
+        write_dev_suggestions(path, [(test, "accrual")])
+    with pytest.raises(ValueError, match="unknown label"):
+        write_dev_suggestions(path, [(dev, "vague")])
+    write_dev_suggestions(path, [(dev, "funding")])
+    with path.open("a", newline="", encoding="utf-8") as fh:  # a stray test-item row
+        csv.writer(fh).writerow([test.nct_id, test.text_sha256, "safety"])
+
+    suggestions = load_dev_suggestions(path, [dev, test])
+    assert suggestions == {dev.key: "funding"}  # the test row is ignored
+    assert suggestion_for(dev, suggestions) == "funding"
+    assert suggestion_for(test, {test.key: "safety"}) is None  # never for a test item
+    assert load_dev_suggestions(tmp_path / "missing.csv", [dev]) == {}
+
+
+def test_assisted_is_recorded_and_only_allowed_on_dev(tmp_path: Path) -> None:
+    path = tmp_path / "labels.csv"
+    dev = GoldItem("NCT1", text_sha256("a"), "TERMINATED", 2015, "x", "dev")
+    test = GoldItem("NCT2", text_sha256("b"), "WITHDRAWN", 2016, "y", "test")
+
+    save_label(path, dev, "accrual", assisted=True)
+    save_label(path, test, "covid19")
+    with pytest.raises(ValueError, match="labeled blind"):
+        save_label(path, test, "covid19", assisted=True)
+
+    labels = read_labels(path)
+    assert labels[dev.key]["assisted"] == "true"
+    assert labels[test.key]["assisted"] == "false"
 
 
 def _study(nct: str, status: str, why: str | None, completion: str, ctype: str) -> dict[str, Any]:
