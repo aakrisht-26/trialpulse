@@ -7,8 +7,9 @@ pull the current records of the cohort's early stops for the gold set.
   exponential backoff and jitter.
 - Every page is cached on disk with its nextPageToken, so a rerun makes no requests and an
   interrupted pull resumes.
-- Callers request only the fields they need through the fields parameter, so no response
-  holds names or contact details of people (CLAUDE.md Section 2).
+- Callers request only the fields they need through the fields parameter, and personal-data
+  keys are also removed before a page is cached, so nothing cached holds names or contact
+  details of people (CLAUDE.md Section 2).
 """
 
 import gzip
@@ -28,6 +29,33 @@ STUDIES_URL = f"{API_BASE}/studies"
 VERSION_URL = f"{API_BASE}/version"
 MAX_PAGE_SIZE = 1000  # larger values are silently clamped by the API
 REQUESTS_PER_MINUTE = 40  # guidance is about 50 per minute per IP (CLAUDE.md Section 7)
+
+# Keys that hold names or contact details of people. They are removed before any page is
+# cached, even when the fields parameter already excludes them (CLAUDE.md Section 2).
+PERSONAL_DATA_KEYS = frozenset(
+    {
+        "centralContacts",
+        "overallOfficials",
+        "contacts",
+        "pointOfContact",
+        "investigatorFullName",
+        "investigatorTitle",
+        "investigatorAffiliation",
+        "oldNameTitle",
+        "email",
+        "phone",
+        "phoneExt",
+    }
+)
+
+
+def scrub_personal_data(obj: Any) -> Any:
+    """A copy of obj with every personal-data key removed, at any depth."""
+    if isinstance(obj, dict):
+        return {k: scrub_personal_data(v) for k, v in obj.items() if k not in PERSONAL_DATA_KEYS}
+    if isinstance(obj, list):
+        return [scrub_personal_data(v) for v in obj]
+    return obj
 
 
 class RetryableStatusError(Exception):
@@ -146,7 +174,7 @@ def iter_study_pages(
                 raise RuntimeError(f"missing page token to resume at page {index}")
             data = api.get_json(STUDIES_URL, request)
             page = {
-                "studies": data.get("studies", []),
+                "studies": scrub_personal_data(data.get("studies", [])),
                 "nextPageToken": data.get("nextPageToken"),
                 "totalCount": data.get("totalCount"),
             }
