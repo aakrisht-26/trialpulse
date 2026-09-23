@@ -13,9 +13,13 @@ wait for the version-history dataset.
   normalized text, plus a source column with the pull date, so they survive a later
   switch of history source. The texts stay under data/ (gitignored); labels/ holds ids,
   hashes and labels only.
-- The labeling app serves the test texts first, blind. Dev texts may show a suggested label
-  from data/nlp/dev_suggestions.csv (gitignored), and each saved label records whether it
-  was assisted. Suggestions exist for dev items only.
+- The labels are reference labels from an adjudicated model panel (ADR 0010), written by
+  trialpulse.nlp.panel with method model-panel-v1 and a panel outcome.
+- The labeling app remains as an optional review tool for dev texts only: test texts are
+  never opened once the reference labels are committed. It writes to
+  data/nlp/review_labels.csv with method manual, and save_label never overwrites a panel
+  label. A dev text may show a suggested label from data/nlp/dev_suggestions.csv
+  (gitignored), and each saved label records whether it was assisted.
 
     uv run python -m trialpulse.nlp.gold --build
 """
@@ -53,10 +57,23 @@ NLP_DIR = REPO_ROOT / "data" / "nlp"
 PULL_CACHE = NLP_DIR / "api_pull"
 SAMPLE_PATH = NLP_DIR / "gold_sample.csv"
 LABELS_PATH = REPO_ROOT / "labels" / "gold_labels.csv"
+REVIEW_LABELS_PATH = NLP_DIR / "review_labels.csv"
 SUGGESTIONS_PATH = NLP_DIR / "dev_suggestions.csv"
-LABEL_COLUMNS = ("nct_id", "text_sha256", "split", "label", "source", "labeled_at", "assisted")
+LABEL_COLUMNS = (
+    "nct_id",
+    "text_sha256",
+    "split",
+    "label",
+    "source",
+    "labeled_at",
+    "assisted",
+    "method",
+    "panel_outcome",
+)
+PANEL_METHOD = "model-panel-v1"  # reference labels from an adjudicated model panel
+MANUAL_METHOD = "manual"  # a label saved in the labeling app
+PANEL_OUTCOMES = ("unanimous", "majority", "adjudicated")
 SUGGESTION_COLUMNS = ("nct_id", "text_sha256", "suggestion")
-SERVING_ORDER = ("test", "dev")  # all test texts first, then the dev texts
 SAMPLE_COLUMNS = ("nct_id", "text_sha256", "status", "stop_year", "split", "source", "why_stopped")
 
 _S = "protocolSection.statusModule"
@@ -292,6 +309,19 @@ def read_labels(path: Path) -> dict[tuple[str, str], dict[str, str]]:
         return {(r["nct_id"], r["text_sha256"]): r for r in csv.DictReader(fh)}
 
 
+def write_labels(path: Path, labels: dict[tuple[str, str], dict[str, str]]) -> None:
+    """Write a labels file atomically, sorted by key. Columns missing from a row (a file
+    written before a column existed) are left blank."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=LABEL_COLUMNS)
+        writer.writeheader()
+        for key in sorted(labels):
+            writer.writerow({c: labels[key].get(c, "") for c in LABEL_COLUMNS})
+    tmp.replace(path)
+
+
 def save_label(
     path: Path,
     item: GoldItem,
@@ -299,15 +329,17 @@ def save_label(
     now: dt.datetime | None = None,
     assisted: bool = False,
 ) -> None:
-    """Record or replace one label. The file is rewritten atomically, sorted by key.
+    """Record or replace one label saved in the labeling app (method manual).
     assisted records whether a suggestion was shown when the label was given; it can only be
-    true for a dev item."""
+    true for a dev item. A reference label from the model panel is never overwritten."""
     validate_label(label)
     if assisted and item.split != "dev":
         raise ValueError(
             f"{item.split or 'unsplit'} items are labeled blind; assisted must be false"
         )
     labels = read_labels(path)
+    if labels.get(item.key, {}).get("method") == PANEL_METHOD:
+        raise ValueError(f"{path} holds panel reference labels; save review labels elsewhere")
     stamp = (now or dt.datetime.now(dt.UTC)).isoformat(timespec="seconds")
     labels[item.key] = {
         "nct_id": item.nct_id,
@@ -317,15 +349,10 @@ def save_label(
         "source": item.source,
         "labeled_at": stamp,
         "assisted": "true" if assisted else "false",
+        "method": MANUAL_METHOD,
+        "panel_outcome": "",
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=LABEL_COLUMNS)
-        writer.writeheader()
-        for key in sorted(labels):
-            writer.writerow({c: labels[key][c] for c in LABEL_COLUMNS})
-    tmp.replace(path)
+    write_labels(path, labels)
 
 
 def next_unlabeled(
@@ -334,10 +361,10 @@ def next_unlabeled(
     return next((i for i in items if i.key not in labels), None)
 
 
-def serving_order(items: Iterable[GoldItem]) -> list[GoldItem]:
-    """All test items first, then the dev items; sample order (by key) within each split."""
-    rank = {split: n for n, split in enumerate(SERVING_ORDER)}
-    return sorted(items, key=lambda i: (rank.get(i.split, len(rank)), i.key))
+def review_items(items: Iterable[GoldItem]) -> list[GoldItem]:
+    """The items the review app may show: dev items only, in key order. Test texts are never
+    opened once the reference labels are committed (ADR 0010)."""
+    return sorted((i for i in items if i.split == "dev"), key=lambda i: i.key)
 
 
 def write_dev_suggestions(path: Path, suggestions: Sequence[tuple[GoldItem, str]]) -> None:

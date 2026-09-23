@@ -15,6 +15,8 @@ from tenacity import wait_none
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL, ApiClient
 from trialpulse.nlp.gold import (
+    LABEL_COLUMNS,
+    PANEL_METHOD,
     EarlyStop,
     GoldItem,
     allocate,
@@ -26,14 +28,15 @@ from trialpulse.nlp.gold import (
     normalize_text,
     pull_early_stops,
     read_labels,
+    review_items,
     save_label,
-    serving_order,
     split_dev_test,
     stop_year,
     stratified_sample,
     suggestion_for,
     text_sha256,
     write_dev_suggestions,
+    write_labels,
 )
 from trialpulse.nlp.taxonomy import LABELS, group_of, validate_label
 
@@ -187,18 +190,31 @@ def test_labels_are_keyed_by_trial_and_text_hash(tmp_path: Path) -> None:
             "source",
             "labeled_at",
             "assisted",
+            "method",
+            "panel_outcome",
         ]
+    assert labels[items[0].key]["method"] == "manual"
+    assert labels[items[0].key]["panel_outcome"] == ""
     assert next_unlabeled(items, labels) == items[2]
     with pytest.raises(ValueError, match="unknown label"):
         save_label(path, items[2], "vague")
 
 
-def test_serving_order_puts_all_test_items_before_dev() -> None:
+def test_review_items_are_dev_items_only_in_key_order() -> None:
     items = split_dev_test(_pool(40), 10, seed=1)
-    order = serving_order(reversed(items))
-    splits = [i.split for i in order]
-    assert splits == ["test"] * 30 + ["dev"] * 10
-    assert order[:30] == sorted(order[:30], key=lambda i: i.key)
+    review = review_items(reversed(items))
+    assert [i.split for i in review] == ["dev"] * 10  # test texts are never served
+    assert review == sorted(review, key=lambda i: i.key)
+
+
+def test_write_labels_leaves_missing_columns_blank(tmp_path: Path) -> None:
+    path = tmp_path / "labels.csv"
+    old_row = {"nct_id": "NCT1", "text_sha256": "a", "split": "dev", "label": "funding"}
+    write_labels(path, {("NCT1", "a"): old_row})  # a row from before method existed
+    row = read_labels(path)[("NCT1", "a")]
+    assert tuple(row) == LABEL_COLUMNS
+    assert row["label"] == "funding"
+    assert row["method"] == row["panel_outcome"] == ""
 
 
 def test_suggestions_exist_for_dev_items_only(tmp_path: Path) -> None:
@@ -234,6 +250,25 @@ def test_assisted_is_recorded_and_only_allowed_on_dev(tmp_path: Path) -> None:
     labels = read_labels(path)
     assert labels[dev.key]["assisted"] == "true"
     assert labels[test.key]["assisted"] == "false"
+
+
+def test_the_app_never_overwrites_a_panel_label(tmp_path: Path) -> None:
+    path = tmp_path / "gold_labels.csv"
+    item = GoldItem("NCT1", text_sha256("a"), "TERMINATED", 2015, "x", "test")
+    other = GoldItem("NCT2", text_sha256("b"), "WITHDRAWN", 2016, "y", "test")
+    panel_row = dict.fromkeys(LABEL_COLUMNS, "") | {
+        "nct_id": item.nct_id, "text_sha256": item.text_sha256, "split": "test",
+        "label": "accrual", "assisted": "false", "method": PANEL_METHOD,
+        "panel_outcome": "unanimous",
+    }  # fmt: skip
+    write_labels(path, {item.key: panel_row})
+
+    with pytest.raises(ValueError, match="panel reference labels"):
+        save_label(path, item, "funding")
+    save_label(path, other, "funding")  # a manual label for an item without a panel label
+    labels = read_labels(path)
+    assert labels[item.key] == panel_row
+    assert labels[other.key]["method"] == "manual"
 
 
 def _study(nct: str, status: str, why: str | None, completion: str, ctype: str) -> dict[str, Any]:

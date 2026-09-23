@@ -1,14 +1,19 @@
-"""Streamlit app for labeling the gold set (CLAUDE.md Section 11).
+"""Streamlit app for reviewing the gold set's dev texts by hand (CLAUDE.md Section 11,
+ADR 0010).
+
+The gold set's reference labels come from an adjudicated model panel (ADR 0010), so this
+app is an optional review tool. Its labels go to data/nlp/review_labels.csv, never to the
+reference labels in labels/gold_labels.csv.
 
     uv run streamlit run src/trialpulse/nlp/labeling_app.py
 
-- Serves all test texts first, then the dev texts.
-- One click per text: clicking a label saves it to labels/gold_labels.csv (ids, text
-  hashes and labels only) and moves to the next unlabeled text. "Back" steps to the
-  previous text to revise it; "Next unlabeled" returns to where labeling stopped.
-- Test texts are blind: no suggestion is ever shown for them. Dev texts show the suggestion
-  from data/nlp/dev_suggestions.csv, and each saved label records whether a suggestion was
-  shown (the assisted column).
+- Serves the dev texts only. Test texts are never shown: they are never opened once the
+  reference labels are committed.
+- One click per text: clicking a label saves it (ids, text hashes and labels only) and
+  moves to the next unlabeled text. "Back" steps to the previous text to revise it;
+  "Next unlabeled" returns to where labeling stopped.
+- A dev text shows its suggestion from data/nlp/dev_suggestions.csv, if any, and each saved
+  label records whether a suggestion was shown (the assisted column).
 
 TRIALPULSE_GOLD_SAMPLE, TRIALPULSE_GOLD_LABELS and TRIALPULSE_GOLD_SUGGESTIONS override the
 paths.
@@ -21,7 +26,7 @@ from typing import Literal
 import streamlit as st
 
 from trialpulse.nlp.gold import (
-    LABELS_PATH,
+    REVIEW_LABELS_PATH,
     SAMPLE_PATH,
     SUGGESTIONS_PATH,
     GoldItem,
@@ -29,8 +34,8 @@ from trialpulse.nlp.gold import (
     load_sample,
     next_unlabeled,
     read_labels,
+    review_items,
     save_label,
-    serving_order,
     suggestion_for,
 )
 from trialpulse.nlp.taxonomy import DEFINITIONS, LABELS, TIE_BREAK_RULES
@@ -41,7 +46,7 @@ CURRENT = "current_item"  # session key: the item being revisited, if any
 
 def _paths() -> tuple[Path, Path, Path]:
     sample = Path(os.environ.get("TRIALPULSE_GOLD_SAMPLE", SAMPLE_PATH))
-    labels = Path(os.environ.get("TRIALPULSE_GOLD_LABELS", LABELS_PATH))
+    labels = Path(os.environ.get("TRIALPULSE_GOLD_LABELS", REVIEW_LABELS_PATH))
     suggestions = Path(os.environ.get("TRIALPULSE_GOLD_SUGGESTIONS", SUGGESTIONS_PATH))
     return sample, labels, suggestions
 
@@ -81,8 +86,8 @@ def _show(
 
 
 def main() -> None:
-    st.set_page_config(page_title="TrialPulse gold labeling")
-    st.title("Gold set labeling")
+    st.set_page_config(page_title="TrialPulse gold review")
+    st.title("Gold set review")
     st.caption(DISCLAIMER)
     sample_path, labels_path, suggestions_path = _paths()
     if not sample_path.is_file():
@@ -91,7 +96,7 @@ def main() -> None:
             "uv run python -m trialpulse.nlp.gold --build"
         )
         return
-    items = serving_order(load_sample(sample_path))
+    items = review_items(load_sample(sample_path))
     labels = read_labels(labels_path)
     suggestions = load_dev_suggestions(suggestions_path, items)
     done = sum(1 for i in items if i.key in labels)
