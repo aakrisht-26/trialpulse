@@ -23,6 +23,7 @@ from trialpulse.nlp.gold import (
     load_sample,
     next_unlabeled,
     normalize_text,
+    pull_early_stops,
     read_labels,
     save_label,
     split_dev_test,
@@ -201,6 +202,38 @@ def _study(nct: str, status: str, why: str | None, completion: str, ctype: str) 
 
 
 @respx.mock
+def test_interrupted_pull_keeps_its_first_date_on_resume(
+    cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    respx.get(VERSION_URL).mock(
+        return_value=httpx.Response(200, json={"dataTimestamp": "2026-09-23T09:00:00"})
+    )
+    page0 = [_study("NCT00000001", "TERMINATED", "Slow accrual", "2018-05-01", "ACTUAL")]
+    page1 = [_study("NCT00000002", "WITHDRAWN", "Funding", "2019-05-01", "ACTUAL")]
+    route = respx.get(STUDIES_URL).mock(
+        side_effect=[
+            httpx.Response(200, json={"studies": page0, "nextPageToken": "t1"}),
+            httpx.ConnectError("network down"),
+        ]
+    )
+    first = ApiClient(httpx.Client(), per_minute=60_000, max_attempts=1, sleep=lambda _: None)
+    with pytest.raises(httpx.ConnectError):
+        pull_early_stops(first, cfg, tmp_path, dt.date(2026, 9, 23))
+
+    route.side_effect = [httpx.Response(200, json={"studies": page1})]
+    resumed = ApiClient(httpx.Client(), per_minute=60_000, sleep=lambda _: None)
+    records, meta = pull_early_stops(resumed, cfg, tmp_path, dt.date(2026, 10, 1))
+
+    assert meta["pull_date"] == "2026-09-23"
+    assert meta["data_timestamp"] == "2026-09-23T09:00:00"
+    assert [r.nct_id for r in records] == ["NCT00000001", "NCT00000002"]
+    assert resumed.requests_made == 1  # only the missing page; no second /version call
+    last = route.calls[-1].request.url.params
+    assert last["pageToken"] == "t1"
+    assert "countTotal" not in last
+
+
+@respx.mock
 def test_build_gold_sample_end_to_end(cfg: ProjectConfig, tmp_path: Path) -> None:
     respx.get(VERSION_URL).mock(
         return_value=httpx.Response(200, json={"dataTimestamp": "2026-09-23T09:00:00"})
@@ -223,7 +256,9 @@ def test_build_gold_sample_end_to_end(cfg: ProjectConfig, tmp_path: Path) -> Non
 
     first_call = route.calls[0].request.url.params
     assert first_call["filter.overallStatus"] == "TERMINATED|WITHDRAWN"
-    assert "AREA[StudyType]INTERVENTIONAL" in first_call["filter.advanced"]
+    assert first_call["filter.advanced"] == (
+        "AREA[StudyType]INTERVENTIONAL AND AREA[StudyFirstPostDate]RANGE[2008-01-01,MAX]"
+    )
     assert summary["distinct_texts"] == 500  # "reason 7" duplicates "Reason 7."
     assert summary["pull_date"] == "2026-09-23"
     sample = load_sample(out)

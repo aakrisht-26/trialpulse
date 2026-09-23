@@ -150,7 +150,9 @@ def pull_early_stops(
     api: ApiClient, cfg: ProjectConfig, cache_root: Path, today: dt.date
 ) -> tuple[list[EarlyStop], dict[str, Any]]:
     """Pull (or read from the cache) the current records, and the pull's metadata: the pull
-    date and the API data timestamp, both fixed at the first pull."""
+    date and the API data timestamp, both fixed when the pull starts. They are saved before
+    the first page is requested, so an interrupted pull that resumes on a later day keeps
+    its original date."""
     params = pull_params(cfg)
     meta_path = query_dir(cache_root, params) / "pull.json"
     if meta_path.is_file():
@@ -158,13 +160,14 @@ def pull_early_stops(
     else:
         version = api.get_json(VERSION_URL)
         meta = {"pull_date": today.isoformat(), "data_timestamp": version.get("dataTimestamp")}
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = meta_path.with_name(meta_path.name + ".tmp")
+        tmp.write_text(json.dumps(meta), encoding="utf-8")
+        tmp.replace(meta_path)
     records = [
         _to_early_stop(s) for page in iter_study_pages(api, cache_root, params) for s in page
     ]
-    if not meta_path.is_file():
-        meta_path.write_text(json.dumps(meta), encoding="utf-8")
-    meta["records"] = len(records)
-    return records, meta
+    return records, {**meta, "records": len(records)}
 
 
 def distinct_items(
