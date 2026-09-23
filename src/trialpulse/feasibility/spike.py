@@ -40,7 +40,7 @@ from trialpulse.feasibility.dataset import (
     profile,
     write_data_dictionary,
 )
-from trialpulse.feasibility.fetch import JsonCache, JsonFetcher, RateLimiter
+from trialpulse.feasibility.fetch import JsonCache, JsonFetcher, OfflineFetcher, RateLimiter
 
 log = logging.getLogger("trialpulse.feasibility")
 
@@ -72,6 +72,7 @@ class Context:
     cfg: ProjectConfig
     hf_token: str | None
     pin_latest: bool = False
+    offline: bool = False
     _client: httpx.Client | None = field(default=None, repr=False)
 
     @property
@@ -408,10 +409,22 @@ def part_f(ctx: Context) -> dict[str, Any]:
     pool, source = _stability_pool(ctx)
     sample = seeded_sample(pool, STABILITY_SAMPLE, ctx.cfg.seeds.default)
     fallback = seeded_sample(sample, MANUAL_STABILITY_FALLBACK_SAMPLE, ctx.cfg.seeds.default)
+    previous = load_result("f")
     result = run_stability_audit(
-        ctx.client, JsonCache(CACHE_DIR / "history"), sample, manual_fallback=fallback
+        ctx.client,
+        JsonCache(CACHE_DIR / "history"),
+        sample,
+        manual_fallback=fallback,
+        fetcher=OfflineFetcher() if ctx.offline else None,
     )
     result["sample_source"] = source
+    result["offline"] = ctx.offline
+    # A cache-only rerun keeps the cost of the run that actually fetched the data.
+    if ctx.offline and previous is not None and previous.get("status") == "done":
+        result["original_run"] = previous.get("original_run") or {
+            key: previous.get(key)
+            for key in ("requests_this_run", "elapsed_minutes_this_run", "finished_at")
+        }
     return result
 
 
@@ -472,6 +485,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="part a: pin the latest dataset tag in config/project.yaml if none is pinned",
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="part f: use cached responses only; any request raises an error",
+    )
     args = parser.parse_args(argv)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -485,7 +503,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per request
     secrets = Secrets()
     token = secrets.hf_token.get_secret_value() if secrets.hf_token else None
-    ctx = Context(cfg=load_project_config(), hf_token=token, pin_latest=args.pin_latest)
+    ctx = Context(
+        cfg=load_project_config(),
+        hf_token=token,
+        pin_latest=args.pin_latest,
+        offline=args.offline,
+    )
     statuses = {part: run_part(part, ctx)["status"] for part in args.part}
     for part, status in statuses.items():
         print(f"part {part}: {status}")

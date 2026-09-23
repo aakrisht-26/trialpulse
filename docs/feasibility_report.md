@@ -21,7 +21,7 @@ Dataset: `brbk/clinical_trials_history`, config `core`, pinned revision `not pin
 ## Current-record-only fields and the under-3% stability rule
 
 - Pass (changed in under 3% of sampled trials): none.
-- Fail: phases, conditions, interventions, n_arm_groups, n_locations.
+- Fail: phases, phase_group, conditions, interventions, n_arm_groups, n_locations.
 - Not audited: MeSH terms, MeSH ancestors and browse branches. NLM derives them from the current conditions, and version snapshots carry no derivedSection.
 
 ## a. Download
@@ -33,6 +33,18 @@ Reason: access to the gated dataset has not been granted to this HF account yet
 
 Status: **blocked**.
 Reason: part a must be done before this part (the dataset is not downloaded)
+
+Per-version columns in the core config:
+
+| Field | Per-version column in core | Columns |
+| --- | --- | --- |
+| phases | Not verifiable yet (part b blocked) | n/a |
+| conditions | Not verifiable yet (part b blocked) | n/a |
+| interventions | Not verifiable yet (part b blocked) | n/a |
+| arm counts | Not verifiable yet (part b blocked) | n/a |
+| locations | Not verifiable yet (part b blocked) | n/a |
+
+The Parquet schema can be read only after access is granted. The dataset card describes `core` as one row per (nct_id, nct_version) with 96 scalar protocol-section columns, and lists `interventions` and `locations` as planned separate per-version configs, so those two are expected to be absent from `core`. Phases and conditions are lists in the registry and are not among the card's key columns. Arm counts are not mentioned.
 
 ## c. Cohort counts
 
@@ -54,11 +66,13 @@ Reason: part d must be done before part e
 Status: **done**.
 
 - Sampled 150 trials from the part g bulk pull (API v2 cohort); audited 150 (114 with more than one version); 0 failed.
-- Mode: `all_versions`; 973 version snapshots fetched of 973 versions in the change logs; 1,123 requests in total at 20 per minute or less (one per change log and version); the last run made 1,123 of them in 56.1 minutes, the rest came from the cache.
+- Mode: `all_versions`; 973 version snapshots fetched of 973 versions in the change logs; 1,123 requests in total at 20 per minute or less (one per change log and version); the last run made 0 of them in 0.0 minutes, the rest came from the cache.
+- This run read the cache only (offline mode, any request would have failed). The run that fetched the data made 1,123 requests in 56.1 minutes (finished 2026-09-23T00:25:28+00:00).
 
 | Field | Changed after version 0 | Share of sampled | 95% interval (Wilson) | Share among multi-version | Under 3%? |
 | --- | --- | --- | --- | --- | --- |
 | phases | 6 of 150 | 4.0% | 1.8% to 8.5% | 5.3% | No |
+| phase_group | 5 of 150 | 3.3% | 1.4% to 7.6% | 4.4% | No |
 | conditions | 12 of 150 | 8.0% | 4.6% to 13.5% | 10.5% | No |
 | interventions | 20 of 150 | 13.3% | 8.8% to 19.7% | 17.5% | No |
 | n_arm_groups | 10 of 150 | 6.7% | 3.7% to 11.8% | 8.8% | No |
@@ -66,7 +80,9 @@ Status: **done**.
 
 The rule compares the measured share with 3%. The interval shows the sampling uncertainty of a 150-trial sample and does not change the rule.
 
-Not audited: `condition_browse_branches`: version snapshots carry no derivedSection, so MeSH browse branches have no history to audit.
+`phase_group` maps each version's phases to early (Early Phase 1, Phase 1), mid (Phase 1/2, Phase 2), late (Phase 2/3, Phase 3), post_approval (Phase 4) or na (NA, or no phase recorded); any other combination is `other`. Groups at version 0: na 76, mid 24, early 22, late 15, post_approval 13.
+
+Not audited: `condition_mesh_fields`: version snapshots carry no derivedSection, so MeSH terms, ancestors and browse branches have no history to audit.
 
 ## g. API v2 check
 

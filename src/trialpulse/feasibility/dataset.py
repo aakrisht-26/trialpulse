@@ -36,15 +36,24 @@ KEY_COLUMNS: tuple[str, ...] = (
     "lead_sponsor_class",
     "status_verified_date",
 )
+# Column-name patterns for the fields part b looks for. The first five are the list fields
+# whose per-version presence decides whether current-record values are needed at all.
 LIST_FIELD_PATTERNS: dict[str, str] = {
-    "phases": r"^phases?$",
-    "conditions": r"^conditions?$|^condition_",
-    "interventions": r"^interventions?$|^intervention_(types?|names?|count)$",
-    "arm_count": r"arm",
-    "locations": r"location|site_count|facilit",
+    "phases": r"^phases?(_list)?$",
+    "conditions": r"^conditions?(_list|_count)?$",
+    "interventions": r"^interventions?(_list|_count)?$|^intervention_(types?|names?)$",
+    "arm_count": r"^(number_of_arms|n_arms|arms?_count|arm_group_count|arm_groups?)$",
+    "locations": r"^locations?(_count)?$|^(number_of_)?(sites|facilities)$|^site_count$",
     "status_verified_date": r"^status_verified_date$",
-    "eligibility_text": r"eligibility_criteria|^criteria$",
+    "eligibility_text": r"^eligibility_criteria$|^criteria$",
 }
+PER_VERSION_LIST_FIELDS: tuple[str, ...] = (
+    "phases",
+    "conditions",
+    "interventions",
+    "arm_count",
+    "locations",
+)
 COMPARED_DATASET_COLUMNS: tuple[str, ...] = (
     "overall_status",
     "start_date",
@@ -199,6 +208,8 @@ def profile(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, Any]:
         "null_rates": {c: float(v) for c, v in zip(present_key, null_row, strict=True)},
         "estimated_post_date_share_by_year": estimated_by_year,
         "list_fields": list_fields,
+        # True when the core config has a per-version column for the field.
+        "per_version_columns": {f: bool(list_fields[f]) for f in PER_VERSION_LIST_FIELDS},
     }
 
 

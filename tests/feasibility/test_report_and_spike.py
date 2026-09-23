@@ -97,6 +97,42 @@ def test_report_criteria_verdicts(cfg: ProjectConfig) -> None:
     assert "| Manual check (part e) | >= 9 of 10 | 9 of 10 pass | Yes |" in text
 
 
+def test_blocked_part_b_states_per_version_columns_explicitly(cfg: ProjectConfig) -> None:
+    results: dict[str, Any] = {"b": {"status": "blocked", "reason": "part a must be done"}}
+    text = report.render_report(results, [], cfg)
+    for label in ("phases", "conditions", "interventions", "arm counts", "locations"):
+        assert f"| {label} | Not verifiable yet (part b blocked) | n/a |" in text
+    assert "planned separate per-version configs" in text
+
+
+def test_part_f_shows_phase_group_and_the_original_run(cfg: ProjectConfig) -> None:
+    field = {"changed": 3, "trials": 150, "share": 0.02, "share_among_multi_version": 0.026,
+             "under_threshold": True}  # fmt: skip
+    f_result = {
+        "status": "done",
+        "sampled": 150,
+        "trials_audited": 150,
+        "multi_version_trials": 114,
+        "failures": {},
+        "mode": "all_versions",
+        "versions_fetched": 973,
+        "versions_in_change_logs": 973,
+        "requests_needed": 1123,
+        "requests_this_run": 0,
+        "elapsed_minutes_this_run": 0.0,
+        "original_run": {"requests_this_run": 1123, "elapsed_minutes_this_run": 56.1,
+                         "finished_at": "2026-09-23T00:30:00+00:00"},
+        "fields": {"phases": dict(field, changed=6), "phase_group": field},
+        "phase_group_at_version_0": {"mid": 60, "na": 40},
+    }  # fmt: skip
+
+    text = report.render_report({"f": f_result}, [], cfg)
+
+    assert "| phase_group | 3 of 150 | 2.0% |" in text
+    assert "made 1,123 requests in 56.1 minutes" in text
+    assert "Groups at version 0: mid 60, na 40." in text
+
+
 def test_manual_check_pending_until_ten_results() -> None:
     assert report._manual_measure([{"result": "pass"}]) == ("1 of 10 recorded", None)
 

@@ -8,7 +8,7 @@ import respx
 
 from trialpulse.feasibility import history_api
 from trialpulse.feasibility.dataset import BlockedError
-from trialpulse.feasibility.fetch import JsonCache, JsonFetcher
+from trialpulse.feasibility.fetch import JsonCache, JsonFetcher, OfflineError, OfflineFetcher
 
 BASE = history_api.INT_STUDIES_URL
 
@@ -125,6 +125,57 @@ def test_stability_audit_end_to_end(fast_fetcher: JsonFetcher, cache: JsonCache)
     cached = "".join(repr(cache.get(k)) for k in ("NCT1/v0000", "NCT1/v0001", "NCT1/changes"))
     for person in ("Jane", "John", "jr@example.org"):
         assert person not in cached
+
+
+@pytest.mark.parametrize(
+    ("phases", "group"),
+    [
+        (["EARLY_PHASE1"], "early"),
+        (["PHASE1"], "early"),
+        (["PHASE1", "PHASE2"], "mid"),
+        (["PHASE2"], "mid"),
+        (["PHASE3", "PHASE2"], "late"),
+        (["PHASE3"], "late"),
+        (["PHASE4"], "post_approval"),
+        (["NA"], "na"),
+        ([], "na"),
+        (["PHASE3", "PHASE4"], "other"),
+    ],
+)
+def test_phase_group(phases: list[str], group: str) -> None:
+    assert history_api.phase_group(phases) == group
+
+
+@respx.mock
+def test_offline_rerun_uses_only_the_cache(fast_fetcher: JsonFetcher, cache: JsonCache) -> None:
+    respx.get(f"{BASE}/NCT1", params={"history": "true"}).mock(
+        return_value=httpx.Response(200, json=_change_log([[], ["Study Design"]]))
+    )
+    respx.get(f"{BASE}/NCT1/history/0").mock(
+        return_value=httpx.Response(200, json=_version(["Asthma"], 1, ["PHASE1"]))
+    )
+    respx.get(f"{BASE}/NCT1/history/1").mock(
+        return_value=httpx.Response(200, json=_version(["Asthma"], 1, ["PHASE1", "PHASE2"]))
+    )
+    online = history_api.run_stability_audit(
+        httpx.Client(), cache, ["NCT1"], manual_fallback=[], fetcher=fast_fetcher
+    )
+
+    offline = history_api.run_stability_audit(
+        httpx.Client(), cache, ["NCT1"], manual_fallback=[], fetcher=OfflineFetcher()
+    )
+
+    assert offline["requests_this_run"] == 0
+    assert offline["fields"] == online["fields"]
+    assert offline["fields"]["phase_group"]["changed"] == 1  # early to mid
+    assert offline["phase_group_at_version_0"] == {"early": 1}
+
+
+def test_offline_run_fails_on_a_cache_miss(cache: JsonCache) -> None:
+    with pytest.raises(OfflineError, match="offline mode"):
+        history_api.run_stability_audit(
+            httpx.Client(), cache, ["NCT9"], manual_fallback=[], fetcher=OfflineFetcher()
+        )
 
 
 @respx.mock

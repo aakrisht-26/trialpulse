@@ -39,6 +39,34 @@ def test_profile_counts(history_glob: str) -> None:
     assert prof["date_ranges"]["study_first_post_date"] == ["2007-06-01", "2021-07-07"]
 
 
+def test_per_version_columns_absent_in_the_fixture(history_glob: str) -> None:
+    with duckdb.connect() as con:
+        prof = profile(con, history_glob)
+    assert prof["per_version_columns"] == {
+        "phases": False,
+        "conditions": False,
+        "interventions": False,
+        "arm_count": False,
+        "locations": False,
+    }
+
+
+def test_per_version_columns_detected_by_exact_name(tmp_path: Path) -> None:
+    path = tmp_path / "wide.parquet"
+    with duckdb.connect() as con:
+        con.execute(
+            f"""COPY (SELECT 'NCT1' AS nct_id, 0 AS nct_version, 'PHASE2' AS phases,
+                2 AS number_of_arms, 'x' AS pharmaceutical_class, 'y' AS allocation)
+            TO '{path.as_posix()}' (FORMAT parquet)"""
+        )
+        prof = profile(con, path.as_posix())
+    flags = prof["per_version_columns"]
+    assert flags["phases"] is True
+    assert flags["arm_count"] is True
+    assert prof["list_fields"]["arm_count"] == ["number_of_arms"]  # not pharmaceutical_class
+    assert flags["locations"] is False
+
+
 def test_cohort_counts(history_glob: str, cfg: ProjectConfig) -> None:
     with duckdb.connect() as con:
         counts = cohort_counts(con, history_glob, cfg)

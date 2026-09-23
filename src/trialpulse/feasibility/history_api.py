@@ -26,6 +26,7 @@ MAX_RUNTIME_MINUTES = 60  # CLAUDE.md Section 3: jobs over about an hour need a 
 MAX_CHANGE_SHARE = 0.03  # CLAUDE.md Section 8, rule 2: allowed if changed in under 3%
 AUDITED_FIELDS: tuple[str, ...] = (
     "phases",
+    "phase_group",
     "conditions",
     "interventions",
     "n_arm_groups",
@@ -52,6 +53,26 @@ _IRRELEVANT_LABEL_WORDS = (
     "limitation",
 )
 _UNAVAILABLE_AFTER = 5  # consecutive failed trials before the endpoint counts as unavailable
+
+
+# Phase group of a version's phase list: early (Early Phase 1, Phase 1), mid (Phase 1/2,
+# Phase 2), late (Phase 2/3, Phase 3), post-approval (Phase 4), and N/A (NA, or no phase
+# recorded). Any other combination is "other", so it is counted instead of hidden.
+PHASE_GROUPS: dict[frozenset[str], str] = {
+    frozenset({"EARLY_PHASE1"}): "early",
+    frozenset({"PHASE1"}): "early",
+    frozenset({"PHASE1", "PHASE2"}): "mid",
+    frozenset({"PHASE2"}): "mid",
+    frozenset({"PHASE2", "PHASE3"}): "late",
+    frozenset({"PHASE3"}): "late",
+    frozenset({"PHASE4"}): "post_approval",
+    frozenset({"NA"}): "na",
+    frozenset(): "na",
+}
+
+
+def phase_group(phases: Sequence[str]) -> str:
+    return PHASE_GROUPS.get(frozenset(phases), "other")
 
 
 def label_may_touch_audited_fields(label: str) -> bool:
@@ -187,8 +208,12 @@ def run_stability_audit(
             continue
         snapshots[nct_id] = trial_snapshots
 
+    for trial_snapshots in snapshots.values():
+        for snapshot in trial_snapshots:
+            snapshot["phase_group"] = phase_group(snapshot["phases"])
     labels = Counter(label for log in logs.values() for c in log for label in c["module_labels"])
     summary = stability_summary(snapshots, AUDITED_FIELDS, MAX_CHANGE_SHARE)
+    groups_at_v0 = Counter(s[0]["phase_group"] for s in snapshots.values() if s)
     return {
         **summary,
         "sampled": len(sample),
@@ -202,6 +227,7 @@ def run_stability_audit(
         "requests_this_run": fetcher.requests_made,
         "elapsed_minutes_this_run": round((time.monotonic() - start) / 60, 1),
         "module_labels_seen": dict(labels.most_common()),
+        "phase_group_at_version_0": dict(groups_at_v0.most_common()),
         "not_audited": {
             "condition_mesh_fields": (
                 "version snapshots carry no derivedSection, so MeSH terms, ancestors and "

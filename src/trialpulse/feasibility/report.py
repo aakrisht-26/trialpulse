@@ -136,6 +136,42 @@ def _part_a(r: Mapping[str, Any]) -> list[str]:
     ]
 
 
+PER_VERSION_LABELS: dict[str, str] = {
+    "phases": "phases",
+    "conditions": "conditions",
+    "interventions": "interventions",
+    "arm_count": "arm counts",
+    "locations": "locations",
+}
+CARD_NOTE = (
+    "The Parquet schema can be read only after access is granted. The dataset card describes "
+    "`core` as one row per (nct_id, nct_version) with 96 scalar protocol-section columns, and "
+    "lists `interventions` and `locations` as planned separate per-version configs, so those "
+    "two are expected to be absent from `core`. Phases and conditions are lists in the "
+    "registry and are not among the card's key columns. Arm counts are not mentioned."
+)
+
+
+def _per_version_columns(r: Mapping[str, Any] | None) -> list[str]:
+    lines = [
+        "Per-version columns in the core config:",
+        "",
+        "| Field | Per-version column in core | Columns |",
+        "| --- | --- | --- |",
+    ]
+    for key, label in PER_VERSION_LABELS.items():
+        if r is None:
+            lines.append(f"| {label} | Not verifiable yet (part b blocked) | n/a |")
+            continue
+        cols = r["list_fields"].get(key, [])
+        has = r.get("per_version_columns", {}).get(key, bool(cols))
+        shown = ", ".join(f"`{c}`" for c in cols) or "none"
+        lines.append(f"| {label} | {'Yes' if has else 'No'} | {shown} |")
+    if r is None:
+        lines += ["", CARD_NOTE]
+    return lines
+
+
 def _part_b(r: Mapping[str, Any]) -> list[str]:
     vpt = r.get("versions_per_trial", {})
     lines = [
@@ -150,12 +186,16 @@ def _part_b(r: Mapping[str, Any]) -> list[str]:
         + "; ".join(f"`{k}` {v[0]} to {v[1]}" for k, v in r["date_ranges"].items())
         + ".",
         "",
-        "List-type fields found as columns:",
+        *_per_version_columns(r),
+        "",
+        "Other fields looked for:",
         "",
         "| Field | Matching columns |",
         "| --- | --- |",
     ]
     for name, cols in r["list_fields"].items():
+        if name in PER_VERSION_LABELS:
+            continue
         lines.append(f"| {name} | {', '.join(f'`{c}`' for c in cols) or 'none'} |")
     lines += ["", "Share of ESTIMATED post dates by year of last_update_post_date:", ""]
     lines += ["| Year | Versions | ESTIMATED |", "| --- | --- | --- |"]
@@ -206,6 +246,16 @@ def _part_f(r: Mapping[str, Any]) -> list[str]:
         "requests in total at 20 per minute or less (one per change log and version); the "
         f"last run made {_num(r['requests_this_run'])} of them in "
         f"{r['elapsed_minutes_this_run']} minutes, the rest came from the cache.",
+    ]
+    original = r.get("original_run")
+    if original:
+        lines.append(
+            "- This run read the cache only (offline mode, any request would have failed). "
+            f"The run that fetched the data made {_num(original.get('requests_this_run'))} "
+            f"requests in {original.get('elapsed_minutes_this_run')} minutes "
+            f"(finished {original.get('finished_at')})."
+        )
+    lines += [
         "",
         "| Field | Changed after version 0 | Share of sampled | 95% interval (Wilson) "
         "| Share among multi-version | Under 3%? |",
@@ -223,6 +273,15 @@ def _part_f(r: Mapping[str, Any]) -> list[str]:
         "The rule compares the measured share with 3%. The interval shows the sampling "
         "uncertainty of a 150-trial sample and does not change the rule.",
     ]
+    if "phase_group" in r["fields"]:
+        at_v0 = r.get("phase_group_at_version_0", {})
+        lines += [
+            "",
+            "`phase_group` maps each version's phases to early (Early Phase 1, Phase 1), mid "
+            "(Phase 1/2, Phase 2), late (Phase 2/3, Phase 3), post_approval (Phase 4) or na "
+            "(NA, or no phase recorded); any other combination is `other`. Groups at version "
+            "0: " + (", ".join(f"{k} {v}" for k, v in at_v0.items()) or "n/a") + ".",
+        ]
     for name, why in r.get("not_audited", {}).items():
         lines.append(f"\nNot audited: `{name}`: {why}.")
     return lines
@@ -327,6 +386,8 @@ def render_report(
             continue
         if result.get("status") in {"blocked", "failed"}:
             lines.append(f"Reason: {result.get('reason') or result.get('error')}")
+            if part == "b":
+                lines += ["", *_per_version_columns(None)]
             continue
         if part == "e":
             lines.append(

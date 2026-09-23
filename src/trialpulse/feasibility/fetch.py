@@ -115,6 +115,21 @@ class JsonFetcher:
         raise AssertionError("unreachable: tenacity reraises the last error")
 
 
+class OfflineError(RuntimeError):
+    """A request was attempted in offline mode, where only cached responses may be used."""
+
+
+class OfflineFetcher(JsonFetcher):
+    """A fetcher for cache-only runs: any request raises OfflineError, so a run that
+    claims to make no requests cannot make one by accident."""
+
+    def __init__(self) -> None:
+        self.requests_made = 0
+
+    def get(self, url: str, params: Mapping[str, str | int] | None = None) -> Any:
+        raise OfflineError(f"offline mode: {url} is not in the cache")
+
+
 class JsonCache:
     """Gzipped JSON files under a root directory, one per key. Writes are atomic, so an
     interrupted run never leaves a half-written entry that a rerun would trust."""
