@@ -1,0 +1,148 @@
+"""The test lock (CLAUDE.md Section 10, ADR 0004, ADR 0009).
+
+Locked origins (roles "test" and "stress") are evaluated only when every condition holds:
+
+1. the run was started with --unlock-test;
+2. an annotated git tag prereg-v1 exists (lightweight tags are refused);
+3. in the tagged commit, docs/preregistration.md has a "Registered: YYYY-MM-DD" line and
+   no placeholder text;
+4. the tagged commit is an ancestor of HEAD;
+5. the tag also exists on the remote (origin) as the same annotated tag object, pointing at
+   the same commit, so the registration was public before any test result existed and the
+   recorded tag hash is the published one (ADR 0009).
+
+The tag object hash and the tagged commit hash are returned so the caller records them
+with the results. This module only reads git state; it never creates or pushes tags.
+"""
+
+import datetime as dt
+import re
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+TAG = "prereg-v1"
+REMOTE = "origin"
+PREREG_PATH = "docs/preregistration.md"
+LOCKED_ROLES = frozenset({"test", "stress"})
+
+# Placeholder text that must not appear in a registration (ADR 0004).
+PLACEHOLDER_PATTERNS: tuple[str, ...] = (
+    r"not yet registered",
+    r"\bTODO\b",
+    r"\bTBD\b",
+    r"\bTBC\b",
+    r"\bFIXME\b",
+    r"\bXXX\b",
+    r"placeholder",
+    r"\bfill in\b",
+    r"lorem ipsum",
+    r"<[A-Za-z_][A-Za-z0-9_ -]*>",
+)
+_REGISTERED = re.compile(r"^\s*Registered:\s*(\S+)\s*$", re.MULTILINE)
+
+
+class TestLockError(RuntimeError):
+    """Locked origins were requested but a lock condition is not met."""
+
+    __test__ = False  # not a pytest test class
+
+
+@dataclass(frozen=True)
+class Unlock:
+    tag: str
+    tag_object: str
+    commit: str
+    registered: dt.date
+    remote: str
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+    )
+
+
+def find_placeholders(text: str) -> list[str]:
+    """Every placeholder match in text, case-insensitive."""
+    found: list[str] = []
+    for pattern in PLACEHOLDER_PATTERNS:
+        found += [m.group(0) for m in re.finditer(pattern, text, flags=re.IGNORECASE)]
+    return found
+
+
+def registered_date(text: str) -> dt.date:
+    match = _REGISTERED.search(text)
+    if match is None:
+        raise TestLockError(f"{PREREG_PATH} at {TAG} has no 'Registered: YYYY-MM-DD' line")
+    try:
+        return dt.date.fromisoformat(match.group(1))
+    except ValueError as exc:
+        raise TestLockError(f"'Registered:' value {match.group(1)!r} is not a valid date") from exc
+
+
+def remote_tag(repo: Path, remote: str = REMOTE) -> tuple[str | None, str | None]:
+    """(tag object, peeled commit) of the remote's prereg-v1, from git ls-remote. The tag
+    object is None when the remote lacks the tag; the peeled commit (the "^{}" line) is None
+    when the remote's tag is lightweight."""
+    listing = _git(repo, "ls-remote", "--tags", remote)
+    if listing.returncode != 0:
+        raise TestLockError(f"cannot list the tags on {remote}: {listing.stderr.strip()}")
+    refs: dict[str, str] = {}
+    for line in listing.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        refs[ref.strip()] = sha.strip()
+    return refs.get(f"refs/tags/{TAG}"), refs.get(f"refs/tags/{TAG}^{{}}")
+
+
+def check_unlock(repo: Path, unlock_flag: bool, remote: str = REMOTE) -> Unlock:
+    """Return the unlock record, or raise TestLockError naming the failed condition."""
+    if not unlock_flag:
+        raise TestLockError("locked origins need the --unlock-test flag")
+    kind = _git(repo, "cat-file", "-t", TAG)
+    if kind.returncode != 0:
+        raise TestLockError(f"git tag {TAG} does not exist")
+    if kind.stdout.strip() != "tag":
+        raise TestLockError(f"git tag {TAG} is a lightweight tag; an annotated tag is required")
+    show = _git(repo, "show", f"{TAG}:{PREREG_PATH}")
+    if show.returncode != 0:
+        raise TestLockError(f"{PREREG_PATH} is not in the commit tagged {TAG}")
+    text = show.stdout
+    registered = registered_date(text)
+    placeholders = find_placeholders(text)
+    if placeholders:
+        raise TestLockError(
+            f"{PREREG_PATH} at {TAG} contains placeholder text: {sorted(set(placeholders))}"
+        )
+    commit = _git(repo, "rev-parse", f"{TAG}^{{commit}}").stdout.strip()
+    ancestor = _git(repo, "merge-base", "--is-ancestor", commit, "HEAD")
+    if ancestor.returncode != 0:
+        raise TestLockError(f"the commit tagged {TAG} is not an ancestor of HEAD")
+    tag_object = _git(repo, "rev-parse", TAG).stdout.strip()
+    remote_object, remote_commit = remote_tag(repo, remote)
+    if remote_object is None:
+        raise TestLockError(f"git tag {TAG} is not on {remote}; push it before unlocking")
+    if remote_commit is None:
+        raise TestLockError(
+            f"git tag {TAG} on {remote} is a lightweight tag; an annotated tag is required"
+        )
+    if remote_commit != commit:
+        raise TestLockError(
+            f"git tag {TAG} on {remote} points at {remote_commit[:12]}, "
+            f"not at the local tagged commit {commit[:12]}"
+        )
+    if remote_object != tag_object:
+        raise TestLockError(
+            f"git tag {TAG} on {remote} is tag object {remote_object[:12]}, not the local "
+            f"tag object {tag_object[:12]}; the tag was re-created after it was published"
+        )
+    return Unlock(
+        tag=TAG, tag_object=tag_object, commit=commit, registered=registered, remote=remote
+    )
+
+
+def require_unlock(roles: set[str], repo: Path, unlock_flag: bool) -> Unlock | None:
+    """None when only development origins are requested; otherwise check_unlock."""
+    if not roles & LOCKED_ROLES:
+        return None
+    return check_unlock(repo, unlock_flag)
