@@ -28,9 +28,9 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 
 ## Step 6 (partial, provisional): Why trials stop
 
-**What was built.** The eight-label taxonomy with definitions and tie-break rules, a labeling guide, a seeded sampler for the 400-text gold set (stratified by status and stop year, split 100 dev and 300 test), and a Streamlit app that shows one text at a time and saves each label at once, keyed by trial and version, without the text. The real sample waits for the dataset; everything is tested on synthetic data, including the app itself through Streamlit's test harness.
+**What was built.** The eight-label taxonomy with definitions and tie-break rules, a labeling guide, a seeded sampler for the 400-text gold set (stratified by status and stop year, split 100 dev and 300 test), and a Streamlit app that shows one text at a time and saves each label at once, keyed by trial and text hash, without the text. After the PR review the texts come from the current API v2 records of the cohort's early stops, normalized and deduplicated, so labeling does not wait for the version-history dataset; the real 400-text sample is built, and the logic is tested on synthetic data, including the app itself through Streamlit's test harness.
 
-**Key decision and why.** Labels are stored separately from texts, keyed by (nct_id, nct_version). The labels file can be committed and reviewed, while the texts stay under the gitignored data folder, which respects the dataset license and keeps the repository free of redistributed content.
+**Key decision and why.** Labels are stored separately from texts, keyed by (nct_id, text_sha256), the SHA-256 of the normalized text, with the pull date as source, so they survive a later change of history source. The labels file can be committed and reviewed, while the texts stay under the gitignored data folder, which respects the dataset license and keeps the repository free of redistributed content.
 
 **Rejected alternative and why not.** Sampling uniformly at random. Early stops cluster in some years (and COVID-19 created a spike), so a uniform sample could leave small strata empty. Proportional allocation with at least one item per non-empty stratum keeps the gold set representative and still covers rare cells.
 

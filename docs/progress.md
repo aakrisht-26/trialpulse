@@ -82,9 +82,9 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
-| 6 | Why trials stop (NLP) | Partial, provisional (this branch, unreviewed) |
+| 6 | Why trials stop (NLP) | Partial, provisional (this branch, under review) |
 | 7 | Point-in-time features | Not started |
-| 8 | Evaluation harness and test lock | Provisional (this branch, unreviewed) |
+| 8 | Evaluation harness and test lock | Provisional (this branch, under review) |
 | 9 | Baselines and Cox analysis | Not started |
 | 10 | Discrete-time models and tuning | Not started |
 | 11 | Pre-registration, locked test and results | Not started |
@@ -227,42 +227,91 @@ Decisions from these follow-ups, approved by Aakrisht on 2026-09-23:
 1. A version with no phase recorded maps to the N/A group (1 of 973 cached versions). Any phase combination outside the five groups maps to `other` (none occurred).
 2. Offline mode is a flag on part f only.
 
-## Provisional work on branch `provisional/step6-step8` (unreviewed)
+## Provisional work on branch `provisional/step6-step8` (under review)
 
-Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and synthetic-data tests. The files were written in a scratch worktree overnight and committed to this branch on 2026-09-23, after review, from main at `bd87054`. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
+Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to this branch on 2026-09-23 from main at `bd87054` and reviewed once (PR #1). Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
+
+### Review of PR #1 (2026-09-23)
+
+**Approved as proposed:**
+- Step 8 decisions 1 to 5. The contract now states that `event_date` holds the censoring date when `event` is 0.
+- Step 6 decisions 3 and 4.
+- ADR 0008 and its Amendments line (both on main).
+
+**Changes requested, and done on this branch:**
+
+1. The gold sample comes from the API v2 cohort's current records: TERMINATED and WITHDRAWN trials with a non-blank why_stopped (`2a12318`).
+2. Texts are normalized and deduplicated before sampling, so each text appears once and in only one split (`2a12318`).
+3. Labels are keyed by `(nct_id, text_sha256)`, with a `source` column holding the pull date (`2a12318`).
+4. The new stop-year rule, and a dev/test split stratified by status (`2a12318`).
+5. The real sample is built, and the app loads all 400 texts. It shows "0 of 400 labeled", checked with Streamlit's test harness on the real file, with labels written to a throwaway file, so nothing was labeled.
+6. Differential tests against lifelines and scikit-learn (`e5d4d52`).
+7. The lock requires `prereg-v1` on origin at the same commit, tested with a local bare repository as origin. This is ADR 0009 (`72e054e`, tightened in `98824c5`).
+8. The bootstrap fails with a clear error above 1% invalid resamples and always reports the count (`67e1701`, with context added in `3d4f9db`).
+
+**Internal review.** Three independent reviewers checked the changes against the list above. Their confirmed findings are fixed:
+- a bootstrap failure now names its origin, horizon, slice and metric, and the CLI exits with code 3 (`3d4f9db`);
+- origin's tag must be the same annotated tag object, not only the same commit (`98824c5`);
+- the pull date is fixed when a pull starts, so a resumed pull keeps it, and the test checks the full cohort filter (`cb60d8f`);
+- the API client scrubs personal data before caching, and tests now cover no-retry on a 404 and a mid-pull resume (`5dfc0a7`);
+- this report is updated.
 
 ### Step 6 (partial): Why trials stop
 
-**Built (code and synthetic-data tests only):**
+**Built:**
 
 - `src/trialpulse/nlp/taxonomy.py`: the eight labels, their definitions and tie-break rules. The operational and scientific groups are read from `config/project.yaml`.
-- `docs/labeling_guide.md`: definitions, paraphrased examples and seven tie-break rules.
+- `docs/labeling_guide.md`: definitions, paraphrased examples, seven tie-break rules, and how texts and labels are stored.
+- `src/trialpulse/ingest/ctgov_api.py`: a minimal API v2 client. It stays at 40 requests per minute or less, retries with backoff, paginates by cursor, caches pages, and scrubs personal data before caching.
 - `src/trialpulse/nlp/gold.py`:
-  - takes the event-version why_stopped text of each early stop;
+  - pulls the current records of the cohort's early stops;
+  - normalizes and deduplicates the why_stopped texts;
   - draws a seeded sample of 400, stratified by status and stop year;
-  - splits it 100 dev and 300 test with a fixed seed;
-  - stores labels in `labels/gold_labels.csv` with ids and labels only.
+  - splits it 100 dev and 300 test, stratified by status;
+  - stores labels in `labels/gold_labels.csv` as `nct_id`, `text_sha256`, `split`, `label`, `source` and `labeled_at`, with no text.
 
   Command: `uv run python -m trialpulse.nlp.gold --build`.
-- `src/trialpulse/nlp/labeling_app.py`: Streamlit app. It shows one text at a time, saves each label at once, can revise earlier labels, and shows the disclaimer.
-- `tests/nlp/`: 8 tests, including a Streamlit AppTest run that saves a label.
+- `src/trialpulse/nlp/labeling_app.py`: Streamlit app. It shows one text at a time, saves each label at once, can revise earlier labels, and shows the disclaimer and the text source.
+- Tests: 21 in `tests/nlp/` (including an AppTest run) and 7 in `tests/ingest/`.
 - Dependency: streamlit (locked stack).
+
+**The real sample** (pulled 2026-09-23, API data timestamp 2026-09-22T09:00:04, 40 requests):
+
+- 38,482 early stops in the cohort, 35,198 with a non-blank reason, 24,534 distinct normalized texts;
+- 400 sampled: 272 TERMINATED and 128 WITHDRAWN;
+- dev: 68 TERMINATED and 32 WITHDRAWN; test: 204 and 96;
+- all 400 hashes are distinct and match their texts;
+- the texts are in `data/nlp/gold_sample.csv` (gitignored).
 
 **Acceptance (Step 6):**
 
 | Criterion | Result |
 | --- | --- |
-| Gold-test results for the LLM and the distilled model | Not started: needs Aakrisht's gold labels and GROQ_API_KEY (not set); the extension excluded LLM work |
+| Gold-test results for the LLM and the distilled model | Not started: needs Aakrisht's gold labels and GROQ_API_KEY (not set) |
 | LLM macro-F1 >= 0.80 on gold-test | Not started |
 | Gold-test never used for tuning | Enforced by design: the split is fixed before any prompt work, and no tuning code exists yet |
-| The 400-text sample loaded in the app | Blocked on dataset access. The sampler and app are ready, and one command builds the sample |
+| The 400-text sample loaded in the app | Met: built from API v2 on 2026-09-23; the app shows "0 of 400 labeled" |
+
+**Decisions from the review (Aakrisht, 2026-09-23):**
+
+1. The gold texts come from the current API v2 records, not the history dataset. This replaces the overnight decision to use event-version texts.
+2. Texts are normalized (lowercase, collapsed whitespace, surrounding punctuation trimmed) and deduplicated before sampling.
+3. Labels are keyed by `(nct_id, text_sha256)` plus a `source` column with the pull date.
+4. **Stop-year rule:** the year of the actual completion date when present, otherwise the year of the last update post date. The dev/test split is also stratified by status. This replaces the overnight decision on strata and the split.
+5. Approved: file locations; `efficacy` covers early proof of benefit; the app hides the split.
 
 **Decisions pending approval (Step 6):**
 
-1. The gold text is the why_stopped of the event version (the first early-stop version). Texts are not deduplicated.
-2. Strata are status by the calendar year of the event version's post date. Allocation is proportional with largest remainders and at least one item per non-empty stratum. The dev/test split is a seeded random split, not stratified.
-3. The sample with texts is `data/nlp/gold_sample.csv` (gitignored). Labels go to `labels/gold_labels.csv`.
-4. `efficacy` also covers a stop for early proof of benefit. The app hides the dev/test split from the labeler.
+1. **A fresh pull instead of the part g cache.** The part g cache has the why_stopped texts but no completion date or completion type, which the stop-year rule needs. So the approved fresh pull was used: the cohort's early stops only, 40 requests at 40 per minute. Compared with part g, it has the same 38,482 trials, with 0 status differences and 0 why_stopped differences.
+2. **Location of the API client.** It is in `src/trialpulse/ingest/ctgov_api.py`, the Step 14 location, because production code may not import the feasibility spike (a test enforces this). It repeats a little of the spike's code by design.
+3. **Repeated texts.** The trial with the lowest NCT ID represents the text, and the app shows that trial's own wording.
+4. **Normalization details.** Only whitespace and Unicode punctuation (category P) are trimmed at the ends. Symbols such as "<" or "+" stay.
+5. **Source value.** It reads "ctgov-api-v2 pulled YYYY-MM-DD". The pull date and data timestamp are saved in `pull.json` when the pull starts.
+6. **Dev share per status** uses proportional allocation, as above.
+
+**Open question:** under the stop-year rule, 14 of the 400 sampled texts have a stop year before 2008 (1996 to 2007). These are trials first posted in 2008 or later but completed earlier. Keep them as they are, or treat them differently?
+
+**Recorded for later in Step 6:** every normalized gold text, matched by `text_sha256`, must be excluded from the LLM-labeled training sample, and a test must enforce it.
 
 ### Step 8: Evaluation harness and test lock
 
@@ -274,18 +323,31 @@ Built during the overnight run under the extension's gate. The gate was not met 
   - lift at the top fraction;
   - calibration slope and intercept by IPCW logistic recalibration;
   - a calibration table against Aalen-Johansen by risk decile.
-- `src/trialpulse/eval/bootstrap.py`: cluster bootstrap over trials with percentile intervals. Invalid resamples are dropped and counted.
-- `src/trialpulse/eval/lock.py`: the ADR 0004 lock. It checks the flag, the annotated `prereg-v1` tag, the `Registered:` date, the placeholder list and the ancestor rule, and returns the hashes. It only reads git state.
+- `src/trialpulse/eval/bootstrap.py`: cluster bootstrap over trials with percentile intervals. It always reports `invalid_resamples`, and raises `BootstrapError` when more than 1% of resamples are invalid.
+- `src/trialpulse/eval/lock.py`: the lock of ADR 0004 and ADR 0009. It checks:
+  - the flag;
+  - the annotated local `prereg-v1` tag;
+  - the `Registered:` date;
+  - the placeholder list;
+  - the ancestor rule;
+  - that the same annotated tag object is on origin at the same commit.
+
+  It returns the hashes and only reads git state.
 - `src/trialpulse/eval/walkforward.py`:
   - origins, with training rows censored at T;
   - evaluation rows with T <= L < T + 12 months;
   - per-row calendar-month horizons;
   - metrics pooled and per landmark index, with intervals, written as JSON.
 
-  The lock is checked before any data is loaded.
+  The lock is checked before any data is loaded. A bootstrap failure names its slice and metric.
 - `src/trialpulse/models/aalen_johansen.py`: the Aalen-Johansen CIF and M0 (one curve per stratum, pooled curve for unseen strata).
 - `src/trialpulse/dates.py`: calendar-month arithmetic with month-end clamping.
-- `tests/eval/`: 44 tests. Dependency: numpy (approved 2026-09-23).
+- Tests: 60 in `tests/eval/`. They include differential tests on seeded random data with censoring and competing events:
+  - Kaplan-Meier matches lifelines to 1e-12, with and without tied times;
+  - Aalen-Johansen matches lifelines to 1e-10 on continuous times;
+  - IPCW AUC matches scikit-learn's `roc_auc_score` with the IPCW weights to 1e-12;
+  - the IPCW weights and Brier score match a direct computation on lifelines' Kaplan-Meier.
+- Dependencies: numpy (approved 2026-09-23); lifelines and scikit-learn (dev group, locked stack).
 
 **Acceptance (Step 8):**
 
@@ -296,17 +358,30 @@ Built during the overnight run under the extension's gate. The gate was not met 
 | No censoring makes IPCW equal to unweighted | Met: AUC and Brier (`test_no_censoring_makes_ipcw_equal_to_unweighted`) |
 | Constructed censoring patterns give known values | Met: hand-worked example, AUC 0.625 against 2/3 unweighted, Brier 0.253 |
 | M0 runs end to end on development origins | **Not met on real data**: it needs the Step 4 landmark table. It runs end to end on synthetic landmark rows |
-| Locked origins refused without the flag and a committed preregistration | Met: refused for test, stress, all, 2018, 2019 and 2020, with and without the flag, before any data is read. Also refused: the Step 1 stub, a lightweight tag, placeholders, a bad date, a non-ancestor tag, and the CLI |
+| Locked origins refused without the flag and a committed preregistration | Met. Refused for test, stress, all, 2018, 2019 and 2020, with and without the flag, before any data is read. Also refused: the Step 1 stub, a lightweight tag, placeholders, a bad date, a non-ancestor tag, a missing origin, a tag not pushed, a lightweight tag on origin, a tag on origin at another commit, a tag re-created after publishing, and the CLI |
 
-No `prereg-v1` tag was created in this repository, `--unlock-test` was never passed, and no locked origin was evaluated. The lock tests use throwaway repositories under pytest's temporary directory.
+No `prereg-v1` tag was created in this repository, nothing was pushed to a tag, `--unlock-test` was never passed, and no locked origin was evaluated. The lock tests use throwaway repositories, including bare ones as origin, under pytest's temporary directory.
 
-**Decisions pending approval (Step 8):**
+**Decisions approved (Aakrisht, 2026-09-23):**
 
 1. Rows censored at or before the horizon get weight 0. Controls are rows event-free at H (weight 1/G(H)) and completions by H (weight 1/G(T-)).
 2. Calibration slope and intercept come from an IPCW-weighted logistic recalibration on logit(p). The calibration table uses the median per-row horizon.
 3. Horizons are per-row calendar months converted to days. Training outcomes dated on or after the origin are censored at the origin.
-4. Kaplan-Meier, Aalen-Johansen and the weighted AUC are small numpy implementations tested against hand-computed values, not lifelines or scikit-learn.
-5. The input contract for Step 4: one row per (trial, landmark) with `trial_id`, `landmark_index`, `landmark_date`, `event`, `event_date` and feature columns, in `data/cohort/landmarks.parquet`.
+4. Kaplan-Meier, Aalen-Johansen and the weighted AUC are small numpy implementations. They are now also checked against lifelines and scikit-learn.
+5. The input contract for Step 4 is one row per (trial, landmark), in `data/cohort/landmarks.parquet`, with:
+   - `trial_id`, `landmark_index`, `landmark_date`, `event` and `event_date`, plus feature columns;
+   - `event_date` holding the date of the event when `event` is 1 or 2, and the censoring date when `event` is 0.
+
+Also from the review: ADR 0009 (the tag must be on origin), and the 1% bootstrap rule.
+
+**Decisions pending approval (Step 8):**
+
+1. **Dependency group.** lifelines and scikit-learn are in the dev group, since only tests use them so far; the first model step that needs them moves them to runtime dependencies. lifelines requires pandas below 3, so pandas moved from 3.0.6 to 2.3.3. The Streamlit tests pass.
+2. **ADR number.** ADR 0009 is numbered after main's 0005 to 0008. On merge, ADR 0009 is added to the Amendments section of CLAUDE.md.
+3. **Stricter origin check.** The lock requires the same annotated tag object on origin, not only the same commit. That is stricter than requested; the review found that a re-created tag would otherwise pass with an unpublished hash.
+4. **Failure behavior.** A bootstrap failure stops the walk-forward run with a message naming origin, horizon, slice and metric. The CLI exits with code 3.
+
+**Logged for later (Step 11):** a sensitivity check that estimates the censoring weights separately by sponsor class.
 
 ### Verify (PowerShell, on this branch)
 
@@ -317,11 +392,11 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv run pytest -q
-uv run pytest tests/eval tests/nlp -q
+uv run python -m trialpulse.nlp.gold --build
 uv run streamlit run src/trialpulse/nlp/labeling_app.py
 ```
 
-The app shows "No gold sample" until the dataset is available and `uv run python -m trialpulse.nlp.gold --build` has run.
+`gold --build` reads the cached pull under `data/nlp/api_pull/` (on a fresh clone it makes about 40 requests). The app shows "0 of 400 labeled".
 
 ## Overnight run (2026-09-23)
 
