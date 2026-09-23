@@ -9,7 +9,7 @@
 - Follow-up 1: CI runs on `ubuntu-24.04`, and runs on main are never cancelled (each gets its own concurrency group).
 - Follow-up 2: ADR 0004 defines the test lock (annotated `prereg-v1` tag on a completed registration).
 - Step 2 code for parts a to h, with 55 tests on synthetic fixtures. Parts g and f ran live; parts a to e are blocked; `docs/feasibility_report.md` is drafted with no decision stated. Details in the Step 2 section below.
-- Provisional work (your extension): the gate was not met, so only the Step 6 subset and Step 8 were built, on branch `provisional/steps-3-8` with a draft PR. See that branch's `docs/progress.md` for its own morning report.
+- Provisional work (your extension): the gate was not met, so only the Step 6 subset and Step 8 were built, as code and synthetic-data tests. **Correction, added after review on 2026-09-23: the branch `provisional/steps-3-8` and its draft PR were never created.** The session stopped right after the Step 2 push. The code is uncommitted in a scratch git worktree; see "Follow-ups after review" in the Step 2 section.
 
 ### Decisions made overnight (pending approval)
 
@@ -204,7 +204,28 @@ uv run python -m trialpulse.feasibility.spike --part all
 uv run pytest -q
 ```
 
+To recompute part f from the cache without any request (a cache miss fails the run instead of fetching):
+
+```powershell
+uv run python -m trialpulse.feasibility.spike --part f --offline
+```
+
 Then open `docs/feasibility_report.md`. Until dataset access is granted, parts a to e report "blocked". Part g repeats only the 7-page delta pull (the cohort pull comes from the cache), and part f comes entirely from the cache.
+
+### Follow-ups after review (2026-09-23)
+
+- **Secret check.** `.env.example` and `.env` are clean in git status. `.env` is ignored and untracked, and `.env.example` is identical to the Step 1 commit. A search of all 15 commits (every branch, origin, the worktree HEAD) and all commit messages for `hf_` followed by 30 or more characters found **no** match, so no commit was needed.
+- **Parts a to d rerun: still blocked.** Hugging Face still reports the access request as awaiting the authors' review, and the dataset viewer API refuses the schema for the same reason. `docs/feasibility_report.md` was regenerated.
+- **Part b, per-version columns:** the report now states each of phases, conditions, interventions, arm counts and locations explicitly. Today every one is "not verifiable yet". The dataset card indicates interventions and locations are planned as separate configs. Column matching is now by exact name, so the answer will be exact once part b runs (tested).
+- **Phase group stability (from the cache, 0 requests):** changed after version 0 in 5 of 150 trials, 3.3% (Wilson 95% interval 1.4% to 7.6%), so **not under 3%**. The moves were early to mid (twice), and late, early and post-approval to N/A (once each). Groups at version 0: N/A 76, mid 24, early 22, late 15, post-approval 13. The threshold is unchanged.
+- **Offline mode:** `--part f --offline` recomputes from the cache with a fetcher that fails on any request. The rerun reproduced every earlier number exactly, and the result keeps the original run's cost (1,123 requests, 56.1 minutes).
+- **Approved:** numpy as a direct dependency. It is used by the provisional Step 8 code, which is not on main yet.
+- Tests: 71 in `tests/feasibility/`, 88 in total.
+
+Decisions pending approval from these follow-ups:
+
+1. A version with no phase recorded maps to the N/A group (1 of 973 cached versions). Any phase combination outside your five groups maps to `other` (none occurred).
+2. Offline mode is a flag on part f only.
 
 ## Overnight run (2026-09-23)
 
