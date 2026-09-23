@@ -246,3 +246,4 @@ One line per finished item. On resume, continue after the last line.
 One line per finished item. On resume, continue after the last line.
 
 - [x] Item 0: Docker check recorded (Aakrisht's machine: container healthy on 127.0.0.1:15432); Step 1 marked fully verified.
+- [x] Item 1: docs/fallback_options.md written (AACT monthly archives from January 2017, other sources, internal-endpoint cost estimate, ranked recommendation), every claim linked to its source (commit f44abc2).
