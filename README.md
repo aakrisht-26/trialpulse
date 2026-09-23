@@ -28,3 +28,5 @@ Copy `.env.example` to `.env` and fill in only the values the current step needs
 Code is released under the MIT License (see [LICENSE](LICENSE)).
 
 The trial version history comes from the Hugging Face dataset [`brbk/clinical_trials_history`](https://huggingface.co/datasets/brbk/clinical_trials_history), licensed CC-BY-NC-4.0 (non-commercial use only). The dataset is not redistributed in this repository. Live updates come from the official [ClinicalTrials.gov API v2](https://clinicaltrials.gov/data-api/api).
+
+**Source: [ClinicalTrials.gov](https://clinicaltrials.gov)**, used under its [terms and conditions](https://clinicaltrials.gov/about-site/terms-conditions). TrialPulse modifies the data: it normalizes the registry records and adds derived early-stop risk scores and drivers, which are not part of ClinicalTrials.gov. No registry data or results are published yet. Once they are, each page that shows them states the date ClinicalTrials.gov processed the data ("data as of"), as ADR 0008 requires.

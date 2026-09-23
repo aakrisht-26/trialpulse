@@ -277,5 +277,19 @@ No code changed, the provisional branch and PR #1 were not touched, and the inte
 **Open questions:**
 
 1. AACT downloads now need a free account. Can you create one and confirm the archives back to 2017 are still downloadable after the redesign?
-2. ClinicalTrials.gov's terms page only renders in a browser, so the licence of the registry data was not verified.
+2. ClinicalTrials.gov's terms page only renders in a browser, so the licence of the registry data was not verified. **Answered by Aakrisht on 2026-09-23:** see the follow-up below.
 3. Should someone ask the author of `brbk/clinical_trials_history` about the pending access request? That would be a public post, so it is your call.
+
+### Follow-up: ClinicalTrials.gov terms (2026-09-23)
+
+Aakrisht read the [ClinicalTrials.gov terms and conditions](https://clinicaltrials.gov/about-site/terms-conditions). Anyone publishing or distributing the data should attribute the source as ClinicalTrials.gov, keep the data current, clearly display the date the data were processed by ClinicalTrials.gov, and state any modifications.
+
+New requirement (ADR 0008, accepted; listed in the CLAUDE.md Amendments section). The README, the data card (Step 12) and every dashboard page (Step 16) show:
+
+- the source attribution;
+- a "data as of" date (the date ClinicalTrials.gov processed the data);
+- a note that TrialPulse normalizes the records and adds derived risk scores.
+
+The README now states the attribution and the note. It will show a data-as-of date once data or results are published.
+
+- [x] Follow-up: terms recorded; ADR 0008 written; README, CLAUDE.md Amendments and this log updated.
