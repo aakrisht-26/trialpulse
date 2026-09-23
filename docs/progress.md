@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access). **Step 6** is in progress (Aakrisht labels the gold set next). **Step 8** is approved.
+Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access). **Step 6** is in progress (reference labels from an adjudicated model panel committed; LLM labeling waits for GROQ_API_KEY). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
-| 6 | Why trials stop (NLP) | In progress: gold sample and dev suggestions ready; Aakrisht's labeling next; LLM labeling waits for GROQ_API_KEY |
+| 6 | Why trials stop (NLP) | In progress: reference labels from an adjudicated model panel committed (ADR 0010); LLM labeling waits for GROQ_API_KEY |
 | 7 | Point-in-time features | Not started |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23 (the real M0 run waits for Step 4) |
 | 9 | Baselines and Cox analysis | Not started |
@@ -259,7 +259,7 @@ Built during the overnight run under the extension's gate. The gate was not met 
 
 ### Step 6 (partial): Why trials stop
 
-Status: **in progress**. The gold sample and the dev suggestions are ready; Aakrisht labels in the app next (test texts first, blind). LLM labeling and distillation wait for GROQ_API_KEY.
+Status: **in progress**. The gold set holds reference labels from an adjudicated model panel (ADR 0010), committed before any prompt work. LLM labeling and distillation wait for GROQ_API_KEY.
 
 **Built:**
 
@@ -290,10 +290,10 @@ Status: **in progress**. The gold sample and the dev suggestions are ready; Aakr
 
 | Criterion | Result |
 | --- | --- |
-| Gold-test results for the LLM and the distilled model | Not started: needs Aakrisht's gold labels and GROQ_API_KEY (not set) |
+| Gold-test results for the LLM and the distilled model | Not started: the reference labels are committed; needs GROQ_API_KEY (not set) |
 | LLM macro-F1 >= 0.80 on gold-test | Not started |
-| Gold-test never used for tuning | Enforced by design: the split is fixed before any prompt work, and no tuning code exists yet |
-| The 400-text sample loaded in the app | Met: built from API v2 on 2026-09-23; the app shows "0 of 400 labeled" |
+| Gold-test never used for tuning | Enforced: test labels committed before any prompt work, and a test fails if a test text appears in a prompt file |
+| The 400-text gold set labeled | Met: 400 reference labels from an adjudicated model panel (ADR 0010), `labels/gold_labels.csv` |
 
 **Decisions from the review (Aakrisht, 2026-09-23):**
 
@@ -359,6 +359,93 @@ The goal is to save labeling time without touching the test set's independence.
 2. The suggestions came from three independent labelers plus Claude's adjudication, not a single pass.
 3. A **Next unlabeled** button sits beside **Back**.
 4. The earlier decision that the app hides the split no longer holds in practice: the order and the suggestions reveal the split, by design of this plan.
+
+### Step 6 reference labels (ADR 0010, 2026-09-23)
+
+Aakrisht decided not to label the gold set by hand. It now holds **reference labels from an adjudicated model panel**, never described as human-labeled (ADR 0010). The full run record, with the exact prompts, is in `docs/reference_panel.md`.
+
+**Built:**
+
+- `docs/adr/0010-reference-labels-from-an-adjudicated-model-panel.md`, and its line in the CLAUDE.md Amendments section (nothing else in CLAUDE.md changed).
+- `docs/labeling_guide.md`: the careful-annotator rules in "How to label", and "How the reference labels are made". The label definitions and tie-break rules are unchanged. Committed in `b076f71` before the panel ran.
+- `src/trialpulse/nlp/panel.py`:
+  - prepares the panel inputs (opaque ids, text only);
+  - reads and checks the votes, adjudications and consistency relabels;
+  - resolves each text's label and panel outcome;
+  - writes `labels/gold_labels.csv` and the report;
+  - `check_graded_model` refuses a Claude model as the graded LLM.
+- `src/trialpulse/nlp/holdout.py` and `src/trialpulse/nlp/prompts/README.md`: the guard that keeps test texts out of the LLM prompt files.
+- `src/trialpulse/nlp/gold.py`: the labels file gains `method` and `panel_outcome`; `write_labels` is shared; `save_label` writes method `manual` and refuses to overwrite a panel label.
+- `src/trialpulse/nlp/labeling_app.py`: now an optional review tool for the dev texts only (it never shows a test text), writing to `data/nlp/review_labels.csv`.
+- `labels/gold_labels.csv`: 400 reference labels (ids, hashes and labels only, no text), `assisted` false, method `model-panel-v1`.
+- `docs/reference_panel.md`: the run record.
+- Tests: `tests/nlp/test_panel.py` (17, including an end-to-end run of every command) and `tests/nlp/test_holdout.py` (25, including the real check on the committed test hashes and 16 ways of embedding a text in a prompt), two new tests in `tests/nlp/test_gold.py` and one replaced (the test-first serving order became the dev-only review order), and `tests/nlp/test_labeling_app.py` rewritten for the dev-only review tool. The suite has 225 tests.
+
+**The protocol as run:**
+
+1. **Labeling.** 12 labeler agents (`claude-opus-5-5`) worked on 4 batches of 100 texts, 3 per batch, each labeler with its own seeded order. Each labeler returned a label, the deciding words and a one-line justification for every text.
+2. **Adjudication.** A fresh adjudicator agent that labeled nothing decided the 25 splits from the text, the guide and the three justifications, and recorded a rationale for each.
+3. **Consistency.** After that, a fresh labeler relabeled a seeded 10% (40 texts) under the labelers' conditions.
+4. **Isolation.** Every agent was shown only the guide and the text. An audit of all 14 transcripts found only two reads per agent (the guide and its own input file) and no other tool calls. Claude, orchestrating, never viewed a test text or test label: the workflows and collectors returned counts only.
+5. **Order.** The test labels are committed here, before any work on the LLM prompt. No prompt file exists yet.
+
+**Report:**
+
+| Split | Texts | Unanimous | Majority | Adjudicated |
+| --- | --- | --- | --- | --- |
+| All | 400 | 375 (93.8%) | 22 (5.5%) | 3 (0.8%) |
+| Dev | 100 | 96 | 4 | 0 |
+| Test | 300 | 279 | 18 | 3 |
+
+| Label | All | Dev | Test |
+| --- | --- | --- | --- |
+| accrual | 106 | 34 | 72 |
+| other | 86 | 20 | 66 |
+| administrative | 66 | 17 | 49 |
+| business | 42 | 10 | 32 |
+| funding | 33 | 6 | 27 |
+| efficacy | 31 | 9 | 22 |
+| covid19 | 24 | 2 | 22 |
+| safety | 12 | 2 | 10 |
+
+- **Consistency agreement:** 39 of 40 (97.5%), Cohen's kappa 0.969.
+- **Pairwise agreement** between labelers of the same text: 95.8% (1,150 of 1,200 pairs). All 25 splits were 2 to 1.
+- **Deciding words** were quoted verbatim, as whole words, in 1,200 of 1,200 answers.
+
+**Adjudicator decisions (examples).** The adjudicator decided the 25 split texts: 4 dev and 21 test. The 4 dev decisions are below. The requested 10 are in `data/nlp/panel/adjudicated_examples.md` (gitignored), written by `uv run python -m trialpulse.nlp.panel --report --examples 10`: these 4, the 3 test texts the adjudicator overturned, and a seeded 3 of the 18 test texts where it kept the majority. Claude did not open that file, so the later prompt work never sees a test text.
+
+1. p018, votes safety, safety, accrual; decision **safety** (majority). Text: "Due to unproven issues associated with hydroxychloroquine use and safety, further complicated by media and political misinformation which in effect rendered all global studies on HCQ to stop enrolling participants." Rationale: the stated cause is safety concerns about the study drug; "unproven" qualifies them but does not negate them. "Stop enrolling" is the halt the concerns caused, not a recruitment failure, and COVID-19 is never mentioned.
+2. p170, votes other, other, administrative; decision **other** (majority). Text: "The clinical trial number for this study was previously assigned. This was done in error." Rationale: this describes a registry numbering error, not a reason a trial stopped; no regulatory or paperwork problem stopped a study.
+3. p326, votes business, efficacy, efficacy; decision **efficacy** (majority). Text: an interim analysis showing the study "will not adequately inform the clinical development programme ... in the way that the study was intended", with "no concerns regarding participant safety". Rationale: an interim result showing the study cannot meet its objective is a futility-type finding (tie-break 4); safety is explicitly negated; tie-break 3 gives a data-driven named reason its own label instead of business.
+4. p365, votes business, business, other; decision **business** (majority). Text: "Due to changes to the standard of care within the proposed market for CS-7017." Rationale: a market and strategy reason for the product's development is business; the reason is stated and placeable even though "sponsor" does not appear.
+
+**Finding for the prompt work.** A count-only check found that 2 test texts appear word for word among the example phrases in `docs/labeling_guide.md` (generic phrases; the guide predates the sample). The LLM prompt therefore cannot copy every guide example verbatim; the guard names any leak by hash prefix only.
+
+**Decisions made in this step (pending approval):**
+
+1. **Panel outcome definitions.** Every split goes to the adjudicator, as the protocol says. `majority` means the adjudicator kept the two-labeler label; `adjudicated` means it chose a label no two labelers gave. Alternative: `majority` for every 2-to-1 split whatever the adjudicator decided, and `adjudicated` only for three-way splits.
+2. **Panel composition.** All labelers are independent agents of one model (`claude-opus-5-5`) in separate contexts, 100 texts per agent, with different seeded orders. Alternative: mix Claude models for more diverse errors, at some cost in label quality.
+3. **One adjudicator, at effort `xhigh`,** for all 25 splits. It saw the other split texts in its file, and one rationale refers to another split item.
+4. **Consistency sample.** A seeded 10% of all 400 texts (31 test, 9 dev; 5 were splits), compared with the final reference labels.
+5. **The labeling app is kept** as an optional review tool for the dev texts only, writing to `data/nlp/review_labels.csv`, and `save_label` refuses to overwrite a panel label. Alternative: delete the app, its tests and the dev suggestions.
+6. **Prompt guard.** Prompts live in `src/trialpulse/nlp/prompts/`, and every file there is checked, as written, with escapes decoded and without Markdown line prefixes. In CI, every run of words up to 250 characters (the why_stopped limit) is hashed against the 300 committed test hashes, also with characters fused to its first or last word cut away. Where the gitignored sample is present, the normalized test texts are also searched for directly. It catches verbatim copies, not paraphrases. The Step 6 labeler must also run it on the rendered prompt.
+7. **Model-family check.** `check_graded_model` refuses any model id containing "claude" or "anthropic".
+8. **The 10 examples** (above): 4 dev in this report; the 6 test examples only in a gitignored file that Claude did not open.
+
+**Internal review.** Three independent reviewers checked the code and docs before the commit, without access to `data/` or `labels/`. Their confirmed findings are fixed:
+
+- **The prompt guard missed common embeddings.** The CI hash check split on whitespace only. It missed a test text inside compact JSON, backticks, table pipes, links, arrows, `key="..."`, escaped strings (`\n` in JSON or Python) and wrapped blockquotes. It now checks decoded and Markdown-stripped variants and cuts fused characters, and a test covers all 16 cases with the hash check alone.
+- **The guard only saw files.** `prompt_leaks` now checks any rendered prompt. The prompts README and ADR 0010 require the Step 6 labeler to run it on the prompt it sends, and warn that the labeling guide holds 2 test texts among its example phrases.
+- **The review app opened test texts.** It served the 300 test texts first. It now shows dev texts only, and a test keeps a test item and its suggestion in the sample and checks that the app never shows them.
+- **The 10 examples were not reproducible.** A scratch script chose them. The selection is now `decision_examples` in `panel.py`, behind `--report --examples 10`, and it picks the same 10 ids.
+- **Consistency relabels were not validated.** `check_consistency` now requires exactly the seeded sample, one valid label per text, and a labeler that was not on that text's panel. The real relabels pass.
+- **The verbatim check matched parts of words.** It now matches whole words only. The real result is unchanged (1,200 of 1,200).
+- **Untested paths.** New tests cover every command end to end (including a panel with no splits), the report's kappa and shares, a non-zero verbatim share, stray adjudications, input-file determinism and old-schema rows in `write_labels`.
+- **Two wording fixes:** an interview note wrongly said the agents returned counts only, and the report used "adjudicated" for all 25 splits, clashing with the panel outcome of that name.
+
+The labels file is byte-identical after the fixes.
+
+**Recorded for later in Step 6:** the LLM labeler builds its prompt only from `src/trialpulse/nlp/prompts/` and dev items, calls `check_graded_model` on its model id, and a test runs `prompt_leaks` on the rendered prompt against the committed test hashes. The prompt must not paste the labeling guide whole.
 
 ### Step 8: Evaluation harness and test lock
 

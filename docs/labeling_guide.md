@@ -45,7 +45,7 @@ The gold set is not labeled by hand. It holds **reference labels from an adjudic
 2. A unanimous label stands. For a split, a fourth labeler that did not label the text reads the text, this guide and the three justifications, decides by this guide, and records a rationale.
 3. After that, a fresh labeler relabels a seeded random 10% of the texts, and the agreement with the reference labels is reported.
 
-The panel outcome of each text is `unanimous` (all three agreed), `majority` (two agreed and the adjudicator kept their label) or `adjudicated` (the adjudicator chose a label no two labelers gave). Any model graded against these labels must come from a different model family than the panel. The Streamlit labeling app (`uv run streamlit run src/trialpulse/nlp/labeling_app.py`) remains as an optional review tool. It writes to `data/nlp/review_labels.csv`, never to the reference labels.
+The panel outcome of each text is `unanimous` (all three agreed), `majority` (two agreed and the adjudicator kept their label) or `adjudicated` (the adjudicator chose a label no two labelers gave). Any model graded against these labels must come from a different model family than the panel. The Streamlit labeling app (`uv run streamlit run src/trialpulse/nlp/labeling_app.py`) remains as an optional review tool for the dev texts only; it never shows a test text. It writes to `data/nlp/review_labels.csv`, never to the reference labels.
 
 ## Where labels are stored
 
@@ -53,4 +53,4 @@ The gold texts are the `why_stopped` texts of the cohort's early stops, taken fr
 
 `labels/gold_labels.csv` holds `nct_id`, `text_sha256` (the SHA-256 of the normalized text), `split`, `label`, `source` (the API pull date), `labeled_at`, `assisted` (always `false`), `method` (`model-panel-v1`) and `panel_outcome`, and no text. Keying by the text hash keeps the labels valid if the history source changes later. The texts stay in `data/nlp/gold_sample.csv`, and the justifications, rationales and consistency relabels in `data/nlp/panel/`, all gitignored and never committed. The split (100 dev, 300 test, stratified by status) is fixed by the seed in `config/project.yaml`.
 
-The test labels are committed before any work on the LLM labeling prompt. Prompt work uses only the dev items, and test texts and labels are never opened for it. The prompt lives in `src/trialpulse/nlp/prompts/`, and a test checks that no test text appears in any file there. No gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).
+The test labels are committed before any work on the LLM labeling prompt. Prompt work uses only the dev items, and test texts and labels are never opened for it. The prompt lives in `src/trialpulse/nlp/prompts/`, and a test checks that no test text appears in any file there or in the prompt the labeler actually sends. No gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).

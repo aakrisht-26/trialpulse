@@ -36,7 +36,7 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 
 **Likely interview question.** "How do you know your LLM labels are good enough to train on?"
 
-**Short answer.** A human-labeled gold set, split before any prompt work: 100 texts for prompt development and 300 held out. The LLM and the distilled classifier are scored once on the held-out 300 with macro-F1 (with a bootstrap interval), Cohen's kappa and a confusion matrix, and the target (macro-F1 of at least 0.80) was declared in advance.
+**Short answer.** A gold set of reference labels from an adjudicated model panel, split before any prompt work: 100 texts for prompt development and 300 held out. The LLM and the distilled classifier are scored once on the held-out 300 with macro-F1 (with a bootstrap interval), Cohen's kappa and a confusion matrix, and the target (macro-F1 of at least 0.80) was declared in advance.
 
 ## Step 8 (provisional): Evaluation harness and test lock
 
@@ -49,3 +49,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "Most of your trials have not finished yet. How is your AUC not biased?"
 
 **Short answer.** Rows censored before the horizon get weight zero, and every row whose outcome is known is weighted by the inverse probability of remaining uncensored until its event time or the horizon. That makes the known outcomes stand in for the unknown ones. Without censoring every weight is 1 and the metric reduces to the ordinary AUC, which a test checks.
+
+## Step 6 (continued): Reference labels from an adjudicated model panel (ADR 0010)
+
+**What was built.** The 400-text gold set now holds reference labels from an adjudicated model panel instead of hand labels. Three independent labeler agents label each text, seeing only the labeling guide and the text under an opaque id, and each quotes the deciding words and gives a one-line justification. A fourth agent that labeled nothing decides every split from the text, the guide and the three justifications. A fresh labeler then relabels a seeded 10% as a consistency check. The code prepares the inputs, validates the outputs, resolves labels and panel outcomes, and writes the labels file with a method and a panel-outcome column. A guard test fails if any test text appears in the LLM prompt files. Results: 93.8% unanimous, 5.5% kept by the adjudicator, 0.8% overturned, and 39 of 40 consistency relabels agreeing (kappa 0.969).
+
+**Key decision and why.** The test labels were finished and committed before any prompt work, and the orchestrating session never saw a test text: the agents read the files themselves, and the workflows and collection scripts passed only counts back to it. That keeps the held-out 300 genuinely held out, which is the whole point of a test split. The model graded against these labels must come from a different model family, because a model from the panel's family would share its habits and inflate agreement.
+
+**Rejected alternative and why not.** Majority vote with no adjudicator. Two labelers from the same model can make the same mistake, so the adjudicator judges the justifications against the guide and may overturn a 2-to-1 vote; it did so 3 times.
+
+**Likely interview question.** "Your gold labels came from a model. How do you know your LLM results mean anything?"
+
+**Short answer.** I describe them honestly as reference labels from an adjudicated model panel, not human labels, so the metric measures agreement with a documented, auditable process. The panel ran under strict isolation (audited from the agent transcripts), every label has quoted evidence, splits were adjudicated rather than voted, and a consistency relabel measured stability. The graded model comes from a different family, so it cannot score well just by sharing the panel's biases, and the test split was frozen and committed before any prompt work.
