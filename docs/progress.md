@@ -82,7 +82,7 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
-| 6 | Why trials stop (NLP) | In progress: gold sample built; Aakrisht's labeling next; LLM labeling waits for GROQ_API_KEY |
+| 6 | Why trials stop (NLP) | In progress: gold sample and dev suggestions ready; Aakrisht's labeling next; LLM labeling waits for GROQ_API_KEY |
 | 7 | Point-in-time features | Not started |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23 (the real M0 run waits for Step 4) |
 | 9 | Baselines and Cox analysis | Not started |
@@ -259,7 +259,7 @@ Built during the overnight run under the extension's gate. The gate was not met 
 
 ### Step 6 (partial): Why trials stop
 
-Status: **in progress**. The gold sample is built; Aakrisht labels it next in the app. LLM labeling and distillation wait for GROQ_API_KEY.
+Status: **in progress**. The gold sample and the dev suggestions are ready; Aakrisht labels in the app next (test texts first, blind). LLM labeling and distillation wait for GROQ_API_KEY.
 
 **Built:**
 
@@ -310,7 +310,7 @@ Status: **in progress**. The gold sample is built; Aakrisht labels it next in th
 3. **Repeated texts.** The trial with the lowest NCT ID represents the text, and the app shows that trial's own wording.
 4. **Normalization details.** Only whitespace and Unicode punctuation (category P) are trimmed at the ends. Symbols such as "<" or "+" stay.
 
-**Still pending approval** (not among the seven decisions approved on 2026-09-23):
+**Also approved** (the three remaining decisions, approved later on 2026-09-23):
 
 5. **Source value.** It reads "ctgov-api-v2 pulled YYYY-MM-DD". The pull date and data timestamp are saved in `pull.json` when the pull starts.
 6. **Dev share per status** uses proportional allocation, as above.
@@ -318,6 +318,45 @@ Status: **in progress**. The gold sample is built; Aakrisht labels it next in th
 **Decision (Aakrisht, 2026-09-23): keep the 14 texts with a stop year before 2008** (1996 to 2007). They are trials registered after they had already ended, and their reasons are valid labeling material. Step 4's at-risk rule keeps such trials out of the landmarks, since they are never open after registration.
 
 **Recorded for later in Step 6:** every normalized gold text, matched by `text_sha256`, must be excluded from the LLM-labeled training sample, and a test must enforce it.
+
+### Step 6 labeling plan (changed by Aakrisht on 2026-09-23)
+
+The goal is to save labeling time without touching the test set's independence.
+
+- **Order:** the app serves all 300 test texts first, then the 100 dev texts.
+- **Blind test texts:** no suggestion is ever shown for a test item. Three things enforce it:
+  - suggestions load for dev items only;
+  - `save_label` refuses `assisted` for any item that is not dev;
+  - an app test uses a suggestion file that also holds test-item rows and checks that nothing is shown for them.
+- **Dev suggestions:** Claude suggested labels for the 100 dev texts only, saved in `data/nlp/dev_suggestions.csv` (gitignored). The app shows a suggestion on dev items, and Aakrisht confirms or changes it. `labels/gold_labels.csv` gains an `assisted` column.
+- **One click per text:** clicking a label saves it and moves on. **Back** revises an earlier text, and **Next unlabeled** returns to where labeling stopped.
+
+**How the suggestions were made:**
+
+1. Three independent labelers followed `docs/labeling_guide.md` and worked from a scratch file holding the 100 dev texts only; no test text was shown to them.
+2. 95 of the 100 texts were unanimous, 5 were decided 2 to 1, and none had three different labels. Pairwise agreement was 96 to 97 of 100.
+3. Claude read all 100 and adjudicated the 5 split cases:
+   - #43 "Change of Trial Sponsor": administrative, keeping the majority;
+   - "no patients included": other, keeping the majority and matching the unanimous "Study never recruited";
+   - "The study did not enroll participants...": accrual, keeping the majority;
+   - an interim analysis that "will not adequately inform the clinical development programme": efficacy, keeping the majority (borderline);
+   - "postponed pending the completion of other ongoing pre-clinical and clinical work": **business**, overriding the majority's other, because deferring a trial behind other development work is a strategic program decision.
+4. The suggestions are: accrual 32, other 20, administrative 18, business 11, efficacy 9, funding 6, covid19 2, safety 2.
+
+**Verified on the real files, without labeling anything:**
+
+- positions 1 to 300 are test texts and 301 to 400 are dev texts;
+- no test item has a suggestion;
+- the app serves a test item first, with no suggestion shown;
+- a dev item shows its suggestion, matching the file;
+- no labels file was written.
+
+**Decisions pending approval (labeling plan):**
+
+1. `assisted` is `true` when a suggestion was shown for the item at the time its label was saved. Revising a dev item keeps it `true`, and test labels are always `false`.
+2. The suggestions came from three independent labelers plus Claude's adjudication, not a single pass.
+3. A **Next unlabeled** button sits beside **Back**.
+4. The earlier decision that the app hides the split no longer holds in practice: the order and the suggestions reveal the split, by design of this plan.
 
 ### Step 8: Evaluation harness and test lock
 
@@ -388,7 +427,7 @@ Also from the review: ADR 0009 (the tag must be on origin), and the 1% bootstrap
 2. **ADR number.** ADR 0009 is numbered after main's 0005 to 0008. On merge, ADR 0009 is added to the Amendments section of CLAUDE.md.
 3. **Stricter origin check.** The lock requires the same annotated tag object on origin, not only the same commit. That is stricter than requested; the review found that a re-created tag would otherwise pass with an unpublished hash.
 
-**Still pending approval** (not among the seven decisions approved on 2026-09-23):
+**Also approved** (the three remaining decisions, approved later on 2026-09-23):
 
 4. **Failure behavior.** A bootstrap failure stops the walk-forward run with a message naming origin, horizon, slice and metric. The CLI exits with code 3.
 

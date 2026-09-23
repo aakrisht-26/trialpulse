@@ -34,8 +34,18 @@ Research demo. Not medical advice. Not for patient decision-making.
 6. **Funding versus business:** a company choosing not to spend money is `business`; an external funder (grant, agency) not paying is `funding`.
 7. **Regulatory:** a regulator's request for more information or paperwork problems is `administrative`; a regulator stopping the trial for harm is `safety`.
 
+## How the labeling app works
+
+Start it with `uv run streamlit run src/trialpulse/nlp/labeling_app.py`.
+
+- **Order:** all 300 test texts come first, then the 100 dev texts.
+- **Test texts are blind.** No suggestion is ever shown for a test text: suggestions are loaded for dev items only, and a test checks that a suggestion file containing test items still shows nothing for them.
+- **Dev texts show a suggestion,** read from `data/nlp/dev_suggestions.csv` (gitignored). Claude produced the suggestions from the dev texts only, following this guide. Confirm the suggestion by clicking the same label, or change it by clicking another.
+- **One click per text:** clicking a label saves it and moves to the next unlabeled text. **Back** steps to the previous text to revise it, and **Next unlabeled** returns to where labeling stopped.
+- Each saved label records whether it was **assisted**, meaning a suggestion was shown when it was given. Test labels are never assisted.
+
 ## Where labels are stored
 
 The gold texts are the `why_stopped` texts of the cohort's early stops, taken from their current ClinicalTrials.gov records (API v2), so labeling does not wait for the version-history dataset. Each text is normalized (lowercase, whitespace collapsed, surrounding punctuation trimmed) and appears only once, so it can be in only one split.
 
-The app writes `labels/gold_labels.csv` with `nct_id`, `text_sha256` (the SHA-256 of the normalized text), `split`, `label`, `source` (the API pull date) and `labeled_at` only. Keying by the text hash keeps the labels valid if the history source changes later. The texts stay in `data/nlp/gold_sample.csv`, which is gitignored and never committed. The split (100 dev, 300 test, stratified by status) is fixed by the seed in `config/project.yaml`. The test split is never used for prompt or model tuning, and no gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).
+The app writes `labels/gold_labels.csv` with `nct_id`, `text_sha256` (the SHA-256 of the normalized text), `split`, `label`, `source` (the API pull date), `labeled_at` and `assisted` (`true` or `false`) only. Keying by the text hash keeps the labels valid if the history source changes later. The texts stay in `data/nlp/gold_sample.csv`, which is gitignored and never committed. The split (100 dev, 300 test, stratified by status) is fixed by the seed in `config/project.yaml`. The test split is never used for prompt or model tuning, and no gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).
