@@ -77,7 +77,7 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 
 | Step | Title | Status |
 | --- | --- | --- |
-| 1 | Repo skeleton, tooling, CI | Approved 2026-09-23 |
+| 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
 | 2 | Feasibility spike (go/no-go) | Draft done, awaiting review (parts a to e blocked) |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
@@ -98,7 +98,7 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 
 ## Step 1: Repo skeleton, tooling, CI
 
-Date: 2026-09-23. Status: approved by Aakrisht on 2026-09-23 (Docker Postgres check pending on his machine).
+Date: 2026-09-23. Status: **approved and fully verified** by Aakrisht on 2026-09-23 (Docker Postgres check passed on his machine).
 
 ### What was built
 
@@ -122,7 +122,7 @@ Evidence below is from Claude's shell on 2026-09-23. It is not a claim about Aak
 | Format clean | `ruff format --check .`: 11 files already formatted (ruff 0.16 also checks Markdown) |
 | Types clean | `mypy src` (strict): no issues in 2 source files |
 | Tests clean, smoke test loads the config | `pytest -q`: 17 passed; `config.py` at 100% line and branch coverage |
-| Postgres container healthy | **Not verified by Claude.** Docker is not installed or not on PATH in Claude's shell. |
+| Postgres container healthy | Met on Aakrisht's machine, 2026-09-23: `docker compose up --wait` reported the container Healthy, and `docker compose ps` showed postgres (healthy) on `127.0.0.1:15432->5432/tcp` (after the port move in ADR 0005). |
 | pre-commit passes on all files | `pre-commit run --all-files`: all 6 hooks passed, no files modified |
 | Public GitHub repo exists and CI is green | https://github.com/aakrisht-26/trialpulse created; CI run 35792432458 on `b7c2a96` passed (lint, format, types, 17 tests, CPython 3.12.3 on ubuntu-latest) |
 
@@ -149,7 +149,7 @@ Made by Claude, flagged for review:
 ### Blocked, skipped or deferred
 
 - The Postgres health check (`docker compose up -d`, `docker compose ps`) could not be run by Claude. Aakrisht runs it.
-- 2026-09-23: `docker compose up -d` failed on Aakrisht's machine. A native PostgreSQL 18 service (`postgresql-x64-18`) holds port 5432; 5432 is not in any Windows excluded port range. The container now publishes host port 15432, and the local URL uses it (ADR 0005). The health check is still pending.
+- 2026-09-23: `docker compose up -d` failed on Aakrisht's machine. A native PostgreSQL 18 service (`postgresql-x64-18`) holds port 5432; 5432 is not in any Windows excluded port range. The container now publishes host port 15432, and the local URL uses it (ADR 0005). Resolved: the health check passed on Aakrisht's machine the same day.
 - The dataset revision and cutoff are deferred to Step 2, by design.
 - Note for Step 8: `docs/preregistration.md` exists in git history from Step 1 as a header stub. The test lock must require a substantive registration (for example, the status line changed and hypotheses present), not just any committed version of the file. (Resolved by ADR 0004 on 2026-09-23.)
 - CI annotation: GitHub will move `ubuntu-latest` to Ubuntu 26 starting 2026-10-19. The workflow still uses `ubuntu-latest`. Pinning `ubuntu-24.04` is an option for review; nothing was changed. (Resolved: pinned to ubuntu-24.04 on 2026-09-23.)
@@ -240,3 +240,9 @@ One line per finished item. On resume, continue after the last line.
 - [x] Part f done: 150 trials, all 973 versions, 1,123 requests in 56.1 min at 20 per minute or less; no audited list field is under 3% (phases 4.0%, conditions 8.0%, interventions 13.3%, arm count 6.7%, location count 21.3%).
 - [x] Part h done: docs/feasibility_report.md drafted, decision not stated (commit: feat(step2): write the draft feasibility report).
 - [x] Step 2 report, interview notes and morning report written (commit: docs(step2): report the feasibility spike).
+
+## Break run (2026-09-23, docs only)
+
+One line per finished item. On resume, continue after the last line.
+
+- [x] Item 0: Docker check recorded (Aakrisht's machine: container healthy on 127.0.0.1:15432); Step 1 marked fully verified.
