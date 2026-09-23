@@ -2,6 +2,9 @@
 #
 # The credentials below are for this local container only and are not secrets:
 # the port is bound to 127.0.0.1, so nothing outside this machine can connect.
+#
+# Host port 15432, not 5432, so the container never collides with a native PostgreSQL
+# install on the host (ADR 0005). Inside the container Postgres still listens on 5432.
 name: trialpulse
 
 services:
@@ -12,7 +15,7 @@ services:
       POSTGRES_PASSWORD: trialpulse
       POSTGRES_DB: trialpulse
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
