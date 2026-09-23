@@ -201,9 +201,9 @@ def run_stability_audit(
         "elapsed_minutes_this_run": round((time.monotonic() - start) / 60, 1),
         "module_labels_seen": dict(labels.most_common()),
         "not_audited": {
-            "condition_browse_branches": (
-                "version snapshots carry no derivedSection, so MeSH browse branches have "
-                "no history to audit"
+            "condition_mesh_fields": (
+                "version snapshots carry no derivedSection, so MeSH terms, ancestors and "
+                "browse branches have no history to audit"
             )
         },
     }

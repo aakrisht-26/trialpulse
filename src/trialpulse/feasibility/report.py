@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from trialpulse.config import ProjectConfig
+from trialpulse.feasibility.checks import wilson_interval
 
 Result = Mapping[str, Any] | None
 
@@ -203,15 +204,22 @@ def _part_f(r: Mapping[str, Any]) -> list[str]:
         f"{_num(r['versions_in_change_logs'])} versions in the change logs; "
         f"{_num(r['requests_this_run'])} requests in the last run at 20 per minute or less.",
         "",
-        "| Field | Changed after version 0 | Share of sampled | Share among multi-version "
-        "| Under 3%? |",
-        "| --- | --- | --- | --- | --- |",
+        "| Field | Changed after version 0 | Share of sampled | 95% interval (Wilson) "
+        "| Share among multi-version | Under 3%? |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for name, v in r["fields"].items():
+        ci = wilson_interval(v["changed"], v["trials"])
+        shown_ci = f"{_pct(ci[0])} to {_pct(ci[1])}" if ci else "n/a"
         lines.append(
-            f"| {name} | {v['changed']} of {v['trials']} | {_pct(v['share'])} | "
+            f"| {name} | {v['changed']} of {v['trials']} | {_pct(v['share'])} | {shown_ci} | "
             f"{_pct(v['share_among_multi_version'])} | {'Yes' if v['under_threshold'] else 'No'} |"
         )
+    lines += [
+        "",
+        "The rule compares the measured share with 3%. The interval shows the sampling "
+        "uncertainty of a 150-trial sample and does not change the rule.",
+    ]
     for name, why in r.get("not_audited", {}).items():
         lines.append(f"\nNot audited: `{name}`: {why}.")
     return lines
@@ -281,7 +289,8 @@ def _stable_fields(results: Mapping[str, Result]) -> list[str]:
     return [
         f"- Pass (changed in under 3% of sampled trials): {', '.join(passing) or 'none'}.",
         f"- Fail: {', '.join(failing) or 'none'}.",
-        "- Not audited: MeSH browse branches (no version history exists for them).",
+        "- Not audited: MeSH terms, MeSH ancestors and browse branches. NLM derives them from "
+        "the current conditions, and version snapshots carry no derivedSection.",
     ]
 
 
@@ -298,7 +307,7 @@ def render_report(
         "is recorded after Aakrisht reviews it and the blocked parts have run.",
         "",
         f"Dataset: `{cfg.dataset.repo_id}`, config `{cfg.dataset.config_name}`, pinned "
-        f"revision `{cfg.dataset.revision}`.",
+        f"revision `{cfg.dataset.revision or 'not pinned yet'}`.",
         "",
         "## Criteria",
         "",

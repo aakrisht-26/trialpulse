@@ -12,6 +12,7 @@ from trialpulse.feasibility.checks import (
     seeded_sample,
     stability_summary,
     summarize_comparisons,
+    wilson_interval,
 )
 
 CUTOFF = dt.date(2026, 5, 15)
@@ -117,6 +118,14 @@ def test_summary_shares() -> None:
     assert summary["overall"] == {"agree": 11, "total": 12, "share": pytest.approx(11 / 12)}
     assert summary["trials_fully_agreeing"] == 1
     assert summary["mismatches"] == [{"nct_id": "B", "fields": ["lead_sponsor_class"]}]
+
+
+def test_wilson_interval_known_values() -> None:
+    # 0 of 10: the upper bound is z^2 / (n + z^2).
+    assert wilson_interval(0, 10) == pytest.approx((0.0, 1.96**2 / (10 + 1.96**2)))
+    low, high = wilson_interval(6, 150)  # type: ignore[misc]
+    assert (low, high) == pytest.approx((0.01846, 0.08452), abs=1e-4)
+    assert wilson_interval(0, 0) is None
 
 
 def test_a_reverted_change_still_counts() -> None:

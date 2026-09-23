@@ -2,6 +2,7 @@
 and the list-field stability measure (part f)."""
 
 import datetime as dt
+import math
 import random
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -144,6 +145,17 @@ def field_changed_after_first(snapshots: Sequence[Mapping[str, Any]], name: str)
         return False
     first = snapshots[0][name]
     return any(s[name] != first for s in snapshots[1:])
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    """Wilson score interval for a proportion k / n (95% for z = 1.96)."""
+    if n == 0:
+        return None
+    p = k / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return (max(0.0, center - half), min(1.0, center + half))
 
 
 def stability_summary(
