@@ -1,4 +1,4 @@
-"""The test lock (CLAUDE.md Section 10, ADR 0004).
+"""The test lock (CLAUDE.md Section 10, ADR 0004, ADR 0009).
 
 Locked origins (roles "test" and "stress") are evaluated only when every condition holds:
 
@@ -6,10 +6,12 @@ Locked origins (roles "test" and "stress") are evaluated only when every conditi
 2. an annotated git tag prereg-v1 exists (lightweight tags are refused);
 3. in the tagged commit, docs/preregistration.md has a "Registered: YYYY-MM-DD" line and
    no placeholder text;
-4. the tagged commit is an ancestor of HEAD.
+4. the tagged commit is an ancestor of HEAD;
+5. the tag also exists on the remote (origin) and points at the same commit, so the
+   registration was public before any test result existed (ADR 0009).
 
 The tag object hash and the tagged commit hash are returned so the caller records them
-with the results. This module only reads git state; it never creates tags.
+with the results. This module only reads git state; it never creates or pushes tags.
 """
 
 import datetime as dt
@@ -19,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 TAG = "prereg-v1"
+REMOTE = "origin"
 PREREG_PATH = "docs/preregistration.md"
 LOCKED_ROLES = frozenset({"test", "stress"})
 
@@ -50,6 +53,7 @@ class Unlock:
     tag_object: str
     commit: str
     registered: dt.date
+    remote: str
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -76,7 +80,20 @@ def registered_date(text: str) -> dt.date:
         raise TestLockError(f"'Registered:' value {match.group(1)!r} is not a valid date") from exc
 
 
-def check_unlock(repo: Path, unlock_flag: bool) -> Unlock:
+def remote_tag_commit(repo: Path, remote: str = REMOTE) -> str | None:
+    """The commit the remote's prereg-v1 tag points at, or None if the remote lacks it.
+    Annotated tags are peeled (the "^{}" line of ls-remote)."""
+    listing = _git(repo, "ls-remote", "--tags", remote)
+    if listing.returncode != 0:
+        raise TestLockError(f"cannot list the tags on {remote}: {listing.stderr.strip()}")
+    refs: dict[str, str] = {}
+    for line in listing.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        refs[ref.strip()] = sha.strip()
+    return refs.get(f"refs/tags/{TAG}^{{}}") or refs.get(f"refs/tags/{TAG}")
+
+
+def check_unlock(repo: Path, unlock_flag: bool, remote: str = REMOTE) -> Unlock:
     """Return the unlock record, or raise TestLockError naming the failed condition."""
     if not unlock_flag:
         raise TestLockError("locked origins need the --unlock-test flag")
@@ -99,8 +116,18 @@ def check_unlock(repo: Path, unlock_flag: bool) -> Unlock:
     ancestor = _git(repo, "merge-base", "--is-ancestor", commit, "HEAD")
     if ancestor.returncode != 0:
         raise TestLockError(f"the commit tagged {TAG} is not an ancestor of HEAD")
+    published = remote_tag_commit(repo, remote)
+    if published is None:
+        raise TestLockError(f"git tag {TAG} is not on {remote}; push it before unlocking")
+    if published != commit:
+        raise TestLockError(
+            f"git tag {TAG} on {remote} points at {published[:12]}, "
+            f"not at the local tagged commit {commit[:12]}"
+        )
     tag_object = _git(repo, "rev-parse", TAG).stdout.strip()
-    return Unlock(tag=TAG, tag_object=tag_object, commit=commit, registered=registered)
+    return Unlock(
+        tag=TAG, tag_object=tag_object, commit=commit, registered=registered, remote=remote
+    )
 
 
 def require_unlock(roles: set[str], repo: Path, unlock_flag: bool) -> Unlock | None:
