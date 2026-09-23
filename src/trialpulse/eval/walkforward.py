@@ -11,10 +11,11 @@ intervals that resample trials.
 Locked origins (2018, 2019 and the 2020 stress test) need the test lock (ADR 0004). The
 lock is checked before any data is loaded or any model is fitted.
 
-Input contract (written by the Step 4 cohort build): one row per (trial, landmark) with
-trial_id, landmark_index, landmark_date, event (0 censored, 1 early stop, 2 completion),
-event_date (the date of that event or of censoring at the data cutoff), plus any feature
-columns the model needs (M0 uses "stratum").
+Input contract (written by the Step 4 cohort build; approved 2026-09-23): one row per
+(trial, landmark) with trial_id, landmark_index, landmark_date, event (0 censored, 1 early
+stop, 2 completion) and event_date, plus any feature columns the model needs (M0 uses
+"stratum"). event_date holds the date of the event when event is 1 or 2, and the censoring
+date when event is 0 (the data cutoff, or the UNKNOWN censoring date of Section 6).
 """
 
 import argparse
