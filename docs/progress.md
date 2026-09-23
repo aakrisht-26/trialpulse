@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access).
+Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access). **Step 6** is in progress (Aakrisht labels the gold set next). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -82,9 +82,9 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
-| 6 | Why trials stop (NLP) | Partial, provisional (this branch, under review) |
+| 6 | Why trials stop (NLP) | In progress: gold sample built; Aakrisht's labeling next; LLM labeling waits for GROQ_API_KEY |
 | 7 | Point-in-time features | Not started |
-| 8 | Evaluation harness and test lock | Provisional (this branch, under review) |
+| 8 | Evaluation harness and test lock | Approved 2026-09-23 (the real M0 run waits for Step 4) |
 | 9 | Baselines and Cox analysis | Not started |
 | 10 | Discrete-time models and tuning | Not started |
 | 11 | Pre-registration, locked test and results | Not started |
@@ -228,9 +228,9 @@ Decisions from these follow-ups, approved by Aakrisht on 2026-09-23:
 1. A version with no phase recorded maps to the N/A group (1 of 973 cached versions). Any phase combination outside the five groups maps to `other` (none occurred).
 2. Offline mode is a flag on part f only.
 
-## Provisional work on branch `provisional/step6-step8` (under review)
+## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
-Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to this branch on 2026-09-23 from main at `bd87054` and reviewed once (PR #1). Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
+Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to branch `provisional/step6-step8` on 2026-09-23 from main at `bd87054`, reviewed in PR #1, approved by Aakrisht, and merged into main the same day (merge commit `0d2248c`). The branch was then deleted. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
 
 ### Review of PR #1 (2026-09-23)
 
@@ -258,6 +258,8 @@ Built during the overnight run under the extension's gate. The gate was not met 
 - this report is updated.
 
 ### Step 6 (partial): Why trials stop
+
+Status: **in progress**. The gold sample is built; Aakrisht labels it next in the app. LLM labeling and distillation wait for GROQ_API_KEY.
 
 **Built:**
 
@@ -301,20 +303,25 @@ Built during the overnight run under the extension's gate. The gate was not met 
 4. **Stop-year rule:** the year of the actual completion date when present, otherwise the year of the last update post date. The dev/test split is also stratified by status. This replaces the overnight decision on strata and the split.
 5. Approved: file locations; `efficacy` covers early proof of benefit; the app hides the split.
 
-**Decisions pending approval (Step 6):**
+**Decisions approved (Aakrisht, 2026-09-23, PR #1 review):**
 
 1. **A fresh pull instead of the part g cache.** The part g cache has the why_stopped texts but no completion date or completion type, which the stop-year rule needs. So the approved fresh pull was used: the cohort's early stops only, 40 requests at 40 per minute. Compared with part g, it has the same 38,482 trials, with 0 status differences and 0 why_stopped differences.
 2. **Location of the API client.** It is in `src/trialpulse/ingest/ctgov_api.py`, the Step 14 location, because production code may not import the feasibility spike (a test enforces this). It repeats a little of the spike's code by design.
 3. **Repeated texts.** The trial with the lowest NCT ID represents the text, and the app shows that trial's own wording.
 4. **Normalization details.** Only whitespace and Unicode punctuation (category P) are trimmed at the ends. Symbols such as "<" or "+" stay.
+
+**Still pending approval** (not among the seven decisions approved on 2026-09-23):
+
 5. **Source value.** It reads "ctgov-api-v2 pulled YYYY-MM-DD". The pull date and data timestamp are saved in `pull.json` when the pull starts.
 6. **Dev share per status** uses proportional allocation, as above.
 
-**Open question:** under the stop-year rule, 14 of the 400 sampled texts have a stop year before 2008 (1996 to 2007). These are trials first posted in 2008 or later but completed earlier. Keep them as they are, or treat them differently?
+**Decision (Aakrisht, 2026-09-23): keep the 14 texts with a stop year before 2008** (1996 to 2007). They are trials registered after they had already ended, and their reasons are valid labeling material. Step 4's at-risk rule keeps such trials out of the landmarks, since they are never open after registration.
 
 **Recorded for later in Step 6:** every normalized gold text, matched by `text_sha256`, must be excluded from the LLM-labeled training sample, and a test must enforce it.
 
 ### Step 8: Evaluation harness and test lock
+
+Status: **approved** by Aakrisht on 2026-09-23. The real M0 run on development origins waits for the Step 4 landmark table.
 
 **Built:**
 
@@ -375,19 +382,21 @@ No `prereg-v1` tag was created in this repository, nothing was pushed to a tag, 
 
 Also from the review: ADR 0009 (the tag must be on origin), and the 1% bootstrap rule.
 
-**Decisions pending approval (Step 8):**
+**Decisions approved (Aakrisht, 2026-09-23, PR #1 review):**
 
 1. **Dependency group.** lifelines and scikit-learn are in the dev group, since only tests use them so far; the first model step that needs them moves them to runtime dependencies. lifelines requires pandas below 3, so pandas moved from 3.0.6 to 2.3.3. The Streamlit tests pass.
 2. **ADR number.** ADR 0009 is numbered after main's 0005 to 0008. On merge, ADR 0009 is added to the Amendments section of CLAUDE.md.
 3. **Stricter origin check.** The lock requires the same annotated tag object on origin, not only the same commit. That is stricter than requested; the review found that a re-created tag would otherwise pass with an unpublished hash.
+
+**Still pending approval** (not among the seven decisions approved on 2026-09-23):
+
 4. **Failure behavior.** A bootstrap failure stops the walk-forward run with a message naming origin, horizon, slice and metric. The CLI exits with code 3.
 
 **Logged for later (Step 11):** a sensitivity check that estimates the censoring weights separately by sponsor class.
 
-### Verify (PowerShell, on this branch)
+### Verify (PowerShell, on main)
 
 ```powershell
-git switch provisional/step6-step8
 uv sync
 uv run ruff check .
 uv run ruff format --check .
