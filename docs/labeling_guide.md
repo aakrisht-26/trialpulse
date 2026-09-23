@@ -1,14 +1,17 @@
 # Labeling guide: why trials stop
 
-This guide defines the eight labels used for the `why_stopped` text of early stops (TERMINATED or WITHDRAWN). It is the reference for the gold set that Aakrisht labels in the Streamlit app, and for the LLM prompt in Step 6. The label set and the operational and scientific groups are fixed in CLAUDE.md Section 11 and `config/project.yaml`.
+This guide defines the eight labels used for the `why_stopped` text of early stops (TERMINATED or WITHDRAWN). It is the standard for the gold set, which holds reference labels from an adjudicated model panel (ADR 0010), and for the LLM prompt in Step 6. The label set and the operational and scientific groups are fixed in CLAUDE.md Section 11 and `config/project.yaml`.
 
 Research demo. Not medical advice. Not for patient decision-making.
 
 ## How to label
 
-- Read only the `why_stopped` text. Do not look up the trial or infer a reason from its other fields.
-- Pick exactly one label: the **decisive** reason, meaning the one the text presents as causing the stop.
+- Read the whole `why_stopped` text, and nothing else: do not look up the trial or use its other fields.
+- Label only what the text states. Never infer a reason the text does not give.
+- Pick exactly one label: the **decisive** reason, meaning the one the text presents as causing the stop. The tie-break rules below settle texts with several reasons.
 - If the text gives no reason, or the reason is too vague to place, use `other`.
+- Watch negations: "no safety issues" is not `safety`.
+- Write a one-line justification that names the deciding words, quoted from the text.
 - The examples below are paraphrased patterns written for this guide, not quotations from the registry.
 
 ## Labels
@@ -34,18 +37,20 @@ Research demo. Not medical advice. Not for patient decision-making.
 6. **Funding versus business:** a company choosing not to spend money is `business`; an external funder (grant, agency) not paying is `funding`.
 7. **Regulatory:** a regulator's request for more information or paperwork problems is `administrative`; a regulator stopping the trial for harm is `safety`.
 
-## How the labeling app works
+## How the reference labels are made
 
-Start it with `uv run streamlit run src/trialpulse/nlp/labeling_app.py`.
+The gold set is not labeled by hand. It holds **reference labels from an adjudicated model panel** (ADR 0010):
 
-- **Order:** all 300 test texts come first, then the 100 dev texts.
-- **Test texts are blind.** No suggestion is ever shown for a test text: suggestions are loaded for dev items only, and a test checks that a suggestion file containing test items still shows nothing for them.
-- **Dev texts show a suggestion,** read from `data/nlp/dev_suggestions.csv` (gitignored). Claude produced the suggestions from the dev texts only, following this guide. Confirm the suggestion by clicking the same label, or change it by clicking another.
-- **One click per text:** clicking a label saves it and moves to the next unlabeled text. **Back** steps to the previous text to revise it, and **Next unlabeled** returns to where labeling stopped.
-- Each saved label records whether it was **assisted**, meaning a suggestion was shown when it was given. Test labels are never assisted.
+1. Three independent labelers label each text. Each sees only this guide and the text, under an opaque id, and follows "How to label" above.
+2. A unanimous label stands. For a split, a fourth labeler that did not label the text reads the text, this guide and the three justifications, decides by this guide, and records a rationale.
+3. After that, a fresh labeler relabels a seeded random 10% of the texts, and the agreement with the reference labels is reported.
+
+The panel outcome of each text is `unanimous` (all three agreed), `majority` (two agreed and the adjudicator kept their label) or `adjudicated` (the adjudicator chose a label no two labelers gave). Any model graded against these labels must come from a different model family than the panel. The Streamlit labeling app (`uv run streamlit run src/trialpulse/nlp/labeling_app.py`) remains as an optional review tool. It writes to `data/nlp/review_labels.csv`, never to the reference labels.
 
 ## Where labels are stored
 
 The gold texts are the `why_stopped` texts of the cohort's early stops, taken from their current ClinicalTrials.gov records (API v2), so labeling does not wait for the version-history dataset. Each text is normalized (lowercase, whitespace collapsed, surrounding punctuation trimmed) and appears only once, so it can be in only one split.
 
-The app writes `labels/gold_labels.csv` with `nct_id`, `text_sha256` (the SHA-256 of the normalized text), `split`, `label`, `source` (the API pull date), `labeled_at` and `assisted` (`true` or `false`) only. Keying by the text hash keeps the labels valid if the history source changes later. The texts stay in `data/nlp/gold_sample.csv`, which is gitignored and never committed. The split (100 dev, 300 test, stratified by status) is fixed by the seed in `config/project.yaml`. The test split is never used for prompt or model tuning, and no gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).
+`labels/gold_labels.csv` holds `nct_id`, `text_sha256` (the SHA-256 of the normalized text), `split`, `label`, `source` (the API pull date), `labeled_at`, `assisted` (always `false`), `method` (`model-panel-v1`) and `panel_outcome`, and no text. Keying by the text hash keeps the labels valid if the history source changes later. The texts stay in `data/nlp/gold_sample.csv`, and the justifications, rationales and consistency relabels in `data/nlp/panel/`, all gitignored and never committed. The split (100 dev, 300 test, stratified by status) is fixed by the seed in `config/project.yaml`.
+
+The test labels are committed before any work on the LLM labeling prompt. Prompt work uses only the dev items, and test texts and labels are never opened for it. The prompt lives in `src/trialpulse/nlp/prompts/`, and a test checks that no test text appears in any file there. No gold text may appear in the LLM-labeled training sample (a later Step 6 test enforces this).

@@ -321,6 +321,8 @@ Status: **in progress**. The gold sample and the dev suggestions are ready; Aakr
 
 ### Step 6 labeling plan (changed by Aakrisht on 2026-09-23)
 
+**Superseded later the same day by ADR 0010** (reference labels from an adjudicated model panel, below). Kept as a record.
+
 The goal is to save labeling time without touching the test set's independence.
 
 - **Order:** the app serves all 300 test texts first, then the 100 dev texts.
@@ -351,7 +353,7 @@ The goal is to save labeling time without touching the test set's independence.
 - a dev item shows its suggestion, matching the file;
 - no labels file was written.
 
-**Decisions pending approval (labeling plan):**
+**Decisions approved (Aakrisht, 2026-09-23, labeling plan):**
 
 1. `assisted` is `true` when a suggestion was shown for the item at the time its label was saved. Revising a dev item keeps it `true`, and test labels are always `false`.
 2. The suggestions came from three independent labelers plus Claude's adjudication, not a single pass.
