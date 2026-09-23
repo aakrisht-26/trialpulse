@@ -33,7 +33,7 @@ import numpy.typing as npt
 from trialpulse.config import REPO_ROOT, Origin, ProjectConfig, load_project_config
 from trialpulse.dates import DateArray, add_months, days_between
 from trialpulse.eval import EVENT_CENSORED
-from trialpulse.eval.bootstrap import cluster_bootstrap
+from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap
 from trialpulse.eval.ipcw import FloatArray, IntArray
 from trialpulse.eval.lock import TestLockError, require_unlock
 from trialpulse.eval.metrics import (
@@ -154,26 +154,30 @@ def evaluate_predictions(
     clusters: npt.NDArray[Any],
     cfg: ProjectConfig,
     n_resamples: int,
+    context: str = "",
 ) -> dict[str, Any]:
     ev = cfg.evaluation
     seed = cfg.seeds.default
 
-    def boot(metric: Callable[..., float]) -> dict[str, float | int]:
-        return cluster_bootstrap(
-            clusters,
-            lambda idx: metric(time[idx], event[idx], score[idx], horizon[idx]),
-            n_resamples,
-            seed,
-            ev.confidence_level,
-        )
+    def boot(name: str, metric: Callable[..., float]) -> dict[str, float | int]:
+        try:
+            return cluster_bootstrap(
+                clusters,
+                lambda idx: metric(time[idx], event[idx], score[idx], horizon[idx]),
+                n_resamples,
+                seed,
+                ev.confidence_level,
+            )
+        except BootstrapError as exc:  # name the slice and metric that failed
+            raise BootstrapError(f"{context}, metric {name}: {exc}") from exc
 
     slope, intercept = calibration_slope_intercept(time, event, score, horizon)
     return {
         "n_rows": len(time),
         "n_trials": len(np.unique(clusters)),
-        "auc": boot(ipcw_auc),
-        "brier": boot(ipcw_brier),
-        "lift": boot(lambda t, e, s, h: lift_at(t, e, s, h, ev.lift_top_fraction)),
+        "auc": boot("auc", ipcw_auc),
+        "brier": boot("brier", ipcw_brier),
+        "lift": boot("lift", lambda t, e, s, h: lift_at(t, e, s, h, ev.lift_top_fraction)),
         "calibration_slope": slope,
         "calibration_intercept": intercept,
         "calibration_table": calibration_table(
@@ -214,13 +218,17 @@ def run(
         for months in cfg.horizons_months:
             h = horizon_days(ev.landmark_date, months)
             score = model.predict_cif(h, ev.features)
-            pooled = evaluate_predictions(ev_time, ev_event, score, h, ev.trial_id, cfg, resamples)
+            where = f"origin {origin.date.isoformat()}, horizon {months} months"
+            pooled = evaluate_predictions(
+                ev_time, ev_event, score, h, ev.trial_id, cfg, resamples, f"{where}, pooled"
+            )
             by_index = {}
             for k in np.unique(ev.landmark_index):
                 m = ev.landmark_index == k
                 by_index[str(int(k))] = evaluate_predictions(
-                    ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], cfg, resamples
-                )
+                    ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], cfg, resamples,
+                    f"{where}, landmark index {int(k)}",
+                )  # fmt: skip
             horizons[str(months)] = {"pooled": pooled, "by_landmark_index": by_index}
         results["origins"].append(
             {
@@ -255,6 +263,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TestLockError, FileNotFoundError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
+    except BootstrapError as exc:
+        print(f"failed: {exc}", file=sys.stderr)
+        return 3
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULTS_DIR / f"{args.model}_{args.origins.replace(',', '-')}.json"
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")

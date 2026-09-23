@@ -9,6 +9,7 @@ import pytest
 
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import walkforward
+from trialpulse.eval.bootstrap import BootstrapError
 from trialpulse.eval.lock import TestLockError
 from trialpulse.eval.walkforward import (
     LandmarkRows,
@@ -124,6 +125,33 @@ def test_locked_origins_are_refused_before_any_data_is_read(
     # Even with the flag, a repository without a completed, tagged registration refuses.
     with pytest.raises(TestLockError):
         run(cfg, "m0", spec, must_not_load, unlock_flag=True, repo=tmp_path)
+
+
+def test_a_slice_without_cases_fails_with_its_name(cfg: ProjectConfig) -> None:
+    rows = _rows()
+    in_2016 = (rows.landmark_date >= np.datetime64("2016-01-01")) & (
+        rows.landmark_date < np.datetime64("2017-01-01")
+    )
+    no_stops = in_2016 & (rows.landmark_index == 1)
+    rows.event[no_stops & (rows.event == 1)] = 2  # no early stop left in that slice
+
+    with pytest.raises(BootstrapError) as info:
+        run(cfg, "m0", "2016", lambda: rows, n_resamples=50)
+
+    message = str(info.value)
+    assert "origin 2016-01-01, horizon 12 months, landmark index 1, metric auc" in message
+    assert "50 of 50 bootstrap resamples" in message
+
+
+def test_cli_reports_a_bootstrap_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def failing_run(*args: object, **kwargs: object) -> dict[str, object]:
+        raise BootstrapError("origin 2016-01-01, horizon 12 months, pooled, metric auc: too few")
+
+    monkeypatch.setattr(walkforward, "run", failing_run)
+    assert walkforward.main(["--model", "m0", "--origins", "dev"]) == 3
+    assert "failed: origin 2016-01-01" in capsys.readouterr().err
 
 
 def test_cli_refuses_locked_origins(capsys: pytest.CaptureFixture[str]) -> None:
