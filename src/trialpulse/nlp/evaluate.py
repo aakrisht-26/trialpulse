@@ -7,8 +7,10 @@ measures agreement with that panel, not with human judgment.
   per-label precision, recall and F1, and the confusion matrix (rows: reference, columns:
   prediction). Macro-F1 averages the per-label F1 over the labels that occur in the
   reference or the predictions, as scikit-learn does by default.
-- Test items are scored once per model: a second test scoring of the same model is refused,
-  and test results are aggregate only. Dev items may be listed one by one for prompt work.
+- Test items are scored once per model. Test results are saved in docs/results/ (tracked in
+  git), and a second test scoring is refused when the result file exists or ever existed in
+  git history. Test results are aggregate only; dev items may be listed one by one for
+  prompt work.
 
     uv run python -m trialpulse.nlp.evaluate --dev reason_v1
     uv run python -m trialpulse.nlp.evaluate --test llm
@@ -19,6 +21,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import subprocess
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -26,11 +29,12 @@ from typing import Any
 
 import numpy as np
 
-from trialpulse.config import load_project_config
+from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.nlp.gold import LABELS_PATH, NLP_DIR, SAMPLE_PATH, load_sample
 from trialpulse.nlp.taxonomy import LABELS, validate_label
 
-RESULTS_DIR = NLP_DIR / "results"
+RESULTS_DIR = NLP_DIR / "results"  # dev results (gitignored)
+TEST_RESULTS_DIR = REPO_ROOT / "docs" / "results"  # test results, tracked in git
 PREDICTION_COLUMNS = ("nct_id", "text_sha256", "label")
 Key = tuple[str, str]
 
@@ -157,7 +161,7 @@ def score_test_once(
     """Score one model on the test split and save the result. A model already scored on the
     test split is refused, so each model gets exactly one test scoring."""
     path = results_dir / f"test_{name}.json"
-    if path.exists():
+    if path.exists() or _in_git_history(path):
         raise FileExistsError(f"{name} was already scored on the test split ({path})")
     ref, pred = aligned(reference, predictions)
     result = {
@@ -170,6 +174,17 @@ def score_test_once(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
+
+
+def _in_git_history(path: Path) -> bool:
+    """Whether a file was ever committed, so deleting a test result cannot reopen scoring."""
+    done = subprocess.run(
+        ["git", "-C", str(path.parent), "log", "--all", "--format=%H", "--", path.name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode == 0 and bool(done.stdout.strip())
 
 
 def dev_errors(
@@ -185,9 +200,10 @@ def dev_errors(
 
 def summary_lines(result: Mapping[str, Any]) -> list[str]:
     lo, hi = result["macro_f1_ci"]
+    level = round(100 * result["bootstrap"]["confidence"])
     lines = [
         f"n={result['n']}  accuracy={result['accuracy']:.3f}  macro-F1={result['macro_f1']:.3f} "
-        f"(95% CI {lo:.3f} to {hi:.3f})  kappa={result['kappa']:.3f}",
+        f"({level}% CI {lo:.3f} to {hi:.3f})  kappa={result['kappa']:.3f}",
         "per-label F1: "
         + ", ".join(
             f"{k} {v['f1']:.2f} (n={v['support']})" for k, v in result["per_label"].items()
@@ -202,7 +218,7 @@ def summary_lines(result: Mapping[str, Any]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    from trialpulse.nlp.llm_labeler import FINAL_PROMPT, LABELS_DIR, prompt_stem
+    from trialpulse.nlp.llm_labeler import FINAL_PROMPT, LABELS_DIR, committed_prompt, prompt_stem
 
     parser = argparse.ArgumentParser(description="Score reason labels against the gold set")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -230,13 +246,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.test == "llm":
         stem = prompt_stem(FINAL_PROMPT)
         predictions = read_predictions(LABELS_DIR / f"test_{stem}.csv")
-        metadata: dict[str, Any] = {"prompt": FINAL_PROMPT}
+        metadata: dict[str, Any] = {
+            "prompt": FINAL_PROMPT,
+            "prompt_commit": committed_prompt(FINAL_PROMPT),
+        }
     else:
-        from trialpulse.nlp.distill import MODEL_PATH, TEST_PREDICTIONS_PATH, load_metadata
+        from trialpulse.nlp.distill import (
+            MODEL_PATH,
+            TEST_PREDICTIONS_MODEL,
+            TEST_PREDICTIONS_PATH,
+            check_final,
+            load_metadata,
+            model_identity,
+        )
 
+        identity = model_identity(MODEL_PATH)
+        check_final(identity)
+        predicted_by = json.loads(TEST_PREDICTIONS_MODEL.read_text(encoding="utf-8"))
+        if predicted_by != identity:
+            raise ValueError("the test predictions come from another model; rerun --predict-test")
         predictions = read_predictions(TEST_PREDICTIONS_PATH)
-        metadata = {"model_metadata": load_metadata(MODEL_PATH)}
-    result = score_test_once(args.test, reference, predictions, RESULTS_DIR, metadata, *boot)
+        metadata = {"model_identity": identity, "model_metadata": load_metadata(MODEL_PATH)}
+    result = score_test_once(args.test, reference, predictions, TEST_RESULTS_DIR, metadata, *boot)
     print("\n".join(summary_lines(result)))  # aggregate only: no test item is printed
     return 0
 

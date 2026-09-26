@@ -116,3 +116,29 @@ def test_dev_errors_list_only_the_wrong_items() -> None:
     assert dev_errors(reference, predictions, texts) == [
         {"nct_id": "NCT2", "reference": "other", "predicted": "business", "text": "Stopped"}
     ]
+
+
+def test_a_test_result_ever_committed_blocks_a_second_scoring(tmp_path: Path) -> None:
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    reference, predicted = _labels(20, 1, noise=0.1)
+    keys = [(f"NCT{n}", f"h{n}") for n in range(20)]
+    ref, pred = dict(zip(keys, reference, strict=True)), dict(zip(keys, predicted, strict=True))
+    score_test_once("llm", ref, pred, tmp_path, {}, 50, 0.95, 0)
+    git("add", "test_llm.json")
+    git("commit", "-q", "-m", "result")
+    (tmp_path / "test_llm.json").unlink()  # deleting the file does not reopen scoring
+    with pytest.raises(FileExistsError, match="already scored"):
+        score_test_once("llm", ref, pred, tmp_path, {}, 50, 0.95, 0)
+
+
+def test_the_summary_names_the_configured_interval_level() -> None:
+    reference, predicted = _labels(50, 2, noise=0.2)
+    result = score(reference, predicted, resamples=50, confidence=0.9, seed=0)
+    assert "(90% CI" in summary_lines(result)[0]

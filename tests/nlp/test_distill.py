@@ -108,3 +108,26 @@ def test_the_model_and_its_metadata_round_trip(tmp_path: Path) -> None:
     loaded = load_model(tmp_path / "m.joblib")
     assert predict(loaded, texts[:3]) == predict(pipeline, texts[:3])
     assert load_metadata(tmp_path / "m.joblib")["training_texts"] == len(texts)
+
+
+def test_only_a_final_model_may_be_scored_on_test(tmp_path: Path) -> None:
+    from trialpulse.nlp.distill import check_final, model_identity
+
+    texts, labels = _corpus(per_label=6)
+    pipeline, _ = select_and_fit(texts, labels, seed=1, folds=2)
+    meta = {"trained_at": "t", "training_texts": 1375, "sample_size": 10000}
+    save_model(tmp_path / "m.joblib", pipeline, meta)
+    identity = model_identity(tmp_path / "m.joblib")
+    assert len(identity["model_sha256"]) == 64
+    with pytest.raises(ValueError, match="provisional: trained on 1375 of 10000"):
+        check_final(identity)
+    check_final({**identity, "training_texts": 10000})
+
+
+def test_the_parquet_confidence_is_numeric(tmp_path: Path) -> None:
+    rows = [{"nct_id": "NCT1", "status": "TERMINATED", "text_sha256": "a", "label": "accrual",
+             "reason_group": "operational", "confidence": "0.9100", "model": "m"}]  # fmt: skip
+    _, parquet_path = write_reasons(rows, tmp_path)
+    source = f"read_parquet('{parquet_path.as_posix()}')"
+    query = f"SELECT avg(confidence), typeof(confidence) FROM {source} GROUP BY 2"
+    assert duckdb.sql(query).fetchone() == (0.91, "DOUBLE")

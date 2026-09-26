@@ -10,6 +10,7 @@ production, and it labels every early stop in the cohort.
 - No gold text is ever in the training set: a training row whose text hash is a gold hash
   is refused.
 
+    uv run python -m trialpulse.nlp.distill            (the same as --train)
     uv run python -m trialpulse.nlp.distill --train
     uv run python -m trialpulse.nlp.distill --dev
     uv run python -m trialpulse.nlp.distill --predict-test
@@ -19,6 +20,7 @@ production, and it labels every early stop in the cohort.
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import json
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -59,6 +61,7 @@ from trialpulse.nlp.taxonomy import group_of, validate_label
 MODEL_DIR = NLP_DIR / "models"
 MODEL_PATH = MODEL_DIR / "distilled.joblib"
 TEST_PREDICTIONS_PATH = NLP_DIR / "results" / "test_distilled_predictions.csv"
+TEST_PREDICTIONS_MODEL = TEST_PREDICTIONS_PATH.with_suffix(".json")  # which model predicted
 REASONS_DIR = NLP_DIR / "reasons"
 REASON_COLUMNS = (
     "nct_id",
@@ -69,7 +72,7 @@ REASON_COLUMNS = (
     "confidence",
     "model",
 )
-GRID: dict[str, tuple[Any, ...]] = {"C": (0.5, 2.0, 8.0), "class_weight": (None, "balanced")}
+GRID: dict[str, tuple[Any, ...]] = {"C": (0.5, 2.0, 8.0, 32.0), "class_weight": (None, "balanced")}
 FOLDS = 5
 Key = tuple[str, str]
 
@@ -148,6 +151,27 @@ def load_metadata(path: Path) -> dict[str, Any]:
     return data
 
 
+def model_identity(path: Path) -> dict[str, Any]:
+    """What identifies a saved model: its file hash, training time and training size."""
+    meta = load_metadata(path)
+    return {
+        "model_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "trained_at": meta["trained_at"],
+        "training_texts": meta["training_texts"],
+        "sample_size": meta["sample_size"],
+    }
+
+
+def check_final(identity: Mapping[str, Any]) -> None:
+    """The one test scoring is kept for the model trained on the whole LLM sample. A
+    provisional model, trained on part of it, is refused."""
+    if identity["training_texts"] < identity["sample_size"]:
+        raise ValueError(
+            f"the model is provisional: trained on {identity['training_texts']} of "
+            f"{identity['sample_size']} sample texts; finish the LLM sample and retrain first"
+        )
+
+
 def reason_rows(
     records: Iterable[EarlyStop], pipeline: Pipeline, model_name: str, cfg: ProjectConfig
 ) -> list[dict[str, str]]:
@@ -187,7 +211,8 @@ def write_reasons(rows: Sequence[Mapping[str, str]], folder: Path) -> tuple[Path
     source = csv_path.as_posix().replace("'", "''")
     target = parquet_path.as_posix().replace("'", "''")
     duckdb.sql(
-        f"COPY (SELECT * FROM read_csv('{source}', header=true, all_varchar=true)) "
+        "COPY (SELECT * REPLACE (CAST(confidence AS DOUBLE) AS confidence) "
+        f"FROM read_csv('{source}', header=true, all_varchar=true)) "
         f"TO '{target}' (FORMAT parquet)"
     )
     return csv_path, parquet_path
@@ -204,14 +229,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     parser = argparse.ArgumentParser(description="The distilled reason classifier")
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group()
     for flag in ("train", "dev", "predict-test", "label-all"):
         group.add_argument(f"--{flag}", action="store_true")
     args = parser.parse_args(argv)
     cfg = load_project_config()
     seed = cfg.seeds.default
 
-    if args.train:
+    if args.train or not (args.dev or args.predict_test or args.label_all):
         sample = load_sample(LLM_SAMPLE_PATH)
         labels_path = LABELS_DIR / f"sample_{prompt_stem(FINAL_PROMPT)}.csv"
         texts, labels = training_set(sample, read_predictions(labels_path), gold_hashes())
@@ -232,7 +257,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     pipeline = load_model(MODEL_PATH)
-    name = f"tfidf-logreg trained {load_metadata(MODEL_PATH)['trained_at']}"
+    meta = load_metadata(MODEL_PATH)
+    name = f"tfidf-logreg n={meta['training_texts']} trained {meta['trained_at']}"
     if args.dev:
         items = [i for i in load_sample(SAMPLE_PATH) if i.split == "dev"]
         predicted, _ = predict(pipeline, [i.why_stopped for i in items])
@@ -245,11 +271,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("\n".join(summary_lines(result)))
         return 0
     if args.predict_test:
+        identity = model_identity(MODEL_PATH)
+        check_final(identity)
         items = [i for i in load_sample(SAMPLE_PATH) if i.split == "test"]
         predicted, _ = predict(pipeline, [i.why_stopped for i in items])
         write_predictions(
             TEST_PREDICTIONS_PATH, dict(zip([i.key for i in items], predicted, strict=True))
         )
+        TEST_PREDICTIONS_MODEL.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {len(items)} test predictions to {TEST_PREDICTIONS_PATH} (not scored)")
         return 0
     rows = reason_rows(cached_early_stops(cfg), pipeline, name, cfg)
