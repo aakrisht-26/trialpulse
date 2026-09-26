@@ -67,7 +67,7 @@ CACHE_DIR = LLM_DIR / "cache"
 LABELS_DIR = LLM_DIR / "labels"
 LLM_SAMPLE_PATH = LLM_DIR / "sample.csv"
 VALIDATION_ATTEMPTS = 2  # calls per batch before it is split in half
-MAX_RATE_WAIT_S = 120.0  # a longer 429 wait means a daily limit: stop instead of waiting
+MAX_RATE_WAIT_S = 900.0  # longest wait for a per-minute limit before the run stops
 Key = tuple[str, str]
 
 RESPONSE_SCHEMA: dict[str, Any] = {
@@ -140,6 +140,11 @@ class DailyLimitError(RuntimeError):
 
 class RetryableError(RuntimeError):
     pass
+
+
+class ProviderError(RuntimeError):
+    """A provider failure that stops the run: an HTTP error that is neither a rate limit nor
+    an invalid answer, or a network or server error that outlasted the retries."""
 
 
 def prompt_stem(name: str) -> str:
@@ -216,18 +221,21 @@ def parse_duration(text: str | None) -> float:
     return sum(float(v) * scale[u] for v, u in re.findall(r"([\d.]+)(ms|h|m|s)", text))
 
 
-def _rate_limit(response: httpx.Response) -> tuple[float, bool]:
-    """How long a 429 asks us to wait, and whether it is a daily limit."""
+def _rate_limit(response: httpx.Response) -> tuple[float, str]:
+    """How long a 429 asks us to wait, and which limit it names: TPD, RPD, TPM, RPM, or an
+    empty string when the message names none. The raw message is never returned, since it
+    holds the organization id."""
     try:
         message = str(response.json().get("error", {}).get("message", ""))
     except ValueError:
         message = ""
-    daily = "per day" in message.lower() or "(tpd)" in message.lower() or "(rpd)" in message.lower()
+    named = re.search(r"\((TPD|RPD|TPM|RPM)\)", message)
+    kind = named.group(1) if named else ("TPD" if "per day" in message.lower() else "")
     wait = float(response.headers.get("retry-after", "0") or 0)
     if not wait:
         found = re.search(r"try again in ([\dhms.]+)", message)
         wait = parse_duration(found.group(1)) if found else 0.0
-    return wait, daily
+    return wait, kind
 
 
 class GroqClient:
@@ -244,7 +252,7 @@ class GroqClient:
         check_graded_model(settings.model)
         self._http = http
         self._settings = settings
-        self._auth = {"Authorization": f"Bearer {api_key.get_secret_value()}"}
+        self._auth = {"Authorization": f"Bearer {_api_token(api_key)}"}
         self._sleep = sleep
         self._clock = clock
         self._last_request = float("-inf")
@@ -269,22 +277,30 @@ class GroqClient:
         self._daily_exhausted = headers.get("x-ratelimit-remaining-requests") == "0"
 
     def _post(self, body: dict[str, Any]) -> httpx.Response:
-        for attempt in Retrying(
-            retry=retry_if_exception_type((httpx.TransportError, RetryableError)),
-            wait=wait_random_exponential(multiplier=2, max=60),
-            stop=stop_after_attempt(6),
-            sleep=self._sleep,
-            reraise=True,
-        ):
-            with attempt:
-                self._last_request = self._clock()
-                self.requests_made += 1
-                response = self._http.post(
-                    f"{self._settings.base_url}/chat/completions", json=body, headers=self._auth
-                )
-                if response.status_code >= 500:
-                    raise RetryableError(f"HTTP {response.status_code} from the provider")
-                return response
+        try:
+            for attempt in Retrying(
+                retry=retry_if_exception_type((httpx.TransportError, RetryableError)),
+                wait=wait_random_exponential(multiplier=2, max=60),
+                stop=stop_after_attempt(6),
+                sleep=self._sleep,
+                reraise=True,
+            ):
+                with attempt:
+                    self._last_request = self._clock()
+                    self.requests_made += 1
+                    response = self._http.post(
+                        f"{self._settings.base_url}/chat/completions",
+                        json=body,
+                        headers=self._auth,
+                    )
+                    if response.status_code >= 500:
+                        raise RetryableError(f"HTTP {response.status_code} from the provider")
+                    return response
+        except (httpx.TransportError, RetryableError) as exc:
+            # "from None" drops the original exception, whose text may quote request details.
+            raise ProviderError(
+                f"provider unavailable after retries ({type(exc).__name__})"
+            ) from None
         raise AssertionError("unreachable")  # pragma: no cover
 
     def complete(self, body: dict[str, Any], estimate: int) -> dict[str, Any]:
@@ -294,24 +310,43 @@ class GroqClient:
             self._throttle(estimate)
             response = self._post(body)
             if response.status_code == 429:
-                wait, daily = _rate_limit(response)
-                if daily or wait > MAX_RATE_WAIT_S:
-                    raise DailyLimitError(f"daily limit reached; retry in about {wait:.0f} s")
+                wait, kind = _rate_limit(response)
+                if kind in ("TPD", "RPD"):
+                    raise DailyLimitError(
+                        f"daily limit ({kind}) reached; retry in about {wait:.0f} s"
+                    )
+                if wait > MAX_RATE_WAIT_S:
+                    raise DailyLimitError(f"rate limit ({kind or 'unnamed'}) asks for {wait:.0f} s")
                 self._sleep(wait + random.uniform(0.5, 2.0))
                 continue
+            code = _error_code(response) if response.status_code >= 400 else ""
+            if response.status_code == 400 and code == "json_validate_failed":
+                raise InvalidResponseError("the provider could not produce a valid answer")
             if response.status_code >= 400:
-                raise RuntimeError(f"HTTP {response.status_code}: {_error_message(response)}")
+                raise ProviderError(f"HTTP {response.status_code} ({code or 'no error code'})")
             self._record(response.headers)
             data: dict[str, Any] = response.json()
             return data
-        raise RuntimeError("still rate limited after 10 waits")
+        raise ProviderError("still rate limited after 10 waits")
 
 
-def _error_message(response: httpx.Response) -> str:
+def _api_token(api_key: SecretStr) -> str:
+    """The key, stripped, and refused if it holds spaces or control characters (an HTTP
+    library would quote such a header value in its error message)."""
+    token = api_key.get_secret_value().strip()
+    if not token or any(not ("!" <= c <= "~") for c in token):
+        raise ValueError("GROQ_API_KEY is empty or contains spaces or control characters")
+    return token
+
+
+def _error_code(response: httpx.Response) -> str:
+    """The provider's error code or type. The message itself is never used: it can quote the
+    organization id."""
     try:
-        return str(response.json().get("error", {}).get("message", ""))[:300]
+        error = response.json().get("error", {})
     except ValueError:
-        return response.text[:300]
+        return ""
+    return str(error.get("code") or error.get("type") or "") if isinstance(error, dict) else ""
 
 
 def _cache_path(cache_dir: Path, key: str) -> Path:
@@ -337,7 +372,8 @@ def write_cache(cache_dir: Path, key: str, record: dict[str, Any]) -> None:
 @dataclass
 class Labeler:
     """Labels items in batches, reading the cache first. With no client it only reads the
-    cache (for status reports)."""
+    cache (for status reports). A batch that was split leaves a marker under its own key,
+    so a rerun goes straight to its cached halves."""
 
     system_prompt: str
     prompt_name: str
@@ -354,10 +390,14 @@ class Labeler:
         for start in range(0, len(items), size):
             try:
                 labels |= self._batch(items[start : start + size])
-            except DailyLimitError as exc:  # keep reading the cache for the other batches
+            except (DailyLimitError, ProviderError) as exc:  # keep reading the cache
                 self.stats.stopped = str(exc)
         self.stats.labeled = len(labels)
         return labels
+
+    def _split(self, batch: Sequence[LabelItem]) -> dict[Key, str]:
+        half = len(batch) // 2
+        return self._batch(batch[:half]) | self._batch(batch[half:])
 
     def _batch(self, batch: Sequence[LabelItem]) -> dict[Key, str]:
         ids = [str(n) for n in range(1, len(batch) + 1)]
@@ -367,6 +407,8 @@ class Labeler:
         body = request_body(self.settings, messages)
         key = request_key(body)
         cached = read_cache(self.cache_dir, key)
+        if cached is not None and cached.get("split"):
+            return self._split(batch)
         if cached is not None:
             self.stats.from_cache += len(batch)
             self.stats.cached_tokens += int((cached.get("usage") or {}).get("total_tokens") or 0)
@@ -376,7 +418,11 @@ class Labeler:
             return {}
         estimate = len(json.dumps(messages)) // 3 + self._completion_estimate
         for _ in range(VALIDATION_ATTEMPTS):
-            data = self.client.complete(body, estimate)
+            try:
+                data = self.client.complete(body, estimate)
+            except InvalidResponseError:  # the provider refused to produce a valid answer
+                self.stats.requests += 1
+                continue
             self.stats.requests += 1
             usage = data.get("usage") or {}
             self.stats.tokens += int(usage.get("total_tokens") or 0)
@@ -399,8 +445,12 @@ class Labeler:
         if len(batch) == 1:
             self.stats.failed += 1
             return {}
-        half = len(batch) // 2
-        return self._batch(batch[:half]) | self._batch(batch[half:])
+        write_cache(self.cache_dir, key, {
+            "key": key, "split": True, "prompt": self.prompt_name,
+            "created": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+            "items": [list(b.key) for b in batch],
+        })  # fmt: skip
+        return self._split(batch)
 
 
 def committed_prompt(name: str, repo: Path = REPO_ROOT, prompt_dir: Path = PROMPTS_DIR) -> str:
@@ -484,7 +534,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Label why_stopped texts with an LLM")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--split", choices=("dev", "test"), help="label a gold split")
-    group.add_argument("--sample", type=int, metavar="N", help="label the N-text LLM sample")
+    group.add_argument(
+        "--sample", type=int, metavar="N", help="label the first N texts of the LLM sample"
+    )
     group.add_argument("--status", action="store_true", help="report progress from the cache")
     parser.add_argument("--prompt", default=FINAL_PROMPT, help="prompt file (dev only)")
     args = parser.parse_args(argv)
@@ -492,31 +544,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = LLMSettings()
     check_graded_model(settings.model)
 
+    sample_run = args.sample is not None or args.status
+    if args.sample is not None and not 1 <= args.sample <= SAMPLE_SIZE:
+        raise SystemExit(f"--sample takes 1 to {SAMPLE_SIZE}")
     prompt_name = args.prompt
-    if (args.split == "test" or args.sample or args.status) and prompt_name != FINAL_PROMPT:
+    if (args.split == "test" or sample_run) and prompt_name != FINAL_PROMPT:
         raise SystemExit("test and sample labels use the final prompt only")
     system_prompt = load_prompt(prompt_name)
     check_rendered_prompt(system_prompt, *_heldout(LABELS_PATH, SAMPLE_PATH))
     stem = prompt_stem(prompt_name)
 
+    everything: list[LabelItem] = []
     if args.split:
         items = _as_label_items(i for i in load_sample(SAMPLE_PATH) if i.split == args.split)
         items.sort(key=lambda i: i.key)
         commit = committed_prompt(prompt_name) if args.split == "test" else ""
         out = LABELS_DIR / f"{args.split}_{stem}.csv"
     else:
-        if not LLM_SAMPLE_PATH.is_file():
+        if not LLM_SAMPLE_PATH.is_file():  # always the full sample; --sample N labels a prefix
             records = cached_early_stops(cfg)
             meta = json.loads(next(PULL_CACHE.rglob("pull.json")).read_text(encoding="utf-8"))
             sample = build_llm_sample(
                 records, cfg.statuses.early_stop, source_label(meta), gold_hashes(),
-                args.sample or SAMPLE_SIZE, cfg.seeds.default,
+                SAMPLE_SIZE, cfg.seeds.default,
             )  # fmt: skip
             write_sample(sample, LLM_SAMPLE_PATH)
         loaded = load_sample(LLM_SAMPLE_PATH)
-        if {i.text_sha256 for i in loaded} & gold_hashes():
-            raise AssertionError("a gold text is in the LLM sample")
-        items = _as_label_items(loaded[: args.sample] if args.sample else loaded)
+        if len(loaded) != SAMPLE_SIZE or {i.text_sha256 for i in loaded} & gold_hashes():
+            raise AssertionError(f"{LLM_SAMPLE_PATH} is not the {SAMPLE_SIZE}-text sample")
+        everything = _as_label_items(loaded)
+        items = everything[: args.sample] if args.sample is not None else []
         commit = committed_prompt(prompt_name)
         out = LABELS_DIR / f"sample_{stem}.csv"
 
@@ -534,24 +591,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if http is not None:
             http.close()
+    run = labeler.stats
+    totals = run
+    if sample_run:  # the labels file always holds every sample text labeled so far
+        reader = Labeler(system_prompt, prompt_name, settings, CACHE_DIR, None)
+        labels = reader.label(everything)
+        totals = reader.stats
     if not args.status:
         write_predictions(out, labels)
-    stats = labeler.stats
-    remaining = stats.items - stats.labeled
+    remaining = totals.items - totals.labeled
     print(
         json.dumps(
             {
                 "prompt": prompt_name,
                 "prompt_commit": commit,
-                "items": stats.items,
-                "labeled": stats.labeled,
-                "from_cache": stats.from_cache,
+                "items": totals.items,
+                "labeled": totals.labeled,
                 "remaining": remaining,
-                "failed": stats.failed,
-                "requests": stats.requests,
-                "tokens_this_run": stats.tokens,
-                "days_needed_for_the_rest": days_needed(remaining, stats, settings),
-                "stopped": stats.stopped or None,
+                "failed_this_run": run.failed,
+                "requests_this_run": run.requests,
+                "tokens_this_run": run.tokens,
+                "days_needed_for_the_rest": days_needed(remaining, totals, settings),
+                "stopped": run.stopped or None,
                 "labels_file": str(out) if not args.status else None,
             },
             indent=2,

@@ -323,3 +323,103 @@ def test_the_client_raises_on_a_daily_limit_or_no_requests_left() -> None:
         client.complete({}, 10)  # the day's last request succeeds
         with pytest.raises(DailyLimitError, match="no requests left"):
             client.complete({}, 10)
+
+
+@respx.mock
+def test_a_long_per_minute_wait_is_waited_out_not_treated_as_daily(tmp_path: Path) -> None:
+    long_minute = httpx.Response(
+        429,
+        json={"error": {"message": "Rate limit reached on tokens per minute (TPM): Limit 8000"}},
+        headers={"retry-after": "293"},
+    )
+    respx.post(URL).mock(side_effect=[long_minute, _answer([("1", "other")])])
+    waits: list[float] = []
+    with httpx.Client() as http:
+        labeler = _labeler(tmp_path, http, waits)
+        assert len(labeler.label(_items(1))) == 1
+    assert labeler.stats.stopped == ""
+    assert any(w >= 293 for w in waits)
+
+
+@respx.mock
+def test_a_split_batch_is_found_again_on_a_rerun(tmp_path: Path) -> None:
+    missing = _answer([("1", "accrual")])  # the batch had two ids
+    route = respx.post(URL).mock(
+        side_effect=[missing, missing, _answer([("1", "accrual")]), _answer([("1", "funding")])]
+    )
+    items = _items(2)
+    with httpx.Client() as http:
+        first = _labeler(tmp_path, http, []).label(items)
+    calls = route.call_count
+    reader = _labeler(tmp_path, None, [])  # the status path: cache only
+    assert reader.label(items) == first
+    assert reader.stats.from_cache == 2
+    with httpx.Client() as http:
+        assert _labeler(tmp_path, http, []).label(items) == first
+    assert route.call_count == calls  # the rerun makes no call
+
+
+@respx.mock
+def test_a_provider_validation_failure_is_retried_then_split(tmp_path: Path) -> None:
+    refused = httpx.Response(
+        400, json={"error": {"code": "json_validate_failed", "message": "max completion tokens"}}
+    )
+    respx.post(URL).mock(
+        side_effect=[refused, refused, _answer([("1", "other")]), _answer([("1", "safety")])]
+    )
+    items = _items(2)
+    with httpx.Client() as http:
+        labels = _labeler(tmp_path, http, []).label(items)
+    assert labels == {items[0].key: "other", items[1].key: "safety"}
+
+
+@respx.mock
+def test_other_provider_errors_stop_the_run_but_keep_the_labels(tmp_path: Path) -> None:
+    items = _items(4)
+    respx.post(URL).mock(side_effect=[_answer([("1", "accrual"), ("2", "business")])])
+    with httpx.Client() as http:
+        _labeler(tmp_path, http, []).label(items[2:])
+    respx.post(URL).mock(
+        return_value=httpx.Response(401, json={"error": {"code": "invalid_api_key"}})
+    )
+    with httpx.Client() as http:
+        labeler = _labeler(tmp_path, http, [])
+        labels = labeler.label(items)
+    assert labels == {items[2].key: "accrual", items[3].key: "business"}
+    assert labeler.stats.stopped == "HTTP 401 (invalid_api_key)"
+
+
+@respx.mock
+def test_network_failures_never_quote_the_key(tmp_path: Path) -> None:
+    respx.post(URL).mock(
+        side_effect=httpx.ConnectError(f"refused, header {KEY.get_secret_value()}")
+    )
+    with httpx.Client() as http:
+        labeler = _labeler(tmp_path, http, [])
+        assert labeler.label(_items(1)) == {}
+    assert "provider unavailable after retries (ConnectError)" in labeler.stats.stopped
+    assert KEY.get_secret_value() not in labeler.stats.stopped
+
+
+def test_the_key_is_stripped_and_checked() -> None:
+    with httpx.Client() as http:
+        GroqClient(http, SecretStr("  gsk_padded_key \n"), SETTINGS)  # surrounding space is fine
+        for bad in ("gsk_with space", "gsk_ctrl\x07", "   "):
+            with pytest.raises(ValueError, match="spaces or control characters") as info:
+                GroqClient(http, SecretStr(bad), SETTINGS)
+            if bad.strip():
+                assert bad.strip() not in str(info.value)
+
+
+def test_sample_runs_need_the_final_prompt_and_a_valid_size() -> None:
+    from trialpulse.nlp.llm_labeler import main
+
+    for argv, message in (
+        (["--sample", "0"], "1 to 10000"),
+        (["--sample", "10001"], "1 to 10000"),
+        (["--sample", "5", "--prompt", "reason_v1.md"], "final prompt only"),
+        (["--status", "--prompt", "reason_v1.md"], "final prompt only"),
+        (["--split", "test", "--prompt", "reason_v1.md"], "final prompt only"),
+    ):
+        with pytest.raises(SystemExit, match=message):
+            main(argv)
