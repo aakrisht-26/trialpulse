@@ -78,11 +78,11 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
-| 2 | Feasibility spike (go/no-go) | Draft done, awaiting review (parts a to e blocked) |
+| 2 | Feasibility spike (go/no-go) | Draft done, awaiting review (parts a to e blocked; Hugging Face access still pending on 2026-09-26) |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
-| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); sample 1,375 of 10,000 labeled, about 5.5 days left; distilled model provisional |
+| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
 | 7 | Point-in-time features | Not started |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23 (the real M0 run waits for Step 4) |
 | 9 | Baselines and Cox analysis | Not started |
@@ -421,7 +421,7 @@ Aakrisht decided not to label the gold set by hand. It now holds **reference lab
 
 **Finding for the prompt work.** A count-only check found that 2 test texts appear word for word in the label table of `docs/labeling_guide.md`, one in a definition and one in an example (generic phrases; the guide predates the sample). An earlier version of this line said both were example phrases; a per-section count on 2026-09-26 corrected it. The LLM prompt therefore cannot copy every guide example verbatim; the guard names any leak by hash prefix only. A scan of all 70 tracked text files with the guard found test texts in only two, both written before the sample existed: the guide (2) and one synthetic string in `tests/nlp/test_gold.py` (1). Neither is a prompt file, and none of the docs written in this run contains a test text.
 
-**Decisions made in this step (pending approval):**
+**Decisions made in this step (all eight approved by Aakrisht on 2026-09-26):**
 
 1. **Panel outcome definitions.** Every split goes to the adjudicator, as the protocol says. `majority` means the adjudicator kept the two-labeler label; `adjudicated` means it chose a label no two labelers gave. Alternative: `majority` for every 2-to-1 split whatever the adjudicator decided, and `adjudicated` only for three-way splits.
 2. **Panel composition.** All labelers are independent agents of one model (`claude-opus-5-5`) in separate contexts, 100 texts per agent, with different seeded orders. Alternative: mix Claude models for more diverse errors, at some cost in label quality.
@@ -485,7 +485,7 @@ Aakrisht approved the eight panel decisions and asked for two follow-ups, then f
 
 **Test isolation:** Claude saw only aggregate test numbers. Dev errors were read for prompt work, as ADR 0010 allows.
 
-**Decisions made in this step (pending approval):**
+**Decisions made in this step.** Review of 2026-09-26: the report listed seven decisions, and Aakrisht approved its 1 to 5 and 7, which are items 1 to 5 and 7 below (7 together with the move of scikit-learn to the runtime dependencies). The report's decision 6 is item 8. Item 6 was not in the report, so it is still pending.
 
 1. **httpx instead of the Groq SDK.** It calls Groq's OpenAI-compatible endpoint with the HTTP client the project already uses, so there is no new dependency, respx mocks it in tests, and the provider is configurable by base URL. Alternative: the Groq SDK (in the locked stack for Step 6).
 2. **Request settings:** reasoning effort medium, reasoning text not returned, at most 4,096 completion tokens, strict JSON schema. They were fixed before the first dev run and never changed.
@@ -494,7 +494,7 @@ Aakrisht approved the eight panel decisions and asked for two follow-ups, then f
 5. **Distillation design:** word 1- and 2-grams plus character 3- to 5-grams; grid C in {0.5, 2, 8, 32} and class weight in {none, balanced}; 5-fold cross-validation against the LLM labels. C = 32 was added after the first provisional fit put the best C at the top of the grid; C = 8 stayed best.
 6. **The sample is drawn from distinct texts with a known stop year** (24,534, minus the 400 gold texts), because the strata need a stop year. The final labeling covers all 35,198 early stops with a reason, stop year or not.
 7. **Outputs** go to `data/nlp/llm/` (sample, cache, labels), `data/nlp/models/`, `data/nlp/results/` (dev results and test predictions) and `data/nlp/reasons/`, all gitignored. Test results go to `docs/results/`, tracked in git, so the once-only rule survives a cleanup of `data/`.
-8. **v2's clarifications are not in the labeling guide.** They record how the reference labels settle cases the guide does not spell out. Adding them to the guide would change the labeling standard, so it is left to Aakrisht.
+8. **v2's clarifications stay in the prompt only (Aakrisht, 2026-09-26).** The labeling guide is unchanged: it is the standard the reference labels were made under. The clarifications are prompt-level guidance consistent with the guide, documented in `docs/reason_labeling.md`.
 
 **A bug found and fixed during the run:** the first sample run treated any 429 wait over 2 minutes as a daily limit. The labeler now reads the limit type the provider names (TPD, RPD, TPM, RPM), stops only on a daily one, and waits out per-minute limits up to 15 minutes. A probe between the runs made one tiny request (91 tokens) and printed only the limit type and counts. The resumed run stopped on a named TPD limit, so the result for the day did not change.
 
@@ -515,6 +515,36 @@ Aakrisht approved the eight panel decisions and asked for two follow-ups, then f
 - **The warehouse reasons table and the reasons addendum in `docs/eda.md`** (Step 6 build list) wait for the Step 3 warehouse and the Step 5 EDA, which do not exist yet.
 
 **CI duration (question from Aakrisht).** The run for `f288c78` took 10 min 6 s, but its job ran for 52 s (types 23 s, tests 16 s, against 15 s and 11 s in the previous run, with 44 more tests). The rest was on GitHub's side: about 4 minutes queued before a runner started the job, and about 5 minutes between the job finishing and the run being marked complete. GitHub's status page shows an incident with delayed processing on API requests from 10:11 UTC on 2026-09-23 to 04:55 UTC the next day, which covers that run. Nothing in the code or the workflow caused it, so nothing was changed.
+
+### Step 6 review and follow-ups (2026-09-26, later)
+
+**Aakrisht's verification on his machine (2026-09-26), all as expected:**
+
+- `uv sync` clean;
+- 271 tests passed;
+- `llm_labeler --status` showed 1,375 of 10,000 labeled, with no API calls;
+- the v2 dev score reproduces (macro-F1 0.980);
+- the provisional distilled model reproduces (dev macro-F1 0.732);
+- CI green on the latest commit;
+- `evaluate --test llm` correctly refused to score the test split a second time.
+
+**Fix: expected refusals print one line, not a traceback.** That refusal printed a full Python traceback. Every expected refusal in the Step 6 commands now prints one line to stderr and exits non-zero, with no traceback (`src/trialpulse/cli.py`):
+
+- `refused: <reason>`, exit code 2 (the Step 8 test lock's code): a test split already scored, a provisional model sent to test scoring, test predictions from another model, an uncommitted or non-final prompt, a bad `--sample` size, a missing key or input, a gold text in training, and panel files that break the protocol;
+- `stopped: <reason>`, exit code 4: a run stopped by a provider limit or outage (the daily token limit, a long rate limit, or network or server errors that outlasted the retries), after it saves its labels and prints its summary. A client error such as a wrong key or model is a refusal (exit code 2), because trying again later will not fix it.
+
+The domain errors subclass both the refusal and their former built-in type, so library callers are unaffected; any other exception is a bug and keeps its traceback. `llm_labeler --status` now refuses when there is no LLM sample yet, instead of building one from the network.
+
+**Tests.** Each case is run through the real entry point and checked for one stderr line, the exit code and no traceback:
+
+- `tests/nlp/test_refusals.py`: a test split already scored, a provisional model (for `distill --predict-test` and `evaluate --test distilled`), test predictions from another model, an uncommitted prompt, the daily limit (exit code 4, with the summary still printed and the labels saved), a client error (401, exit code 2), a missing key, `--status` without a sample (no network call), a gold text in training, no labels yet, a panel file with a label outside the taxonomy, and missing inputs (model, dev labels, gold sample, panel files);
+- `tests/nlp/test_llm_labeler.py`: a non-final prompt and a bad `--sample` size.
+
+Checked in PowerShell on the real repo: `evaluate --test llm` and `distill --predict-test` each print one `refused:` line and exit with code 2. An independent two-reviewer check after the first version found the gaps fixed here (client errors exiting 4, several missing-input tracebacks, `--status` reaching the network, and an overstated coverage line). The suite has 284 tests.
+
+**Daily sample labeling.** Aakrisht runs `uv run python -m trialpulse.nlp.llm_labeler --sample 10000` once a day until the sample reaches 10,000. Claude does not run it.
+
+**Hugging Face access (checked 2026-09-26): still pending.** One read-only call (`HfApi.auth_check` on `brbk/clinical_trials_history`, the token never printed) raised `GatedRepoError`. Step 2 parts a to d were not run.
 
 ### Step 8: Evaluation harness and test lock
 
