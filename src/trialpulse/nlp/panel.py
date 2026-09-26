@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from trialpulse.config import load_project_config
+from trialpulse.nlp.evaluate import cohen_kappa
 from trialpulse.nlp.gold import (
     LABELS_PATH,
     NLP_DIR,
@@ -301,16 +302,6 @@ def reference_rows(
             "panel_outcome": outcome,
         }
     return rows
-
-
-def cohen_kappa(a: Sequence[str], b: Sequence[str]) -> float:
-    if not a or len(a) != len(b):
-        raise ValueError("kappa needs two equal-length, non-empty label sequences")
-    n = len(a)
-    observed = sum(x == y for x, y in zip(a, b, strict=True)) / n
-    ca, cb = Counter(a), Counter(b)
-    expected = sum(ca[k] * cb[k] for k in ca) / n**2
-    return 1.0 if expected == 1 else (observed - expected) / (1 - expected)
 
 
 def quoted_verbatim(deciding_words: str, text: str) -> bool:
