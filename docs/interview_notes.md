@@ -61,3 +61,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "Your gold labels came from a model. How do you know your LLM results mean anything?"
 
 **Short answer.** I describe them honestly as reference labels from an adjudicated model panel, not human labels, so the metric measures agreement with a documented, auditable process. The panel ran under strict isolation (audited from the agent transcripts), every label has quoted evidence, splits were adjudicated rather than voted, and a consistency relabel measured stability. The graded model comes from a different family, so it cannot score well just by sharing the panel's biases, and the test split was frozen and committed before any prompt work.
+
+## Step 6 (continued): LLM labels and the distilled classifier
+
+**What was built.** An LLM labeler for why_stopped texts (openai/gpt-oss-120b on Groq, temperature 0, strict JSON-schema output validated in code, batches of 25, every answer cached by request hash so runs resume within the free tier's daily limits), a scoring module (accuracy, macro-F1 with a bootstrap interval, kappa, per-label F1, confusion matrix), and a distilled TF-IDF plus logistic regression classifier trained on the LLM's labels of a 10,000-text sample. Guards run before any call: the rendered prompt must contain no gold-test text, the model must come from a different family than the reference panel, and test items are labeled only with a committed prompt. Each model is scored on test once.
+
+**Key decision and why.** The prompt was tuned on the 100 dev items only, with the selection rule declared first, and frozen in a commit before any test item was labeled. Dev macro-F1 went from 0.858 to 0.980 in two iterations, but test macro-F1 was 0.842: the gap is the optimism of tuning on the same 100 items, which is exactly why the test split stayed untouched. The production model is the distilled classifier, not the LLM, because it is free, fast, deterministic and runs offline.
+
+**Rejected alternative and why not.** Adding few-shot examples copied from the dev items. They would have made the dev score meaningless (the answers would be in the prompt), so v2 states general rules drawn from the dev errors instead, and the third allowed iteration was not used because the two remaining dev errors were single hard cases.
+
+**Likely interview question.** "How do you know your prompt engineering did not overfit?"
+
+**Short answer.** I declared the rule for choosing the prompt before running it, iterated only on a 100-item dev split, froze the prompt in git, and then scored once on 300 held-out items that were never opened during prompt work, with a bootstrap interval. Dev said 0.98 and test said 0.84: the held-out number is the one reported, and the gap itself shows why the split matters.

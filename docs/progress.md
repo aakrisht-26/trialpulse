@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access). **Step 6** is in progress (reference labels from an adjudicated model panel committed; LLM labeling waits for GROQ_API_KEY). **Step 8** is approved.
+Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access). **Step 6** is in progress (LLM test result in: macro-F1 0.842; the 10,000-text LLM sample is 1,375 labeled and needs about 5.5 more days; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts 
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
-| 6 | Why trials stop (NLP) | In progress: reference labels from an adjudicated model panel committed (ADR 0010); LLM labeling waits for GROQ_API_KEY |
+| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); sample 1,375 of 10,000 labeled, about 5.5 days left; distilled model provisional |
 | 7 | Point-in-time features | Not started |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23 (the real M0 run waits for Step 4) |
 | 9 | Baselines and Cox analysis | Not started |
@@ -259,7 +259,7 @@ Built during the overnight run under the extension's gate. The gate was not met 
 
 ### Step 6 (partial): Why trials stop
 
-Status: **in progress**. The gold set holds reference labels from an adjudicated model panel (ADR 0010), committed before any prompt work. LLM labeling and distillation wait for GROQ_API_KEY.
+Status: **in progress**. The gold set holds reference labels from an adjudicated model panel (ADR 0010). The LLM is scored on test; the LLM sample is partly labeled (daily token limit), and the distilled model is provisional until it is complete.
 
 **Built:**
 
@@ -290,9 +290,9 @@ Status: **in progress**. The gold set holds reference labels from an adjudicated
 
 | Criterion | Result |
 | --- | --- |
-| Gold-test results for the LLM and the distilled model | Not started: the reference labels are committed; needs GROQ_API_KEY (not set) |
-| LLM macro-F1 >= 0.80 on gold-test | Not started |
-| Gold-test never used for tuning | Enforced: test labels committed before any prompt work, and a test fails if a test text appears in a prompt file |
+| Gold-test results for the LLM and the distilled model | LLM: met (accuracy 0.847, macro-F1 0.842 with CI 0.791 to 0.883, kappa 0.817, per-label F1 and confusion matrix in `docs/reason_labeling.md`). Distilled model: pending the full 10,000 labels |
+| LLM macro-F1 >= 0.80 on gold-test | Met on the point estimate (0.842); the 95% interval's lower end is 0.791 |
+| Gold-test never used for tuning | Met: prompt work used dev only; the final prompt was committed (`16ba93f`) before any test item was labeled; each model is scored on test once |
 | The 400-text gold set labeled | Met: 400 reference labels from an adjudicated model panel (ADR 0010), `labels/gold_labels.csv` |
 
 **Decisions from the review (Aakrisht, 2026-09-23):**
@@ -445,7 +445,76 @@ Aakrisht decided not to label the gold set by hand. It now holds **reference lab
 
 The labels file is byte-identical after the fixes.
 
-**Recorded for later in Step 6:** the LLM labeler builds its prompt only from `src/trialpulse/nlp/prompts/` and dev items, calls `check_graded_model` on its model id, and a test runs `prompt_leaks` on the rendered prompt against the committed test hashes. The prompt must not paste the labeling guide whole.
+**Recorded for later in Step 6:** the LLM labeler builds its prompt only from `src/trialpulse/nlp/prompts/` and dev items, calls `check_graded_model` on its model id, and a test runs `prompt_leaks` on the rendered prompt against the committed test hashes. The prompt must not paste the labeling guide whole. Done on 2026-09-26 (below).
+
+### Step 6 LLM labels and distillation (2026-09-26)
+
+Aakrisht approved the eight panel decisions and asked for two follow-ups, then for the rest of Step 6. The full results are in `docs/reason_labeling.md`.
+
+**Follow-ups:**
+
+- ADR 0010 and `docs/reference_panel.md` now state that all panel members are the same model, so panel agreement and the consistency relabel measure the model's consistency with itself and are an upper bound on label reliability.
+- `data/nlp/dev_suggestions.csv` is deleted. It was sent to the Windows Recycle Bin rather than erased, so it can be restored.
+
+**Built:**
+
+- `src/trialpulse/nlp/llm_labeler.py`: labels texts with `openai/gpt-oss-120b` on Groq's OpenAI-compatible API.
+  - Temperature 0, strict JSON-schema output validated again in code, 25 texts per request.
+  - Every valid answer is cached under a hash of the full request, so reruns make no repeat call and resume after a stop.
+  - Per-minute budgets are read from the rate-limit headers; a daily limit (named by the provider as TPD or RPD) stops the run cleanly.
+  - Before any call it checks the rendered prompt for gold-test texts (`prompt_leaks`), the model against the panel's family, and, for test items, that the final prompt is committed and unchanged.
+  - It builds the 10,000-text sample: stratified by status and stop year, all 400 gold texts excluded after normalization, stored in a seeded random order.
+- `src/trialpulse/nlp/evaluate.py`: accuracy, macro-F1 with a bootstrap interval (1,000 resamples), Cohen's kappa, per-label precision, recall and F1, and the confusion matrix. A second test scoring of the same model is refused, and test results print aggregate numbers only.
+- `src/trialpulse/nlp/distill.py`: TF-IDF plus logistic regression. C and class weighting are chosen by 5-fold cross-validation on the LLM-labeled training texts only, and a gold text in training is refused. It also labels every early stop, writing CSV and Parquet.
+- `src/trialpulse/nlp/prompts/reason_v1.md` and `reason_v2.md` (final, commit `16ba93f`).
+- `pyproject.toml`: scikit-learn moves to the runtime dependencies (locked stack).
+- `docs/reason_labeling.md`: the results.
+- `docs/results/test_llm.json`: the LLM's single test result (aggregate only), tracked in git.
+- Tests: `tests/nlp/test_llm_labeler.py` (26), `tests/nlp/test_evaluate.py` (13), `tests/nlp/test_distill.py` (7). The suite has 271 tests.
+
+**Results:**
+
+| Step | Result |
+| --- | --- |
+| Prompt v1 on dev | macro-F1 0.858 (95% CI 0.718 to 0.925), accuracy 0.860, kappa 0.825 |
+| Prompt v2 on dev | macro-F1 0.980 (0.945 to 1.000), accuracy 0.980, kappa 0.975; final by the declared rule |
+| **LLM on test (once)** | **macro-F1 0.842 (0.791 to 0.883), accuracy 0.847, kappa 0.817. The point estimate meets 0.80; the interval's lower end is 0.791.** |
+| LLM sample | 1,375 of 10,000 labeled, 0 failures; about 129 tokens per text; the daily token limit stopped the run |
+| Distilled model (provisional, 1,375 labels) | cross-validated macro-F1 0.748 against the LLM labels; dev macro-F1 0.732 (0.561 to 0.842); not scored on test |
+| All early stops | 35,198 labeled with the provisional model: 27,128 operational, 3,076 scientific, 4,994 other |
+
+**Test isolation:** Claude saw only aggregate test numbers. Dev errors were read for prompt work, as ADR 0010 allows.
+
+**Decisions made in this step (pending approval):**
+
+1. **httpx instead of the Groq SDK.** It calls Groq's OpenAI-compatible endpoint with the HTTP client the project already uses, so there is no new dependency, respx mocks it in tests, and the provider is configurable by base URL. Alternative: the Groq SDK (in the locked stack for Step 6).
+2. **Request settings:** reasoning effort medium, reasoning text not returned, at most 4,096 completion tokens, strict JSON schema. They were fixed before the first dev run and never changed.
+3. **Two prompt iterations, not three.** The two dev errors left after v2 are single hard cases, and a rule for them would fit the dev items. v2 is final by the rule declared before the first run (highest dev macro-F1, ties to the earlier version).
+4. **The distilled model's single test scoring waits for the full 10,000 labels.** Scoring the provisional model now would spend the one test look on a model that will be replaced. The code enforces it (see the review below). The provisional model labeled all 35,198 early stops to prove the pipeline; those rows name `n=1375` in their `model` column and will be replaced.
+5. **Distillation design:** word 1- and 2-grams plus character 3- to 5-grams; grid C in {0.5, 2, 8, 32} and class weight in {none, balanced}; 5-fold cross-validation against the LLM labels. C = 32 was added after the first provisional fit put the best C at the top of the grid; C = 8 stayed best.
+6. **The sample is drawn from distinct texts with a known stop year** (24,534, minus the 400 gold texts), because the strata need a stop year. The final labeling covers all 35,198 early stops with a reason, stop year or not.
+7. **Outputs** go to `data/nlp/llm/` (sample, cache, labels), `data/nlp/models/`, `data/nlp/results/` (dev results and test predictions) and `data/nlp/reasons/`, all gitignored. Test results go to `docs/results/`, tracked in git, so the once-only rule survives a cleanup of `data/`.
+8. **v2's clarifications are not in the labeling guide.** They record how the reference labels settle cases the guide does not spell out. Adding them to the guide would change the labeling standard, so it is left to Aakrisht.
+
+**A bug found and fixed during the run:** the first sample run treated any 429 wait over 2 minutes as a daily limit. The labeler now reads the limit type the provider names (TPD, RPD, TPM, RPM), stops only on a daily one, and waits out per-minute limits up to 15 minutes. A probe between the runs made one tiny request (91 tokens) and printed only the limit type and counts. The resumed run stopped on a named TPD limit, so the result for the day did not change.
+
+**Internal review.** Three independent reviewers checked the code and docs before the commit, without access to `data/`, `labels/` or `.env`. Their confirmed findings are fixed:
+
+- **Split batches were invisible on a rerun.** A batch split after invalid answers was cached only under its halves, so a rerun sent the full batch again and the status count missed it. A split now leaves a marker under the full batch's key. No batch split in today's run (all 55 were full 25-text batches), so no data changed.
+- **The key could reach a traceback.** A key with a space or control character would be quoted in the HTTP library's error. The key is now stripped and checked, and network and server errors are re-raised without the original message.
+- **A provider 400 aborted the run.** Groq's `json_validate_failed` (for example, a completion that hits the token cap) is now treated as an invalid answer, so the batch is retried and then split. Any other provider error stops the run cleanly and keeps every label so far.
+- **Sample-size edge cases.** `--sample 0` passed the final-prompt check, a first `--sample N` with a small N built a small sample, and a small N overwrote the teacher labels. Now N must be 1 to 10,000, the sample file is always the full 10,000, and the labels file always holds every sample text labeled so far.
+- **The distilled model's one test scoring could be misspent.** Stale test predictions could be scored under a newer model's metadata, and nothing stopped a provisional model from using the single scoring. `--predict-test` now records the model's file hash and training size, and both it and `evaluate --test distilled` refuse a provisional model or a mismatch.
+- **The once-only rule rested on a gitignored file.** Test results are now saved in `docs/results/` and committed, and a second scoring is refused if the file exists or ever existed in git history. The LLM's result moved there.
+- **Smaller fixes.** `confidence` is numeric in the Parquet file. The printed interval names the configured level. `distill` with no flag trains, so the CLAUDE.md Step 6 verify command works. In the docs: business precision is 0.848 (it had been rounded twice), efficacy (not "scientific labels") is the weakest label, and v2's rules are described as drawn from the dev errors, not from the guide.
+
+**Blocked or deferred:**
+
+- **8,625 sample texts remain**, about 5.5 more days at the free tier's 200,000 tokens per day. Run `uv run python -m trialpulse.nlp.llm_labeler --sample 10000` once a day; it resumes from the cache.
+- **After the sample is complete:** train the final distilled model, score it once on test, and relabel all 35,198 early stops (commands in `docs/reason_labeling.md`).
+- **The warehouse reasons table and the reasons addendum in `docs/eda.md`** (Step 6 build list) wait for the Step 3 warehouse and the Step 5 EDA, which do not exist yet.
+
+**CI duration (question from Aakrisht).** The run for `f288c78` took 10 min 6 s, but its job ran for 52 s (types 23 s, tests 16 s, against 15 s and 11 s in the previous run, with 44 more tests). The rest was on GitHub's side: about 4 minutes queued before a runner started the job, and about 5 minutes between the job finishing and the run being marked complete. GitHub's status page shows an incident with delayed processing on API requests from 10:11 UTC on 2026-09-23 to 04:55 UTC the next day, which covers that run. Nothing in the code or the workflow caused it, so nothing was changed.
 
 ### Step 8: Evaluation harness and test lock
 

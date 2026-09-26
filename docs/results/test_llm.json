@@ -1,0 +1,163 @@
+{
+  "model": "llm",
+  "split": "test",
+  "scored_at": "2026-09-26T10:59:03+00:00",
+  "prompt": "reason_v2.md",
+  "n": 300,
+  "accuracy": 0.8467,
+  "macro_f1": 0.8423,
+  "macro_f1_ci": [
+    0.791,
+    0.8827
+  ],
+  "kappa": 0.8169,
+  "per_label": {
+    "accrual": {
+      "precision": 0.8933,
+      "recall": 0.9306,
+      "f1": 0.9116,
+      "support": 72
+    },
+    "business": {
+      "precision": 0.8485,
+      "recall": 0.875,
+      "f1": 0.8615,
+      "support": 32
+    },
+    "funding": {
+      "precision": 0.8519,
+      "recall": 0.8519,
+      "f1": 0.8519,
+      "support": 27
+    },
+    "administrative": {
+      "precision": 0.7736,
+      "recall": 0.8367,
+      "f1": 0.8039,
+      "support": 49
+    },
+    "covid19": {
+      "precision": 0.9048,
+      "recall": 0.8636,
+      "f1": 0.8837,
+      "support": 22
+    },
+    "safety": {
+      "precision": 0.8182,
+      "recall": 0.9,
+      "f1": 0.8571,
+      "support": 10
+    },
+    "efficacy": {
+      "precision": 0.7391,
+      "recall": 0.7727,
+      "f1": 0.7556,
+      "support": 22
+    },
+    "other": {
+      "precision": 0.8772,
+      "recall": 0.7576,
+      "f1": 0.813,
+      "support": 66
+    }
+  },
+  "confusion": {
+    "labels": [
+      "accrual",
+      "business",
+      "funding",
+      "administrative",
+      "covid19",
+      "safety",
+      "efficacy",
+      "other"
+    ],
+    "matrix": [
+      [
+        67,
+        0,
+        0,
+        2,
+        0,
+        0,
+        1,
+        2
+      ],
+      [
+        0,
+        28,
+        1,
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      [
+        0,
+        0,
+        23,
+        3,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        2,
+        2,
+        2,
+        41,
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        2,
+        0,
+        1,
+        0,
+        19,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        9,
+        1,
+        0
+      ],
+      [
+        1,
+        0,
+        0,
+        0,
+        1,
+        2,
+        17,
+        1
+      ],
+      [
+        3,
+        3,
+        0,
+        7,
+        0,
+        0,
+        3,
+        50
+      ]
+    ]
+  },
+  "bootstrap": {
+    "resamples": 1000,
+    "confidence": 0.95,
+    "seed": 42
+  }
+}
