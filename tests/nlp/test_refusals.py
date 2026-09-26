@@ -67,6 +67,7 @@ def test_a_provisional_model_is_refused_for_test_scoring(
     model = tmp_path / "distilled.joblib"
     _provisional_model(model)
     monkeypatch.setattr(distill, "MODEL_PATH", model)
+    monkeypatch.setattr(distill, "SAMPLE_PATH", tmp_path / "no_gold_sample.csv")  # as in CI
     monkeypatch.setattr(evaluate, "TEST_RESULTS_DIR", tmp_path / "results")
 
     assert run(distill.main, ["--predict-test"]) == 2
@@ -142,6 +143,7 @@ def test_missing_inputs_are_refused(
     assert "no trained model" in _one_line(capsys, "refused")
 
     monkeypatch.setattr(llm_labeler, "LABELS_DIR", tmp_path / "labels")
+    monkeypatch.setattr(evaluate, "SAMPLE_PATH", tmp_path / "no_gold_sample.csv")  # as in CI
     assert run(evaluate.main, ["--dev", "reason_v9.md"]) == 2
     assert "no dev labels for reason_v9.md" in _one_line(capsys, "refused")
 
@@ -270,5 +272,8 @@ def test_scoring_on_dev_without_the_gold_sample_is_refused(
     assert "no gold sample" in _one_line(capsys, "refused")
 
     monkeypatch.setattr(evaluate, "SAMPLE_PATH", tmp_path / "no_gold_sample.csv")
+    labels = tmp_path / "labels"
+    evaluate.write_predictions(labels / "dev_reason_v2.csv", {})  # dev labels exist
+    monkeypatch.setattr(llm_labeler, "LABELS_DIR", labels)
     assert run(evaluate.main, ["--dev", "reason_v2.md"]) == 2
     assert "no gold sample" in _one_line(capsys, "refused")

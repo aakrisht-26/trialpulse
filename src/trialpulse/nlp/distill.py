@@ -282,14 +282,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not MODEL_PATH.is_file():
         raise RefusedError("no trained model; run trialpulse.nlp.distill --train first")
-    if (args.dev or args.predict_test) and not SAMPLE_PATH.is_file():
-        raise RefusedError(
-            f"no gold sample at {SAMPLE_PATH}; build it with trialpulse.nlp.gold --build"
-        )
     pipeline = load_model(MODEL_PATH)
     meta = load_metadata(MODEL_PATH)
     name = f"tfidf-logreg n={meta['training_texts']} trained {meta['trained_at']}"
     if args.dev:
+        if not SAMPLE_PATH.is_file():
+            raise RefusedError(
+                f"no gold sample at {SAMPLE_PATH}; build it with trialpulse.nlp.gold --build"
+            )
         items = [i for i in load_sample(SAMPLE_PATH) if i.split == "dev"]
         predicted, _ = predict(pipeline, [i.why_stopped for i in items])
         reference = read_reference(LABELS_PATH, "dev")
@@ -302,7 +302,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.predict_test:
         identity = model_identity(MODEL_PATH)
-        check_final(identity)
+        check_final(identity)  # a provisional model is refused before any input is checked
+        if not SAMPLE_PATH.is_file():
+            raise RefusedError(
+                f"no gold sample at {SAMPLE_PATH}; build it with trialpulse.nlp.gold --build"
+            )
         items = [i for i in load_sample(SAMPLE_PATH) if i.split == "test"]
         predicted, _ = predict(pipeline, [i.why_stopped for i in items])
         write_predictions(
