@@ -35,6 +35,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
+from trialpulse.cli import RefusedError, run
 from trialpulse.config import load_project_config
 from trialpulse.nlp.evaluate import cohen_kappa
 from trialpulse.nlp.gold import (
@@ -60,6 +61,14 @@ KEY_COLUMNS = ("panel_id", "nct_id", "text_sha256", "split")
 VOTE_COLUMNS = ("panel_id", "labeler", "label", "deciding_words", "justification")
 ADJUDICATION_COLUMNS = ("panel_id", "adjudicator", "label", "rationale")
 FRAGMENT_SEPARATOR = " | "  # between deciding-word fragments quoted from one text
+
+
+class PanelError(RefusedError, ValueError):
+    """Panel files that break the protocol (ADR 0010): an expected refusal."""
+
+
+class SameFamilyError(RefusedError, ValueError):
+    """A graded model from the panel's model family (ADR 0010): an expected refusal."""
 
 
 @dataclass(frozen=True)
@@ -95,7 +104,7 @@ def check_graded_model(model_id: str) -> str:
     """Refuse a model from the panel's family: a model graded against the reference labels
     must come from a different family (ADR 0010)."""
     if any(marker in model_id.lower() for marker in PANEL_FAMILY_MARKERS):
-        raise ValueError(
+        raise SameFamilyError(
             f"{model_id!r} is from the panel's model family ({PANEL_FAMILY}); a model graded "
             "against the reference labels must come from a different family"
         )
@@ -144,7 +153,7 @@ def _read_csv(path: Path, columns: Sequence[str]) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         if tuple(reader.fieldnames or ()) != tuple(columns):
-            raise ValueError(f"{path.name}: expected columns {columns}, got {reader.fieldnames}")
+            raise PanelError(f"{path.name}: expected columns {columns}, got {reader.fieldnames}")
         return list(reader)
 
 
@@ -165,7 +174,7 @@ def prepare(items: Sequence[GoldItem], panel_dir: Path, seed: int) -> dict[str, 
     ]
     key_path = panel_dir / "key.csv"
     if key_path.is_file() and _read_csv(key_path, KEY_COLUMNS) != key_rows:
-        raise ValueError(f"{key_path} exists and differs from this sample; votes may refer to it")
+        raise PanelError(f"{key_path} exists and differs from this sample; votes may refer to it")
     _write_csv(key_path, KEY_COLUMNS, key_rows)
     files = labeler_inputs(assigned, BATCH_SIZE, N_LABELERS, seed)
     for name, rows in files.items():
@@ -198,7 +207,7 @@ def read_adjudications(path: Path) -> dict[str, Adjudication]:
     decisions: dict[str, Adjudication] = {}
     for row in _read_csv(path, ADJUDICATION_COLUMNS):
         if row["panel_id"] in decisions:
-            raise ValueError(f"two adjudications for {row['panel_id']}")
+            raise PanelError(f"two adjudications for {row['panel_id']}")
         decisions[row["panel_id"]] = Adjudication(**row)
     return decisions
 
@@ -209,11 +218,11 @@ def check_votes(votes: Mapping[str, Sequence[Vote]], ids: Iterable[str], n_label
     expected = set(ids)
     unknown = set(votes) - expected
     if unknown:
-        raise ValueError(f"votes for unknown panel ids: {sorted(unknown)[:5]}")
+        raise PanelError(f"votes for unknown panel ids: {sorted(unknown)[:5]}")
     for pid in sorted(expected):
         cast = votes.get(pid, [])
         if len(cast) != n_labelers or len({v.labeler for v in cast}) != n_labelers:
-            raise ValueError(f"{pid} needs {n_labelers} votes from distinct labelers")
+            raise PanelError(f"{pid} needs {n_labelers} votes from distinct labelers")
         for v in cast:
             validate_label(v.label)
 
@@ -228,10 +237,10 @@ def resolve(labels: Sequence[str], adjudicated: str | None) -> tuple[str, str]:
     top, n = counts.most_common(1)[0]
     if n == len(labels):
         if adjudicated is not None:
-            raise ValueError("a unanimous text is not adjudicated")
+            raise PanelError("a unanimous text is not adjudicated")
         return top, "unanimous"
     if adjudicated is None:
-        raise ValueError("a split needs an adjudication")
+        raise PanelError("a split needs an adjudication")
     validate_label(adjudicated)
     return adjudicated, "majority" if 2 * counts[adjudicated] > len(labels) else "adjudicated"
 
@@ -280,12 +289,12 @@ def reference_rows(
     check_votes(votes, key, N_LABELERS)
     unknown = set(decisions) - set(key)
     if unknown:
-        raise ValueError(f"adjudications for unknown panel ids: {sorted(unknown)[:5]}")
+        raise PanelError(f"adjudications for unknown panel ids: {sorted(unknown)[:5]}")
     rows: dict[tuple[str, str], dict[str, str]] = {}
     for pid, entry in key.items():
         decision = decisions.get(pid)
         if decision is not None and decision.adjudicator in {v.labeler for v in votes[pid]}:
-            raise ValueError(f"{pid} was adjudicated by one of its labelers")
+            raise PanelError(f"{pid} was adjudicated by one of its labelers")
         label, outcome = resolve(
             [v.label for v in votes[pid]], decision.label if decision else None
         )
@@ -323,16 +332,16 @@ def check_consistency(
     """The consistency relabels cover exactly the seeded sample, one valid vote per text,
     each by a fresh labeler: not one of the text's labelers and not its adjudicator."""
     if set(consistency) != set(expected_ids):
-        raise ValueError("consistency relabels do not match the seeded consistency sample")
+        raise PanelError("consistency relabels do not match the seeded consistency sample")
     for pid, cast in consistency.items():
         if len(cast) != 1:
-            raise ValueError(f"{pid} needs exactly one consistency relabel")
+            raise PanelError(f"{pid} needs exactly one consistency relabel")
         validate_label(cast[0].label)
         earlier = {v.labeler for v in votes[pid]}
         if pid in decisions:
             earlier.add(decisions[pid].adjudicator)
         if cast[0].labeler in earlier:
-            raise ValueError(f"{pid} was relabeled by one of its panel members, not a fresh one")
+            raise PanelError(f"{pid} was relabeled by one of its panel members, not a fresh one")
 
 
 def _share(part: int, whole: int) -> float:
@@ -477,6 +486,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     seed = load_project_config().seeds.default
     panel_dir: Path = args.panel_dir
 
+    needed = [args.sample] if args.prepare else [args.sample, panel_dir / "key.csv"]
+    if not args.prepare:
+        needed.append(panel_dir / "votes.csv")
+    if args.finalize or args.report:
+        needed.append(panel_dir / "run.json")
+    if args.report:
+        needed.append(panel_dir / "consistency.csv")
+    missing = [str(p) for p in needed if not Path(p).is_file()]
+    if missing:
+        raise RefusedError(f"missing panel input: {', '.join(missing)}")
     if args.prepare:
         print(json.dumps(prepare(load_sample(args.sample), panel_dir, seed), indent=2))
         return 0
@@ -498,8 +517,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     adjudications = panel_dir / "adjudications.csv"
     decisions = read_adjudications(adjudications) if adjudications.is_file() else {}
-    run = json.loads((panel_dir / "run.json").read_text(encoding="utf-8"))
-    rows = reference_rows(key, items, votes, decisions, run["labeled_at"])
+    run_record = json.loads((panel_dir / "run.json").read_text(encoding="utf-8"))
+    rows = reference_rows(key, items, votes, decisions, run_record["labeled_at"])
     if args.finalize:
         write_labels(args.labels, rows)
         print(f"wrote {len(rows)} reference labels to {args.labels}")
@@ -520,4 +539,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run(main))

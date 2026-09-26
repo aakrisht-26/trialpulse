@@ -15,6 +15,10 @@ measures agreement with that panel, not with human judgment.
     uv run python -m trialpulse.nlp.evaluate --dev reason_v1
     uv run python -m trialpulse.nlp.evaluate --test llm
     uv run python -m trialpulse.nlp.evaluate --test distilled
+
+Expected refusals (a model already scored on test, a provisional model, predictions from
+another model, a missing or incomplete input) print one "refused:" line and exit with
+code 2.
 """
 
 import argparse
@@ -29,6 +33,7 @@ from typing import Any
 
 import numpy as np
 
+from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.nlp.gold import LABELS_PATH, NLP_DIR, SAMPLE_PATH, load_sample
 from trialpulse.nlp.taxonomy import LABELS, validate_label
@@ -37,6 +42,14 @@ RESULTS_DIR = NLP_DIR / "results"  # dev results (gitignored)
 TEST_RESULTS_DIR = REPO_ROOT / "docs" / "results"  # test results, tracked in git
 PREDICTION_COLUMNS = ("nct_id", "text_sha256", "label")
 Key = tuple[str, str]
+
+
+class AlreadyScoredError(RefusedError, FileExistsError):
+    pass
+
+
+class IncompleteLabelsError(RefusedError, ValueError):
+    pass
 
 
 def cohen_kappa(a: Sequence[str], b: Sequence[str]) -> float:
@@ -143,7 +156,7 @@ def aligned(
     """Reference and predicted labels in key order. Every reference item must be predicted."""
     missing = set(reference) - set(predictions)
     if missing:
-        raise ValueError(f"{len(missing)} reference items have no prediction")
+        raise IncompleteLabelsError(f"{len(missing)} reference items have no prediction")
     keys = sorted(reference)
     return [reference[k] for k in keys], [predictions[k] for k in keys]
 
@@ -161,8 +174,7 @@ def score_test_once(
     """Score one model on the test split and save the result. A model already scored on the
     test split is refused, so each model gets exactly one test scoring."""
     path = results_dir / f"test_{name}.json"
-    if path.exists() or _in_git_history(path):
-        raise FileExistsError(f"{name} was already scored on the test split ({path})")
+    ensure_not_scored(path, name)
     ref, pred = aligned(reference, predictions)
     result = {
         "model": name,
@@ -174,6 +186,11 @@ def score_test_once(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
+
+
+def ensure_not_scored(path: Path, name: str) -> None:
+    if path.exists() or _in_git_history(path):
+        raise AlreadyScoredError(f"{name} was already scored on the test split ({path})")
 
 
 def _in_git_history(path: Path) -> bool:
@@ -231,7 +248,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dev:
         stem = prompt_stem(args.dev)
         reference = read_reference(LABELS_PATH, "dev")
-        predictions = read_predictions(LABELS_DIR / f"dev_{stem}.csv")
+        dev_labels = LABELS_DIR / f"dev_{stem}.csv"
+        if not dev_labels.is_file():
+            raise RefusedError(
+                f"no dev labels for {args.dev}; run trialpulse.nlp.llm_labeler --split dev "
+                f"--prompt {args.dev} first"
+            )
+        predictions = read_predictions(dev_labels)
         ref, pred = aligned(reference, predictions)
         result = score(ref, pred, *boot)
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -242,10 +265,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"- reference {e['reference']}, predicted {e['predicted']}: {e['text']}")
         return 0
 
+    ensure_not_scored(TEST_RESULTS_DIR / f"test_{args.test}.json", args.test)
     reference = read_reference(LABELS_PATH, "test")
     if args.test == "llm":
-        stem = prompt_stem(FINAL_PROMPT)
-        predictions = read_predictions(LABELS_DIR / f"test_{stem}.csv")
+        test_labels = LABELS_DIR / f"test_{prompt_stem(FINAL_PROMPT)}.csv"
+        if not test_labels.is_file():
+            raise RefusedError(
+                "no LLM test labels; run trialpulse.nlp.llm_labeler --split test first"
+            )
+        predictions = read_predictions(test_labels)
         metadata: dict[str, Any] = {
             "prompt": FINAL_PROMPT,
             "prompt_commit": committed_prompt(FINAL_PROMPT),
@@ -260,11 +288,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_identity,
         )
 
+        if not MODEL_PATH.is_file():
+            raise RefusedError("no trained model; run trialpulse.nlp.distill --train first")
         identity = model_identity(MODEL_PATH)
         check_final(identity)
+        if not TEST_PREDICTIONS_MODEL.is_file():
+            raise RefusedError("no test predictions; run trialpulse.nlp.distill --predict-test")
         predicted_by = json.loads(TEST_PREDICTIONS_MODEL.read_text(encoding="utf-8"))
         if predicted_by != identity:
-            raise ValueError("the test predictions come from another model; rerun --predict-test")
+            raise RefusedError(
+                "the test predictions come from another model; rerun distill --predict-test"
+            )
         predictions = read_predictions(TEST_PREDICTIONS_PATH)
         metadata = {"model_identity": identity, "model_metadata": load_metadata(MODEL_PATH)}
     result = score_test_once(args.test, reference, predictions, TEST_RESULTS_DIR, metadata, *boot)
@@ -273,4 +307,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run(main))

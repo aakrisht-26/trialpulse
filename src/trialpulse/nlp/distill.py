@@ -15,6 +15,9 @@ production, and it labels every early stop in the cohort.
     uv run python -m trialpulse.nlp.distill --dev
     uv run python -m trialpulse.nlp.distill --predict-test
     uv run python -m trialpulse.nlp.distill --label-all
+
+Expected refusals (a provisional model sent to test prediction, a missing model or input, a
+gold text in the training set) print one "refused:" line and exit with code 2.
 """
 
 import argparse
@@ -38,6 +41,7 @@ from sklearn.metrics import f1_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import FeatureUnion, Pipeline
 
+from trialpulse.cli import RefusedError, run
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.nlp.evaluate import (
     read_predictions,
@@ -77,6 +81,14 @@ FOLDS = 5
 Key = tuple[str, str]
 
 
+class ProvisionalModelError(RefusedError, ValueError):
+    pass
+
+
+class GoldInTrainingError(RefusedError, ValueError):
+    pass
+
+
 def build_pipeline(c: float, class_weight: str | None, seed: int) -> Pipeline:
     features = FeatureUnion(
         [
@@ -100,7 +112,7 @@ def training_set(
     rows = [(i, labels[i.key]) for i in items if i.key in labels]
     leaked = [i for i, _ in rows if i.text_sha256 in gold]
     if leaked:
-        raise ValueError(f"{len(leaked)} gold texts are in the distillation training set")
+        raise GoldInTrainingError(f"{len(leaked)} gold texts are in the distillation training set")
     return [normalize_text(i.why_stopped) for i, _ in rows], [validate_label(y) for _, y in rows]
 
 
@@ -166,7 +178,7 @@ def check_final(identity: Mapping[str, Any]) -> None:
     """The one test scoring is kept for the model trained on the whole LLM sample. A
     provisional model, trained on part of it, is refused."""
     if identity["training_texts"] < identity["sample_size"]:
-        raise ValueError(
+        raise ProvisionalModelError(
             f"the model is provisional: trained on {identity['training_texts']} of "
             f"{identity['sample_size']} sample texts; finish the LLM sample and retrain first"
         )
@@ -237,8 +249,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     seed = cfg.seeds.default
 
     if args.train or not (args.dev or args.predict_test or args.label_all):
-        sample = load_sample(LLM_SAMPLE_PATH)
         labels_path = LABELS_DIR / f"sample_{prompt_stem(FINAL_PROMPT)}.csv"
+        if not LLM_SAMPLE_PATH.is_file() or not labels_path.is_file():
+            raise RefusedError(
+                "no LLM sample labels; run trialpulse.nlp.llm_labeler --sample 10000 first"
+            )
+        sample = load_sample(LLM_SAMPLE_PATH)
         texts, labels = training_set(sample, read_predictions(labels_path), gold_hashes())
         pipeline, selection = select_and_fit(texts, labels, seed)
         metadata = {
@@ -256,6 +272,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"best: {selection['best']}; saved to {MODEL_PATH}")
         return 0
 
+    if not MODEL_PATH.is_file():
+        raise RefusedError("no trained model; run trialpulse.nlp.distill --train first")
     pipeline = load_model(MODEL_PATH)
     meta = load_metadata(MODEL_PATH)
     name = f"tfidf-logreg n={meta['training_texts']} trained {meta['trained_at']}"
@@ -291,4 +309,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run(main))

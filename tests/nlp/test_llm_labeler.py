@@ -252,7 +252,7 @@ def test_test_items_need_a_committed_unchanged_prompt(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
-    with pytest.raises(ValueError, match="failed"):
+    with pytest.raises(ValueError, match="not committed"):
         committed_prompt("reason_v1.md", tmp_path, prompts)  # untracked
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-q", "-m", "prompt")
@@ -411,15 +411,21 @@ def test_the_key_is_stripped_and_checked() -> None:
                 assert bad.strip() not in str(info.value)
 
 
-def test_sample_runs_need_the_final_prompt_and_a_valid_size() -> None:
+def test_sample_runs_need_the_final_prompt_and_a_valid_size(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from trialpulse.cli import run
     from trialpulse.nlp.llm_labeler import main
 
     for argv, message in (
-        (["--sample", "0"], "1 to 10000"),
-        (["--sample", "10001"], "1 to 10000"),
-        (["--sample", "5", "--prompt", "reason_v1.md"], "final prompt only"),
-        (["--status", "--prompt", "reason_v1.md"], "final prompt only"),
-        (["--split", "test", "--prompt", "reason_v1.md"], "final prompt only"),
+        (["--sample", "0"], "--sample takes 1 to 10000, not 0"),
+        (["--sample", "10001"], "--sample takes 1 to 10000, not 10001"),
+        (["--sample", "5", "--prompt", "reason_v1.md"], "final prompt (reason_v2.md) only"),
+        (["--status", "--prompt", "reason_v1.md"], "final prompt (reason_v2.md) only"),
+        (["--split", "test", "--prompt", "reason_v1.md"], "final prompt (reason_v2.md) only"),
     ):
-        with pytest.raises(SystemExit, match=message):
-            main(argv)
+        assert run(main, argv) == 2
+        err = capsys.readouterr().err
+        assert err.count("\n") == 1
+        assert err.startswith("refused: ")
+        assert message in err

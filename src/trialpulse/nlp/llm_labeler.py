@@ -19,6 +19,10 @@ key comes from GROQ_API_KEY and is never printed, logged or cached.
     uv run python -m trialpulse.nlp.llm_labeler --split test
     uv run python -m trialpulse.nlp.llm_labeler --sample 10000
     uv run python -m trialpulse.nlp.llm_labeler --status
+
+Expected refusals (a non-final or uncommitted prompt, a missing input, a bad --sample size)
+print one "refused:" line and exit with code 2. A run stopped by a provider limit saves its
+labels, prints its summary and one "stopped:" line, and exits with code 4.
 """
 
 import argparse
@@ -39,6 +43,7 @@ import httpx
 from pydantic import SecretStr
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
+from trialpulse.cli import RefusedError, StoppedEarlyError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, Secrets, load_project_config
 from trialpulse.ingest.ctgov_api import ApiClient
 from trialpulse.nlp.evaluate import write_predictions
@@ -126,7 +131,15 @@ class RunStats:
     stopped: str = ""
 
 
-class PromptLeakError(ValueError):
+class PromptLeakError(RefusedError, ValueError):
+    pass
+
+
+class UncommittedPromptError(RefusedError, ValueError):
+    pass
+
+
+class InvalidKeyError(RefusedError, ValueError):
     pass
 
 
@@ -335,7 +348,7 @@ def _api_token(api_key: SecretStr) -> str:
     library would quote such a header value in its error message)."""
     token = api_key.get_secret_value().strip()
     if not token or any(not ("!" <= c <= "~") for c in token):
-        raise ValueError("GROQ_API_KEY is empty or contains spaces or control characters")
+        raise InvalidKeyError("GROQ_API_KEY is empty or contains spaces or control characters")
     return token
 
 
@@ -458,18 +471,21 @@ def committed_prompt(name: str, repo: Path = REPO_ROOT, prompt_dir: Path = PROMP
     are labeled only with such a prompt."""
     path = (prompt_dir / name).resolve()
 
-    def git(*args: str) -> str:
+    def git(*args: str) -> tuple[int, str]:
         done = subprocess.run(
             ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
         )
-        if done.returncode != 0:
-            raise ValueError(f"git {' '.join(args)} failed: {done.stderr.strip()}")
-        return done.stdout.strip()
+        return done.returncode, done.stdout.strip()
 
-    git("ls-files", "--error-unmatch", str(path))
-    if git("status", "--porcelain", "--", str(path)):
-        raise ValueError(f"{name} has uncommitted changes; commit the prompt first")
-    return git("log", "-1", "--format=%H", "--", str(path))
+    if git("ls-files", "--error-unmatch", str(path))[0] != 0:
+        raise UncommittedPromptError(f"{name} is not committed; commit the prompt first")
+    code, changes = git("status", "--porcelain", "--", str(path))
+    if code != 0 or changes:
+        raise UncommittedPromptError(f"{name} has uncommitted changes; commit the prompt first")
+    code, commit = git("log", "-1", "--format=%H", "--", str(path))
+    if code != 0 or not commit:
+        raise UncommittedPromptError(f"{name} has no commit; commit the prompt first")
+    return commit
 
 
 def gold_hashes(labels_path: Path = LABELS_PATH) -> set[str]:
@@ -546,11 +562,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sample_run = args.sample is not None or args.status
     if args.sample is not None and not 1 <= args.sample <= SAMPLE_SIZE:
-        raise SystemExit(f"--sample takes 1 to {SAMPLE_SIZE}")
+        raise RefusedError(f"--sample takes 1 to {SAMPLE_SIZE}, not {args.sample}")
     prompt_name = args.prompt
     if (args.split == "test" or sample_run) and prompt_name != FINAL_PROMPT:
-        raise SystemExit("test and sample labels use the final prompt only")
-    system_prompt = load_prompt(prompt_name)
+        raise RefusedError(f"test and sample labels use the final prompt ({FINAL_PROMPT}) only")
+    commit = committed_prompt(prompt_name) if args.split == "test" or sample_run else ""
+    try:
+        system_prompt = load_prompt(prompt_name)
+    except ValueError as exc:
+        raise RefusedError(str(exc)) from None
+    if args.split and not SAMPLE_PATH.is_file():
+        raise RefusedError(
+            f"no gold sample at {SAMPLE_PATH}; build it with trialpulse.nlp.gold --build"
+        )
     check_rendered_prompt(system_prompt, *_heldout(LABELS_PATH, SAMPLE_PATH))
     stem = prompt_stem(prompt_name)
 
@@ -558,7 +582,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.split:
         items = _as_label_items(i for i in load_sample(SAMPLE_PATH) if i.split == args.split)
         items.sort(key=lambda i: i.key)
-        commit = committed_prompt(prompt_name) if args.split == "test" else ""
         out = LABELS_DIR / f"{args.split}_{stem}.csv"
     else:
         if not LLM_SAMPLE_PATH.is_file():  # always the full sample; --sample N labels a prefix
@@ -574,7 +597,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise AssertionError(f"{LLM_SAMPLE_PATH} is not the {SAMPLE_SIZE}-text sample")
         everything = _as_label_items(loaded)
         items = everything[: args.sample] if args.sample is not None else []
-        commit = committed_prompt(prompt_name)
         out = LABELS_DIR / f"sample_{stem}.csv"
 
     client: GroqClient | None = None
@@ -582,7 +604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.status:
         key = Secrets().groq_api_key
         if key is None:
-            raise SystemExit("GROQ_API_KEY is not set")
+            raise RefusedError("GROQ_API_KEY is not set")
         http = httpx.Client(timeout=180)
         client = GroqClient(http, key, settings)
     try:
@@ -591,8 +613,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if http is not None:
             http.close()
-    run = labeler.stats
-    totals = run
+    this_run = labeler.stats
+    totals = this_run
     if sample_run:  # the labels file always holds every sample text labeled so far
         reader = Labeler(system_prompt, prompt_name, settings, CACHE_DIR, None)
         labels = reader.label(everything)
@@ -608,18 +630,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "items": totals.items,
                 "labeled": totals.labeled,
                 "remaining": remaining,
-                "failed_this_run": run.failed,
-                "requests_this_run": run.requests,
-                "tokens_this_run": run.tokens,
+                "failed_this_run": this_run.failed,
+                "requests_this_run": this_run.requests,
+                "tokens_this_run": this_run.tokens,
                 "days_needed_for_the_rest": days_needed(remaining, totals, settings),
-                "stopped": run.stopped or None,
+                "stopped": this_run.stopped or None,
                 "labels_file": str(out) if not args.status else None,
             },
             indent=2,
         )
     )
+    if this_run.stopped:
+        raise StoppedEarlyError(
+            f"{this_run.stopped}; {totals.labeled} of {totals.items} labeled and saved; "
+            "run the same command again later to continue"
+        )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run(main))
