@@ -132,5 +132,6 @@ All 25 splits were 2 to 1; no text got three different labels. `majority` means 
 
 - These labels measure agreement with an adjudicated model panel, not with human judgment. Results graded against them say so.
 - All panel members are instances of one model, so their errors can be correlated, and unanimity overstates certainty. The consistency check measures stability, not correctness.
+- All panel members are the same model, so panel agreement and the consistency relabel measure the model's consistency with itself, not correctness. Treat them as an upper bound on label reliability.
 - One adjudicator decided all 25 splits, so it saw the other split texts in its file (one rationale refers to another split item for consistency). It never saw the trials' other fields.
 - Any model graded against these labels must come from a different model family than the panel (`trialpulse.nlp.panel.check_graded_model`).

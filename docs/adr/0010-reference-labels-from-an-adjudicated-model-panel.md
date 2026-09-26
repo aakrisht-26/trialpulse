@@ -40,6 +40,7 @@ The protocol, applied to all 400 texts:
 
 - Gold-test metrics measure agreement with the adjudicated panel, not with human judgment. Results must say so.
 - The three labelers are instances of one model, so their errors can be correlated, and unanimity overstates certainty. The consistency check measures stability, not correctness.
+- All panel members are the same model, so panel agreement and the consistency relabel measure the model's consistency with itself, not correctness. Treat them as an upper bound on label reliability.
 - The Step 6 acceptance criteria are unchanged: LLM macro-F1 of at least 0.80 on gold-test, and gold-test never used for prompt or model tuning.
 - The Streamlit labeling app is no longer the labeling path. It stays as an optional review tool for the dev texts only (it never shows a test text) that writes to `data/nlp/review_labels.csv` (gitignored), and `save_label` refuses to overwrite a panel label.
 - The Step 6 LLM labeler builds its prompt only from the files in `src/trialpulse/nlp/prompts/` and dev items, and a test runs the same guard (`trialpulse.nlp.holdout.prompt_leaks`) on the rendered prompt it sends.
