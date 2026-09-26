@@ -60,7 +60,7 @@ from trialpulse.nlp.holdout import PROMPTS_DIR, heldout_hashes, prompt_leaks
 from trialpulse.nlp.panel import check_graded_model
 from trialpulse.nlp.taxonomy import LABELS
 
-FINAL_PROMPT = "reason_v1.md"  # the prompt chosen on dev; test and sample labels use it
+FINAL_PROMPT = "reason_v2.md"  # chosen on dev (ties go to the earlier version)
 SAMPLE_SIZE = 10_000
 LLM_DIR = NLP_DIR / "llm"
 CACHE_DIR = LLM_DIR / "cache"
