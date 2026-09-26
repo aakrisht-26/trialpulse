@@ -20,9 +20,10 @@ key comes from GROQ_API_KEY and is never printed, logged or cached.
     uv run python -m trialpulse.nlp.llm_labeler --sample 10000
     uv run python -m trialpulse.nlp.llm_labeler --status
 
-Expected refusals (a non-final or uncommitted prompt, a missing input, a bad --sample size)
-print one "refused:" line and exit with code 2. A run stopped by a provider limit saves its
-labels, prints its summary and one "stopped:" line, and exits with code 4.
+Expected refusals (a non-final or uncommitted prompt, a missing input, a bad --sample size,
+a client error such as a wrong key) print one "refused:" line and exit with code 2. A run
+stopped by a provider limit or outage saves its labels, prints its summary and one
+"stopped:" line, and exits with code 4.
 """
 
 import argparse
@@ -129,6 +130,7 @@ class RunStats:
     tokens: int = 0
     cached_tokens: int = 0
     stopped: str = ""
+    retry_later: bool = True  # whether the stop is a limit or outage, not a client error
 
 
 class PromptLeakError(RefusedError, ValueError):
@@ -157,7 +159,13 @@ class RetryableError(RuntimeError):
 
 class ProviderError(RuntimeError):
     """A provider failure that stops the run: an HTTP error that is neither a rate limit nor
-    an invalid answer, or a network or server error that outlasted the retries."""
+    an invalid answer, or a network or server error that outlasted the retries. retry_later
+    is true for an outage (worth trying again later) and false for a client error such as a
+    wrong key or model, which trying again will not fix."""
+
+    def __init__(self, message: str, retry_later: bool) -> None:
+        super().__init__(message)
+        self.retry_later = retry_later
 
 
 def prompt_stem(name: str) -> str:
@@ -312,7 +320,7 @@ class GroqClient:
         except (httpx.TransportError, RetryableError) as exc:
             # "from None" drops the original exception, whose text may quote request details.
             raise ProviderError(
-                f"provider unavailable after retries ({type(exc).__name__})"
+                f"provider unavailable after retries ({type(exc).__name__})", retry_later=True
             ) from None
         raise AssertionError("unreachable")  # pragma: no cover
 
@@ -336,11 +344,13 @@ class GroqClient:
             if response.status_code == 400 and code == "json_validate_failed":
                 raise InvalidResponseError("the provider could not produce a valid answer")
             if response.status_code >= 400:
-                raise ProviderError(f"HTTP {response.status_code} ({code or 'no error code'})")
+                raise ProviderError(
+                    f"HTTP {response.status_code} ({code or 'no error code'})", retry_later=False
+                )
             self._record(response.headers)
             data: dict[str, Any] = response.json()
             return data
-        raise ProviderError("still rate limited after 10 waits")
+        raise ProviderError("still rate limited after 10 waits", retry_later=True)
 
 
 def _api_token(api_key: SecretStr) -> str:
@@ -405,6 +415,7 @@ class Labeler:
                 labels |= self._batch(items[start : start + size])
             except (DailyLimitError, ProviderError) as exc:  # keep reading the cache
                 self.stats.stopped = str(exc)
+                self.stats.retry_later = getattr(exc, "retry_later", True)
         self.stats.labeled = len(labels)
         return labels
 
@@ -584,6 +595,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         items.sort(key=lambda i: i.key)
         out = LABELS_DIR / f"{args.split}_{stem}.csv"
     else:
+        if args.status and not LLM_SAMPLE_PATH.is_file():
+            raise RefusedError("no LLM sample yet; label with --sample N first")
         if not LLM_SAMPLE_PATH.is_file():  # always the full sample; --sample N labels a prefix
             records = cached_early_stops(cfg)
             meta = json.loads(next(PULL_CACHE.rglob("pull.json")).read_text(encoding="utf-8"))
@@ -640,10 +653,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             indent=2,
         )
     )
-    if this_run.stopped:
+    if this_run.stopped and this_run.retry_later:
         raise StoppedEarlyError(
             f"{this_run.stopped}; {totals.labeled} of {totals.items} labeled and saved; "
             "run the same command again later to continue"
+        )
+    if this_run.stopped:  # a client error: trying again later will not help
+        raise RefusedError(
+            f"{this_run.stopped}; {totals.labeled} of {totals.items} labeled and saved; "
+            "check the key, model and provider settings before running again"
         )
     return 0
 

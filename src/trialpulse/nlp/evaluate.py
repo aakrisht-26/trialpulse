@@ -246,6 +246,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     boot = (cfg.evaluation.bootstrap_resamples, cfg.evaluation.confidence_level, cfg.seeds.default)
 
     if args.dev:
+        if not SAMPLE_PATH.is_file():
+            raise RefusedError(
+                f"no gold sample at {SAMPLE_PATH}; build it with trialpulse.nlp.gold --build"
+            )
         stem = prompt_stem(args.dev)
         reference = read_reference(LABELS_PATH, "dev")
         dev_labels = LABELS_DIR / f"dev_{stem}.csv"

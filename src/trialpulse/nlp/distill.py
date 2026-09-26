@@ -89,6 +89,10 @@ class GoldInTrainingError(RefusedError, ValueError):
     pass
 
 
+class TooFewLabelsError(RefusedError, ValueError):
+    pass
+
+
 def build_pipeline(c: float, class_weight: str | None, seed: int) -> Pipeline:
     features = FeatureUnion(
         [
@@ -120,10 +124,14 @@ def select_and_fit(
     texts: Sequence[str], labels: Sequence[str], seed: int, folds: int = FOLDS
 ) -> tuple[Pipeline, dict[str, Any]]:
     """Pick C and class weighting by cross-validated macro-F1, then refit on all texts."""
+    if not labels:
+        raise TooFewLabelsError("no LLM labels yet; run trialpulse.nlp.llm_labeler --sample first")
     smallest = min(Counter(labels).values())
     k = min(folds, smallest)
     if k < 2:
-        raise ValueError("every label needs at least 2 training texts for cross-validation")
+        raise TooFewLabelsError(
+            "every label needs at least 2 training texts for cross-validation; label more texts"
+        )
     splitter = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
     results = []
     for c, weight in product(GRID["C"], GRID["class_weight"]):
@@ -274,6 +282,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not MODEL_PATH.is_file():
         raise RefusedError("no trained model; run trialpulse.nlp.distill --train first")
+    if (args.dev or args.predict_test) and not SAMPLE_PATH.is_file():
+        raise RefusedError(
+            f"no gold sample at {SAMPLE_PATH}; build it with trialpulse.nlp.gold --build"
+        )
     pipeline = load_model(MODEL_PATH)
     meta = load_metadata(MODEL_PATH)
     name = f"tfidf-logreg n={meta['training_texts']} trained {meta['trained_at']}"

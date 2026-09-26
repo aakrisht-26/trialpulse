@@ -49,7 +49,8 @@ from trialpulse.nlp.gold import (
     normalize_text,
     write_labels,
 )
-from trialpulse.nlp.taxonomy import LABELS, validate_label
+from trialpulse.nlp.taxonomy import LABELS
+from trialpulse.nlp.taxonomy import validate_label as _taxonomy_label
 
 PANEL_DIR = NLP_DIR / "panel"
 N_LABELERS = 3
@@ -98,6 +99,14 @@ class Adjudication:
     adjudicator: str
     label: str
     rationale: str
+
+
+def validate_label(label: str) -> str:
+    """A label from the taxonomy; any other value in a panel file breaks the protocol."""
+    try:
+        return _taxonomy_label(label)
+    except ValueError as exc:
+        raise PanelError(str(exc)) from None
 
 
 def check_graded_model(model_id: str) -> str:
@@ -466,6 +475,11 @@ def _load(panel_dir: Path, sample_path: Path) -> tuple[
 ]:  # fmt: skip
     key = read_key(panel_dir / "key.csv")
     items = {i.key: i for i in load_sample(sample_path)}
+    unknown = [pid for pid, entry in key.items() if entry.key not in items]
+    if unknown:
+        raise PanelError(
+            f"{len(unknown)} panel ids are not in the gold sample, such as {unknown[0]}"
+        )
     texts = {pid: items[entry.key].why_stopped for pid, entry in key.items()}
     return key, items, texts
 

@@ -5,8 +5,10 @@ test scoring, an uncommitted prompt, a missing input) raises RefusedError. The r
 prints one line to stderr and returns a non-zero exit code, with no traceback:
 
 - "refused: <reason>", exit code 2 (the same code as the test lock's refusal in Step 8);
-- "stopped: <reason>", exit code 4, for a run that stopped at a provider limit after saving
-  its progress, so a daily scheduled run can tell "try again later" from a refusal.
+- "stopped: <reason>", exit code 4, for a run that stopped after saving its progress
+  because of a provider limit or outage (a daily or long rate limit, or network or server
+  errors that outlasted the retries), so a daily scheduled run can tell "try again later"
+  from a refusal. A client error such as a wrong key or model is a refusal (exit code 2).
 
 Any other exception is a bug and keeps its traceback.
 """
