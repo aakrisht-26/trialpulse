@@ -8,8 +8,8 @@
 dataset:
   repo_id: brbk/clinical_trials_history
   config_name: core
-  revision: null   # Git tag of the pinned revision (v2026.MM.DD), set in Step 2
-  cutoff: null     # max last_update_post_date in the pinned revision, recorded once computed
+  revision: v2026.09.26   # Git tag of the pinned revision (v2026.MM.DD), set in Step 2
+  cutoff: 2026-09-25     # max last_update_post_date in the pinned revision, recorded once computed
 
 population:
   study_type: INTERVENTIONAL
