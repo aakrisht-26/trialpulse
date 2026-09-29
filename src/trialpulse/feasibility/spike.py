@@ -29,7 +29,13 @@ from typing import Any
 import duckdb
 import httpx
 
-from trialpulse.config import REPO_ROOT, ProjectConfig, Secrets, load_project_config
+from trialpulse.config import (
+    PROJECT_CONFIG_PATH,
+    REPO_ROOT,
+    ProjectConfig,
+    Secrets,
+    load_project_config,
+)
 from trialpulse.feasibility import ctgov_v2
 from trialpulse.feasibility.dataset import (
     BlockedError,
@@ -37,6 +43,7 @@ from trialpulse.feasibility.dataset import (
     cohort_ids,
     download_core,
     parquet_glob,
+    pin_cutoff_in_config,
     profile,
     write_data_dictionary,
 )
@@ -65,6 +72,21 @@ MANUAL_CHECK_SAMPLE = 10
 STABILITY_SAMPLE = 150
 MANUAL_STABILITY_FALLBACK_SAMPLE = 20
 DELTA_WINDOW_DAYS = 7
+# The version 0 fields Aakrisht compares with the Record History tab in part e. The version's
+# submitted date identifies the matching row on that tab.
+MANUAL_CHECK_FIELDS: tuple[str, ...] = (
+    "last_update_submit_date",
+    "overall_status",
+    "study_type",
+    "study_first_post_date",
+    "start_date",
+    "start_date_type",
+    "primary_completion_date",
+    "primary_completion_date_type",
+    "enrollment_count",
+    "enrollment_type",
+    "lead_sponsor_class",
+)
 
 
 @dataclass
@@ -73,6 +95,7 @@ class Context:
     hf_token: str | None
     pin_latest: bool = False
     offline: bool = False
+    config_path: Path = PROJECT_CONFIG_PATH
     _client: httpx.Client | None = field(default=None, repr=False)
 
     @property
@@ -119,6 +142,11 @@ def _require_done(part: str, needed_for: str) -> dict[str, Any]:
 
 def _dataset_glob(ctx: Context) -> str:
     a = _require_done("a", "this part (the dataset is not downloaded)")
+    pinned = ctx.cfg.dataset.revision
+    if pinned and str(a["revision"]) != pinned:
+        raise BlockedError(
+            f"the downloaded revision {a['revision']} is not the pinned {pinned}; rerun part a"
+        )
     return parquet_glob(RAW_DIR, str(a["revision"]), ctx.cfg.dataset.config_name)
 
 
@@ -143,10 +171,27 @@ def part_b(ctx: Context) -> dict[str, Any]:
     return prof
 
 
+def record_cutoff(cfg: ProjectConfig, config_path: Path, cutoff: str) -> str:
+    """Write the data cutoff into project.yaml the first time it is computed. A recorded
+    cutoff that disagrees with the pinned revision's data is an error, never overwritten."""
+    measured = dt.date.fromisoformat(cutoff[:10])
+    if cfg.dataset.cutoff is None:
+        pin_cutoff_in_config(config_path, measured)
+        return "recorded"
+    if cfg.dataset.cutoff != measured:
+        raise ValueError(
+            f"config cutoff {cfg.dataset.cutoff} differs from the pinned revision's {measured}"
+        )
+    return "already recorded"
+
+
 def part_c(ctx: Context) -> dict[str, Any]:
     glob = _dataset_glob(ctx)
     with duckdb.connect() as con:
-        return cohort_counts(con, glob, ctx.cfg)
+        result = cohort_counts(con, glob, ctx.cfg)
+    if result["data_cutoff"]:
+        result["cutoff_in_config"] = record_cutoff(ctx.cfg, ctx.config_path, result["data_cutoff"])
+    return result
 
 
 # Part g -----------------------------------------------------------------------------
@@ -287,36 +332,32 @@ def part_g(ctx: Context) -> dict[str, Any]:
 # Part d -----------------------------------------------------------------------------
 
 
-def _api_rows(ctx: Context, nct_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """Official current records for the given trials: from the bulk pull when present,
-    otherwise one cached API call per trial."""
+def check_records_after_cutoff(version: dict[str, Any], cutoff: dt.date) -> str:
+    """The API data timestamp of the part d records, refused if it predates the dataset
+    cutoff: older records would miss versions posted before the cutoff, and part d would
+    count them as mismatches."""
+    stamp = str(version.get("dataTimestamp") or "")
+    if not stamp or dt.date.fromisoformat(stamp[:10]) < cutoff:
+        raise BlockedError(f"API records dated {stamp or 'unknown'} predate the cutoff {cutoff}")
+    return stamp
+
+
+def _api_rows(
+    nct_ids: list[str], fetcher: JsonFetcher, cache: JsonCache
+) -> dict[str, dict[str, Any]]:
+    """Official current records for the given trials: one cached API v2 call per trial."""
     rows: dict[str, dict[str, Any]] = {}
-    if CURRENT_FIELDS_PARQUET.is_file():
-        ids = ", ".join(f"'{i}'" for i in nct_ids)
-        with duckdb.connect() as con:
-            cur = con.execute(
-                f"SELECT * FROM read_parquet('{CURRENT_FIELDS_PARQUET.as_posix()}') "
-                f"WHERE nct_id IN ({ids})"
-            )
-            names = [d[0] for d in cur.description]
-            for row in cur.fetchall():
-                record = dict(zip(names, row, strict=True))
-                rows[str(record["nct_id"])] = record
-    missing = [i for i in nct_ids if i not in rows]
-    if missing:
-        fetcher = ctx.fetcher(ctgov_v2.REQUESTS_PER_MINUTE)
-        cache = JsonCache(CACHE_DIR / "api_v2" / "single")
-        fields = ctgov_v2.fields_param(ctgov_v2.BULK_FIELD_NAMES)
-        for nct_id in missing:
-            study = cache.get(nct_id)
-            if study is None:
-                try:
-                    study = fetcher.get(f"{ctgov_v2.STUDIES_URL}/{nct_id}", {"fields": fields})
-                except httpx.HTTPStatusError as exc:
-                    log.warning("no official record for %s: %s", nct_id, exc)
-                    continue
-                cache.put(nct_id, study)
-            rows[nct_id] = ctgov_v2.normalize_bulk_record(study)
+    fields = ctgov_v2.fields_param(ctgov_v2.BULK_FIELD_NAMES)
+    for nct_id in nct_ids:
+        study = cache.get(nct_id)
+        if study is None:
+            try:
+                study = fetcher.get(f"{ctgov_v2.STUDIES_URL}/{nct_id}", {"fields": fields})
+            except httpx.HTTPStatusError as exc:
+                log.warning("no official record for %s: %s", nct_id, exc)
+                continue
+            cache.put(nct_id, study)
+        rows[nct_id] = ctgov_v2.normalize_bulk_record(study)
     return rows
 
 
@@ -331,18 +372,79 @@ def part_d(ctx: Context) -> dict[str, Any]:
         cohort_counts(con, glob, ctx.cfg)
         sample = seeded_sample(cohort_ids(con), AUTOMATED_CHECK_SAMPLE, ctx.cfg.seeds.default)
         dataset_rows = latest_rows(con, glob, sample)
-    api_rows = _api_rows(ctx, sample)
+    # One cached API v2 call per sampled trial, per pinned revision, never the part g bulk
+    # pull: its cached pages keep their original date whatever the run's timestamp says.
+    a = _require_done("a", "part d")
+    fetcher = ctx.fetcher(ctgov_v2.REQUESTS_PER_MINUTE)
+    single = JsonCache(CACHE_DIR / "api_v2" / f"single_{a['revision']}")
+    version = single.get("_api_version")  # the timestamp of the first fetch, kept on reruns
+    if version is None:
+        version = fetcher.get(ctgov_v2.VERSION_URL)
+        single.put("_api_version", version)
+    source = {
+        "kind": "one API v2 call per sampled trial, fetched after the cutoff",
+        "data_timestamp": check_records_after_cutoff(version, cutoff),
+    }
+    api_rows = _api_rows(sample, fetcher, single)
     comparisons = [
-        compare_trial(nct_id, dataset_rows.get(nct_id), api_rows.get(nct_id), cutoff)
+        compare_trial(
+            nct_id, dataset_rows.get(nct_id), api_rows.get(nct_id), cutoff, ctx.cfg.statuses.open
+        )
         for nct_id in sample
     ]
     summary = summarize_comparisons(comparisons)
     summary["sample"] = sample
     summary["data_cutoff"] = cutoff.isoformat()
+    summary["api_source"] = source
     return summary
 
 
 # Part e -----------------------------------------------------------------------------
+
+
+def _at_precision(value: Any, precision: Any) -> str | None:
+    """A date as the registry shows it: '2009', '2009-03' or '2009-03-14'."""
+    if value is None:
+        return None
+    text = str(value)[:10]
+    keep = {"year": 4, "month": 7}.get(str(precision or "day").casefold(), 10)
+    return text[:keep]
+
+
+def checklist_row(row: dict[str, Any]) -> dict[str, Any]:
+    """One trial of the part e checklist: its Record History link and its version 0 values,
+    with dates at the precision the dataset records."""
+    out: dict[str, Any] = {
+        "nct_id": row["nct_id"],
+        "record_history_url": f"https://clinicaltrials.gov/study/{row['nct_id']}?tab=history",
+    }
+    for name in MANUAL_CHECK_FIELDS:
+        value = row.get(name)
+        if name in ("start_date", "primary_completion_date"):
+            out[name] = _at_precision(value, row.get(f"{name}_precision"))
+        else:
+            out[name] = None if value is None else str(value)[:10] if "date" in name else str(value)
+    return out
+
+
+def write_manual_results(path: Path, chosen: list[str]) -> None:
+    """The committed file where Aakrisht records pass or fail, one row per chosen trial. It is
+    rewritten while no result is recorded; recorded results for other trials are never
+    overwritten."""
+    if path.is_file():
+        with path.open(newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        if [r["nct_id"] for r in rows] == chosen:
+            return
+        if any((r.get("result") or "").strip() for r in rows):
+            raise BlockedError(
+                f"{path.name} holds recorded results for other trials; move it aside first"
+            )
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        results = csv.writer(fh)
+        results.writerow(["nct_id", "result", "notes"])
+        for nct_id in chosen:
+            results.writerow([nct_id, "", ""])
 
 
 def part_e(ctx: Context) -> dict[str, Any]:
@@ -357,28 +459,27 @@ def part_e(ctx: Context) -> dict[str, Any]:
     ids = ", ".join(f"'{i}'" for i in chosen)
     with duckdb.connect() as con:
         cur = con.execute(
-            f"""SELECT nct_id, overall_status, study_type, start_date, primary_completion_date,
-                enrollment_count, lead_sponsor_class, last_update_post_date
+            f"""SELECT nct_id, {", ".join(MANUAL_CHECK_FIELDS)},
+                start_date_precision, primary_completion_date_precision
             FROM read_parquet('{glob}') WHERE nct_version = 0 AND nct_id IN ({ids})
             ORDER BY nct_id"""
         )
         names = [d_[0] for d_ in cur.description]
-        rows = cur.fetchall()
+        rows = [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
+    checklist = [checklist_row(row) for row in rows]
     MANUAL_CHECKLIST.parent.mkdir(parents=True, exist_ok=True)
     with MANUAL_CHECKLIST.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["record_history_url", *names])
-        for row in rows:
-            writer.writerow([f"https://clinicaltrials.gov/study/{row[0]}?tab=history", *row])
-    if not MANUAL_RESULTS_CSV.is_file():
-        with MANUAL_RESULTS_CSV.open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(["nct_id", "result", "notes"])
-            for nct_id in chosen:
-                writer.writerow([nct_id, "", ""])
+        writer = csv.DictWriter(
+            fh, fieldnames=["nct_id", "record_history_url", *MANUAL_CHECK_FIELDS]
+        )
+        writer.writeheader()
+        writer.writerows(checklist)
+    write_manual_results(MANUAL_RESULTS_CSV, chosen)
     return {
         "status_override": "pending_manual",
         "trials": chosen,
+        "fields": list(MANUAL_CHECK_FIELDS),
+        "rows": checklist,
         "checklist": MANUAL_CHECKLIST.relative_to(REPO_ROOT).as_posix(),
         "results_file": MANUAL_RESULTS_CSV.relative_to(REPO_ROOT).as_posix(),
     }

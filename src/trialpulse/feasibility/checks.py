@@ -2,8 +2,10 @@
 and the list-field stability measure (part f)."""
 
 import datetime as dt
+import html
 import math
 import random
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -79,6 +81,7 @@ class TrialComparison:
     comparable: bool
     reason: str | None = None
     agreements: dict[str, bool] = field(default_factory=dict)
+    explanations: dict[str, str] = field(default_factory=dict)
 
 
 def compare_trial(
@@ -86,6 +89,7 @@ def compare_trial(
     dataset_row: Mapping[str, Any] | None,
     api_row: Mapping[str, Any] | None,
     cutoff: dt.date,
+    open_statuses: Iterable[str] = (),
 ) -> TrialComparison:
     """Compare the dataset's latest version with the official record. A trial whose
     official record was updated after the dataset cutoff is not comparable, because a
@@ -100,7 +104,50 @@ def compare_trial(
     if dt.date(*updated) > cutoff:
         return TrialComparison(nct_id, False, "official record updated after the dataset cutoff")
     agreements = {name: values_agree(name, dataset_row, api_row) for name in COMPARED_FIELDS}
-    return TrialComparison(nct_id, True, None, agreements)
+    explanations = {
+        name: why
+        for name, ok in agreements.items()
+        if not ok
+        and (why := explain_mismatch(name, dataset_row, api_row, open_statuses)) is not None
+    }
+    return TrialComparison(nct_id, True, None, agreements, explanations)
+
+
+def explain_mismatch(
+    name: str,
+    dataset_row: Mapping[str, Any],
+    api_row: Mapping[str, Any],
+    open_statuses: Iterable[str] = (),
+) -> str | None:
+    """A known, systematic cause of a mismatch, or None. The comparison itself stays strict;
+    this only labels the difference for the report."""
+    ds, api = dataset_row.get(name), api_row.get(name)
+    same_update = dates_agree(
+        dataset_row.get("last_update_post_date"), api_row.get("last_update_post_date")
+    )
+    ds_posted = date_parts(dataset_row.get("last_update_post_date"))
+    api_posted = date_parts(api_row.get("last_update_post_date"))
+    if (
+        ds_posted
+        and api_posted
+        and len(ds_posted) == len(api_posted) == 3
+        and ds_posted > api_posted
+    ):
+        return "the dataset holds a version newer than the official record shows"
+    open_set = {s.upper() for s in open_statuses}
+    if (
+        name == "overall_status"
+        and str(api).upper() == "UNKNOWN"
+        and str(ds).upper() in open_set
+        and same_update
+    ):  # the registry marks a lapsed open trial UNKNOWN without posting a version
+        return "UNKNOWN status set by the registry without a new version"
+    if isinstance(ds, str) and isinstance(api, str) and ds != api:
+        plain_ds = normalize_text(html.unescape(ds))
+        plain_api = normalize_text(re.sub(r"\\(.)", r"\1", api))  # API v2 backslash escapes
+        if plain_ds == plain_api:
+            return "encoding only: the same text once HTML entities and backslash escapes go"
+    return None
 
 
 def summarize_comparisons(comparisons: Sequence[TrialComparison]) -> dict[str, Any]:
@@ -131,7 +178,11 @@ def summarize_comparisons(comparisons: Sequence[TrialComparison]) -> dict[str, A
         },
         "trials_fully_agreeing": sum(1 for c in comparable if all(c.agreements.values())),
         "mismatches": [
-            {"nct_id": c.nct_id, "fields": [k for k, ok in c.agreements.items() if not ok]}
+            {
+                "nct_id": c.nct_id,
+                "fields": [k for k, ok in c.agreements.items() if not ok],
+                "explanations": c.explanations,
+            }
             for c in comparable
             if not all(c.agreements.values())
         ],

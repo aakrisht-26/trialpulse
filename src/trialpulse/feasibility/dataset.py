@@ -47,6 +47,17 @@ LIST_FIELD_PATTERNS: dict[str, str] = {
     "status_verified_date": r"^status_verified_date$",
     "eligibility_text": r"^eligibility_criteria$|^criteria$",
 }
+# Loose name fragments per list field, reported as evidence next to the exact patterns above.
+FIELD_NAME_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "phases": ("phase",),
+    "conditions": ("condition", "mesh", "keyword"),
+    "interventions": ("interv", "drug", "device"),
+    "arm_count": ("arm", "group"),
+    "locations": ("location", "site", "facilit", "countr", "city"),
+}
+# Columns that can hold a person's name or contact details (CLAUDE.md Section 2). Their
+# values are never read by the spike; Step 3 drops them at ingestion.
+PERSONAL_DATA_PATTERN = r"investigator|old_name_title|contact|official_name|email|phone"
 PER_VERSION_LIST_FIELDS: tuple[str, ...] = (
     "phases",
     "conditions",
@@ -90,6 +101,17 @@ def pin_revision_in_config(config_path: Path, revision: str) -> None:
     config_path.write_text(new_text, encoding="utf-8")
 
 
+def pin_cutoff_in_config(config_path: Path, cutoff: dt.date) -> None:
+    """Write the data cutoff into the `cutoff: null` line of project.yaml, keeping comments."""
+    text = config_path.read_text(encoding="utf-8")
+    new_text, count = re.subn(
+        r"^(\s*cutoff:\s*)null\b", rf"\g<1>{cutoff.isoformat()}", text, count=1, flags=re.MULTILINE
+    )
+    if count != 1:
+        raise ValueError("no `cutoff: null` line to replace in project.yaml")
+    config_path.write_text(new_text, encoding="utf-8")
+
+
 def core_dir(raw_dir: Path, revision: str, config_name: str) -> Path:
     return raw_dir / revision / config_name
 
@@ -124,7 +146,11 @@ def download_core(
             from trialpulse.config import PROJECT_CONFIG_PATH
 
             pin_revision_in_config(PROJECT_CONFIG_PATH, revision)
-        commit = api.dataset_info(repo_id, revision=revision).sha
+        info = api.dataset_info(repo_id, revision=revision)
+        commit = info.sha
+        configs = sorted(
+            {s.rfilename.split("/")[0] for s in info.siblings or [] if "/" in s.rfilename}
+        )
         target = raw_dir / revision
         snapshot_download(
             repo_id=repo_id,
@@ -142,6 +168,7 @@ def download_core(
     return {
         "revision": revision,
         "commit": commit,
+        "configs": configs,
         "files": len(files),
         "bytes": sum(f.stat().st_size for f in files),
         "path": core_dir(raw_dir, revision, cfg.dataset.config_name).as_posix(),
@@ -149,14 +176,18 @@ def download_core(
 
 
 def _columns(con: duckdb.DuckDBPyConnection, glob: str) -> list[tuple[str, str]]:
-    rows = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{glob}')").fetchall()
+    """Column names and types, unified by name across the files of the glob."""
+    rows = con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{glob}', union_by_name = true)"
+    ).fetchall()
     return [(str(r[0]), str(r[1])) for r in rows]
 
 
 def profile(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, Any]:
     """Part b: columns, counts, versions per trial, date ranges, null rates, the share of
     ESTIMATED post dates by year, and which list-type fields exist."""
-    src = f"read_parquet('{glob}')"
+    # union_by_name: some columns have a different type in some files (see _type_drift).
+    src = f"read_parquet('{glob}', union_by_name = true)"
     columns = _columns(con, glob)
     names = {name for name, _ in columns}
     missing = [c for c in KEY_COLUMNS if c not in names]
@@ -170,9 +201,11 @@ def profile(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, Any]:
         ).fetchone()
         or (None,) * 5
     )
-    present_key = [c for c in KEY_COLUMNS if c in names]
-    null_exprs = ", ".join(f"avg(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END)" for c in present_key)
+    all_names = [n for n, _ in columns]
+    null_exprs = ", ".join(f'avg(CASE WHEN "{c}" IS NULL THEN 1 ELSE 0 END)' for c in all_names)
     null_row = con.execute(f"SELECT {null_exprs} FROM {src}").fetchone() or ()
+    type_drift = _type_drift(con, glob)
+    personal_in_text = _personal_data_in_text(con, src, columns)
     date_ranges: dict[str, list[str | None]] = {}
     for col in ("study_first_post_date", "last_update_post_date", "start_date"):
         if col in names:
@@ -193,6 +226,17 @@ def profile(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, Any]:
         field: sorted(n for n in names if re.search(pattern, n))
         for field, pattern in LIST_FIELD_PATTERNS.items()
     }
+    name_matches = {  # a name token (split on "_") that starts with a fragment
+        field: sorted(
+            n for n in names
+            if any(tok.startswith(f) for tok in n.lower().split("_") for f in fragments)
+        )
+        for field, fragments in FIELD_NAME_FRAGMENTS.items()
+    }  # fmt: skip
+    nested = sorted(
+        n for n, t in columns if "[]" in t or t.upper().startswith(("STRUCT", "MAP", "LIST"))
+    )
+    personal = sorted(n for n in names if re.search(PERSONAL_DATA_PATTERN, n))
     return {
         "columns": [{"name": n, "type": t} for n, t in columns],
         "missing_key_columns": missing,
@@ -205,12 +249,67 @@ def profile(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, Any]:
         if vpt[0] is not None
         else {},
         "date_ranges": date_ranges,
-        "null_rates": {c: float(v) for c, v in zip(present_key, null_row, strict=True)},
+        "null_rates": {c: float(v) for c, v in zip(all_names, null_row, strict=True)},
+        "type_drift": type_drift,
+        "personal_data_in_text": personal_in_text,
         "estimated_post_date_share_by_year": estimated_by_year,
         "list_fields": list_fields,
         # True when the core config has a per-version column for the field.
         "per_version_columns": {f: bool(list_fields[f]) for f in PER_VERSION_LIST_FIELDS},
+        "field_name_matches": name_matches,
+        "nested_columns": nested,
+        "personal_data_columns": personal,
     }
+
+
+EMAIL_PATTERN = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}"
+DEGREE_PATTERN = r"(,\s*|\s)(PhD|Ph[.]D[.]|MD|M[.]D[.]|DrPH|MPH)([\s,.]|$)"
+
+
+def _type_drift(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, dict[str, list[str]]]:
+    """Columns whose Parquet type differs between the files of the glob: type to files."""
+    pattern = Path(glob)
+    seen: dict[str, dict[str, list[str]]] = {}
+    for file in sorted(pattern.parent.glob(pattern.name)):
+        for name, kind in _columns(con, file.as_posix()):
+            seen.setdefault(name, {}).setdefault(kind, []).append(file.name)
+    return {name: kinds for name, kinds in seen.items() if len(kinds) > 1}
+
+
+def _personal_data_in_text(
+    con: duckdb.DuckDBPyConnection, src: str, columns: list[tuple[str, str]]
+) -> dict[str, int]:
+    """Counts only, over each trial's latest version: text columns holding an email address,
+    sponsor names carrying a personal degree, and INDIV-class sponsors. No value is read out."""
+    texts = [n for n, t in columns if t == "VARCHAR" and not re.search(PERSONAL_DATA_PATTERN, n)]
+    exprs = [
+        f"sum(CASE WHEN regexp_matches(\"{c}\", '{EMAIL_PATTERN}') THEN 1 ELSE 0 END)"
+        for c in texts
+    ]
+    names = {n for n, _ in columns}
+    extra: list[tuple[str, str]] = []
+    if "lead_sponsor_name" in names:
+        extra.append((
+            "lead_sponsor_name with a degree title (PhD, MD, MPH and similar)",
+            f"sum(CASE WHEN regexp_matches(lead_sponsor_name, '{DEGREE_PATTERN}') "
+            "THEN 1 ELSE 0 END)",
+        ))  # fmt: skip
+    if "lead_sponsor_class" in names:
+        extra.append(
+            (
+                "INDIV sponsor class",
+                "sum(CASE WHEN upper(lead_sponsor_class) = 'INDIV' THEN 1 ELSE 0 END)",
+            )
+        )
+    row = (
+        con.execute(
+            f"""SELECT {", ".join(exprs + [e for _, e in extra])} FROM (SELECT * FROM {src}
+            QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version DESC) = 1)"""
+        ).fetchone()
+        or ()
+    )
+    labels = [f"{c} with an email address" for c in texts] + [label for label, _ in extra]
+    return {label: int(v or 0) for label, v in zip(labels, row, strict=True) if v}
 
 
 def write_data_dictionary(prof: dict[str, Any], revision: str, path: Path) -> None:
@@ -225,10 +324,22 @@ def write_data_dictionary(prof: dict[str, Any], revision: str, path: Path) -> No
         "| --- | --- | --- |",
     ]
     null_rates: dict[str, float] = prof["null_rates"]
+    drift: dict[str, dict[str, list[str]]] = prof.get("type_drift", {})
     for col in prof["columns"]:
         rate = null_rates.get(col["name"])
         shown = f"{rate:.2%}" if rate is not None else "not computed"
-        lines.append(f"| `{col['name']}` | {col['type']} | {shown} |")
+        if rate == 1.0:
+            shown += " (always empty)"
+        kind = col["type"]
+        if col["name"] in drift:
+            kind += (
+                " (differs by file: "
+                + "; ".join(
+                    f"{t} in {len(files)}" for t, files in sorted(drift[col["name"]].items())
+                )
+                + ")"
+            )
+        lines.append(f"| `{col['name']}` | {kind} | {shown} |")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -245,14 +356,22 @@ def cohort_counts(con: duckdb.DuckDBPyConnection, glob: str, cfg: ProjectConfig)
     st = cfg.statuses
     study_type = cfg.population.study_type.replace("'", "''")
     min_date = cfg.population.min_first_post_date.isoformat()
+    # The latest version first, then the population filter: a trial whose latest version is
+    # no longer interventional is not in the cohort.
     con.execute(
         f"""CREATE OR REPLACE TEMP TABLE spike_cohort AS
-        SELECT nct_id, upper(overall_status) AS status, why_stopped,
-               year(study_first_post_date) AS post_year
-        FROM read_parquet('{glob}')
-        WHERE upper(study_type) = '{study_type}' AND study_first_post_date >= DATE '{min_date}'
-        QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version DESC) = 1"""
+        SELECT nct_id, status, why_stopped, post_year FROM (
+            SELECT nct_id, upper(overall_status) AS status, why_stopped,
+                   year(study_first_post_date) AS post_year, upper(study_type) AS study_type,
+                   study_first_post_date
+            FROM read_parquet('{glob}')
+            QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version DESC) = 1
+        ) WHERE study_type = '{study_type}' AND study_first_post_date >= DATE '{min_date}'"""
     )
+    changed_type = con.execute(
+        f"""SELECT count(*) FROM (SELECT nct_id FROM read_parquet('{glob}') GROUP BY nct_id
+            HAVING count(DISTINCT coalesce(study_type, '')) > 1)"""
+    ).fetchone()
     group_case = f"""CASE
         WHEN status = 'TERMINATED' THEN 'TERMINATED'
         WHEN status = 'WITHDRAWN' THEN 'WITHDRAWN'
@@ -293,6 +412,7 @@ def cohort_counts(con: duckdb.DuckDBPyConnection, glob: str, cfg: ProjectConfig)
         "versions_total": int(versions),
         "last_update_post_date_coverage": int(with_post) / int(versions) if versions else None,
         "data_cutoff": str(cutoff[0]) if cutoff and cutoff[0] else None,
+        "trials_with_changing_study_type": int(changed_type[0]) if changed_type else 0,
     }
 
 

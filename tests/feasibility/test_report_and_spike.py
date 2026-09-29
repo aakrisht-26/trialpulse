@@ -192,3 +192,120 @@ def test_no_module_outside_feasibility_uses_the_internal_endpoint() -> None:
             if isinstance(node, ast.Constant) and "/api/int/" in str(node.value):
                 offenders.append(f"{path.name}: internal endpoint URL")
     assert offenders == []
+
+
+def test_record_cutoff_writes_once_and_refuses_a_different_value(
+    cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    import dataclasses
+    import datetime as dt
+    import re
+
+    from trialpulse.config import PROJECT_CONFIG_PATH
+
+    text = PROJECT_CONFIG_PATH.read_text(encoding="utf-8")
+    path = tmp_path / "project.yaml"
+    path.write_text(
+        re.sub(r"^(\s*cutoff:\s*)\S+", r"\g<1>null", text, count=1, flags=re.M), "utf-8"
+    )
+    unset = cfg.model_copy(update={"dataset": cfg.dataset.model_copy(update={"cutoff": None})})
+    assert spike.record_cutoff(unset, path, "2026-09-25") == "recorded"
+    assert "cutoff: 2026-09-25" in path.read_text(encoding="utf-8")
+    pinned = cfg.model_copy(
+        update={"dataset": cfg.dataset.model_copy(update={"cutoff": dt.date(2026, 9, 25)})}
+    )
+    assert spike.record_cutoff(pinned, path, "2026-09-25") == "already recorded"
+    with pytest.raises(ValueError, match="differs"):
+        spike.record_cutoff(pinned, path, "2026-10-02")
+    assert dataclasses  # imported for parity with other tests
+
+
+def test_part_d_refuses_api_records_older_than_the_cutoff() -> None:
+    import datetime as dt
+
+    from trialpulse.feasibility.dataset import BlockedError
+
+    fresh = {"dataTimestamp": "2026-09-29T09:00:05"}
+    assert spike.check_records_after_cutoff(fresh, dt.date(2026, 9, 25)) == "2026-09-29T09:00:05"
+    with pytest.raises(BlockedError, match="predate the cutoff"):
+        spike.check_records_after_cutoff(
+            {"dataTimestamp": "2026-09-22T09:00:04"}, dt.date(2026, 9, 25)
+        )
+    with pytest.raises(BlockedError, match="predate the cutoff"):
+        spike.check_records_after_cutoff({}, dt.date(2026, 9, 25))
+
+
+def test_dataset_parts_refuse_a_download_of_another_revision(
+    cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from trialpulse.feasibility.dataset import BlockedError
+
+    monkeypatch.setattr(spike, "RESULTS_DIR", tmp_path)
+    (tmp_path / "part_a.json").write_text(
+        json.dumps({"part": "a", "status": "done", "revision": "v2026.01.01"}), encoding="utf-8"
+    )
+    pinned = cfg.model_copy(
+        update={"dataset": cfg.dataset.model_copy(update={"revision": "v2026.09.26"})}
+    )
+    with pytest.raises(BlockedError, match=r"not the pinned v2026\.09\.26"):
+        spike._dataset_glob(spike.Context(cfg=pinned, hf_token=None))
+    same = cfg.model_copy(
+        update={"dataset": cfg.dataset.model_copy(update={"revision": "v2026.01.01"})}
+    )
+    assert "v2026.01.01" in spike._dataset_glob(spike.Context(cfg=same, hf_token=None))
+
+
+def test_checklist_rows_show_dates_at_their_precision() -> None:
+    row = {
+        "nct_id": "NCT00000001", "last_update_submit_date": "2009-01-05", "overall_status":
+        "RECRUITING", "study_type": "INTERVENTIONAL", "study_first_post_date": "2009-01-07",
+        "start_date": "2009-01-01", "start_date_precision": "month", "start_date_type": None,
+        "primary_completion_date": "2011-01-01", "primary_completion_date_precision": "year",
+        "primary_completion_date_type": "ANTICIPATED", "enrollment_count": 120,
+        "enrollment_type": "ESTIMATED", "lead_sponsor_class": "INDUSTRY",
+    }  # fmt: skip
+    out = spike.checklist_row(row)
+    assert out["record_history_url"] == "https://clinicaltrials.gov/study/NCT00000001?tab=history"
+    assert out["start_date"] == "2009-01"
+    assert out["primary_completion_date"] == "2011"
+    assert out["start_date_type"] is None
+    assert out["enrollment_count"] == "120"
+
+
+def test_report_shows_the_checklist_catch_up_and_evidence(cfg: ProjectConfig) -> None:
+    import datetime as dt
+
+    from trialpulse.feasibility.report import catch_up_line, render_report
+
+    assert catch_up_line("2026-09-25", dt.date(2026, 9, 29)).endswith("4 days, about 0.1 months.")
+    e = {
+        "status": "pending_manual", "trials": ["NCT00000001"], "fields": ["overall_status"],
+        "results_file": "docs/feasibility_manual_check.csv",
+        "rows": [{"nct_id": "NCT00000001", "overall_status": "RECRUITING",
+                  "record_history_url": "https://clinicaltrials.gov/study/NCT00000001?tab=history"}],
+    }  # fmt: skip
+    report = render_report({"e": e}, [], cfg, today=dt.date(2026, 9, 29))
+    link = "[history](https://clinicaltrials.gov/study/NCT00000001?tab=history)"
+    assert f"| NCT00000001 | {link} | RECRUITING |" in report
+    assert "on 2026-09-29" in report
+
+
+def test_the_manual_results_file_follows_the_chosen_trials(tmp_path: Path) -> None:
+    from trialpulse.feasibility.dataset import BlockedError
+
+    path = tmp_path / "manual.csv"
+    spike.write_manual_results(path, ["NCT1", "NCT2"])
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "nct_id,result,notes",
+        "NCT1,,",
+        "NCT2,,",
+    ]
+    spike.write_manual_results(path, ["NCT3"])  # nothing recorded yet: rewritten
+    assert path.read_text(encoding="utf-8").splitlines() == ["nct_id,result,notes", "NCT3,,"]
+    path.write_text("nct_id,result,notes\nNCT3,pass,\n", encoding="utf-8")
+    spike.write_manual_results(path, ["NCT3"])  # same trials: kept with the result
+    assert "NCT3,pass," in path.read_text(encoding="utf-8")
+    with pytest.raises(BlockedError, match="recorded results for other trials"):
+        spike.write_manual_results(path, ["NCT4"])

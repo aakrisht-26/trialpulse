@@ -5,6 +5,7 @@ state the overall GO or NO-GO decision; Aakrisht records that after review.
 """
 
 import csv
+import datetime as dt
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,10 +131,32 @@ def _criteria_table(results: Mapping[str, Result], manual: list[dict[str, str]])
 
 
 def _part_a(r: Mapping[str, Any]) -> list[str]:
-    return [
+    lines = [
         f"- Revision `{r['revision']}` (commit `{r['commit']}`), {r['files']} Parquet files, "
         f"{r['bytes'] / 1e6:,.1f} MB, in `{r['path']}`."
     ]
+    configs = list(r.get("configs") or [])
+    others = [c for c in configs if c != "core"]
+    if configs:
+        line = f"- Configs published at this revision: {', '.join(f'`{c}`' for c in configs)}."
+        if others:
+            line += (
+                f" Only `core` is used. Adopting {', '.join(f'`{c}`' for c in others)} would "
+                "need an ADR (CLAUDE.md Section 7)."
+            )
+        lines.append(line)
+    return lines
+
+
+# Name matches that are not the list field they resemble.
+NAME_MATCH_NOTES: dict[str, str] = {
+    "intervention_model": "the study design (for example parallel or single group), not a list "
+    "of interventions",
+    "intervention_model_description": "free text about the design, not a list of interventions",
+    "is_fda_regulated_device": "a yes or no regulatory flag, not a list of interventions",
+    "is_fda_regulated_drug": "a yes or no regulatory flag, not a list of interventions",
+    "is_unapproved_device": "a yes or no regulatory flag, not a list of interventions",
+}
 
 
 PER_VERSION_LABELS: dict[str, str] = {
@@ -169,6 +192,55 @@ def _per_version_columns(r: Mapping[str, Any] | None) -> list[str]:
         lines.append(f"| {label} | {'Yes' if has else 'No'} | {shown} |")
     if r is None:
         lines += ["", CARD_NOTE]
+        return lines
+    if "field_name_matches" in r:
+        nested = list(r.get("nested_columns") or [])
+        lines += [
+            "",
+            f"Evidence: all {len(r['columns'])} columns are listed in the data dictionary; "
+            f"{len(nested) or 'none'} of them {'is' if len(nested) == 1 else 'are'} list, struct "
+            "or map typed"
+            + (f" ({', '.join(f'`{c}`' for c in nested)})" if nested else "")
+            + ". Columns whose name has a token starting like the field:",
+            "",
+            "| Field | Name matches | What they are |",
+            "| --- | --- | --- |",
+        ]
+        for key, label in PER_VERSION_LABELS.items():
+            matches = r["field_name_matches"].get(key, [])
+            shown = ", ".join(f"`{c}`" for c in matches) or "none"
+            notes = "; ".join(
+                f"`{c}`: {NAME_MATCH_NOTES[c]}" for c in matches if c in NAME_MATCH_NOTES
+            )
+            lines.append(f"| {label} | {shown} | {notes or ('n/a' if not matches else '')} |")
+    personal = list(r.get("personal_data_columns") or [])
+    in_text: dict[str, int] = dict(r.get("personal_data_in_text") or {})
+    if personal or in_text:
+        lines += [
+            "",
+            f"Personal data (CLAUDE.md Section 2): core holds {len(personal)} columns that name "
+            f"a person ({', '.join(f'`{c}`' for c in personal)}). Beyond them, person names and "
+            "contact details also appear inside other columns. Counts over each trial's latest "
+            "version (no value was read out, and this report shows none):",
+            "",
+        ]
+        lines += [
+            f"- {label}: {_num(n)} trial{'' if n == 1 else 's'}" for label, n in in_text.items()
+        ]
+        lines += [
+            "",
+            "So Step 3 must do more than drop the named columns: it must remove email addresses "
+            "from free text, and it must not store or display individual sponsors' names (for "
+            "example by keying sponsors of the INDIV class by a hash).",
+        ]
+    drift = r.get("type_drift") or {}
+    if drift:
+        lines += [
+            "",
+            f"Schema drift: {len(drift)} columns have a different Parquet type in some of the "
+            f"files ({', '.join(f'`{c}`' for c in sorted(drift))}); the data dictionary shows "
+            "the types by file. Step 3 must type these columns explicitly.",
+        ]
     return lines
 
 
@@ -210,6 +282,10 @@ def _part_c(r: Mapping[str, Any]) -> list[str]:
         f"- Cohort: {_num(r['cohort_trials'])} trials; early stops {_num(r['early_stops'])}; "
         f"why_stopped present for {_pct(r['why_stopped_coverage'])} of early stops.",
         f"- Data cutoff (max last_update_post_date): {r['data_cutoff']}.",
+        "- The cohort uses each trial's latest version for study type, first-post date and "
+        f"status. {_num(r.get('trials_with_changing_study_type'))} trials changed study type "
+        "between versions; which version's study type defines the population is for Step 4 "
+        "to settle.",
         "",
         "| First-post year | " + " | ".join(groups) + " |",
         "| --- |" + " --- |" * len(groups),
@@ -220,9 +296,12 @@ def _part_c(r: Mapping[str, Any]) -> list[str]:
 
 
 def _part_d(r: Mapping[str, Any]) -> list[str]:
+    source = r.get("api_source") or {}
     lines = [
         f"- Sampled {r['sampled']} cohort trials (seeded); {r['comparable']} comparable. "
         f"Excluded: {r['excluded'] or 'none'}.",
+        f"- Official records: {source.get('kind', 'part g bulk pull')}; API data timestamp "
+        f"{source.get('data_timestamp', 'n/a')}; dataset cutoff {r.get('data_cutoff', 'n/a')}.",
         f"- Overall agreement: {_pct(r['overall']['share'])} "
         f"({r['overall']['agree']} of {r['overall']['total']} field comparisons); "
         f"{r['trials_fully_agreeing']} trials agree on every field.",
@@ -232,6 +311,54 @@ def _part_d(r: Mapping[str, Any]) -> list[str]:
     ]
     for name, v in r["per_field"].items():
         lines.append(f"| {name} | {v['agree']} of {v['total']} | {_pct(v['share'])} |")
+    mismatches = r.get("mismatches") or []
+    if mismatches:
+        lines += ["", "Trials with a mismatch (fields that differ):", ""]
+        for m in mismatches:
+            notes = m.get("explanations") or {}
+            parts = [f"{f} ({notes[f]})" if f in notes else f for f in m["fields"]]
+            lines.append(f"- {m['nct_id']}: {', '.join(parts)}")
+        explained = sum(len(m.get("explanations") or {}) for m in mismatches)
+        total = sum(len(m["fields"]) for m in mismatches)
+        lines += [
+            "",
+            f"{explained} of the {total} field mismatches have a known systematic cause (labeled "
+            "above). They still count as mismatches in the agreement share, which uses the "
+            "strict comparison.",
+        ]
+    return lines
+
+
+CHECKLIST_LABELS: dict[str, str] = {
+    "last_update_submit_date": "Submitted",
+    "overall_status": "Status",
+    "study_type": "Study type",
+    "study_first_post_date": "First posted",
+    "start_date": "Start",
+    "start_date_type": "Start type",
+    "primary_completion_date": "Primary completion",
+    "primary_completion_date_type": "Primary completion type",
+    "enrollment_count": "Enrollment",
+    "enrollment_type": "Enrollment type",
+    "lead_sponsor_class": "Sponsor class",
+}
+
+
+def _part_e(r: Mapping[str, Any]) -> list[str]:
+    fields = [f for f in r.get("fields", []) if f in CHECKLIST_LABELS]
+    lines = [
+        f"Checklist for the manual check: {len(r['trials'])} of the part d trials (seeded). For "
+        "each trial, open its Record History page, select the earliest version (its submitted "
+        "date is in the Submitted column below), and compare the fields listed here with that "
+        "version. Dates are shown at the precision the dataset records (a year, a month or a "
+        f"day). Record pass or fail, with a note for any difference, in `{r['results_file']}`.",
+        "",
+        "| Trial | Record History | " + " | ".join(CHECKLIST_LABELS[f] for f in fields) + " |",
+        "| --- | --- |" + " --- |" * len(fields),
+    ]
+    for row in r.get("rows", []):
+        values = " | ".join("" if row.get(f) is None else str(row[f]) for f in fields)
+        lines.append(f"| {row['nct_id']} | [history]({row['record_history_url']}) | {values} |")
     return lines
 
 
@@ -319,7 +446,10 @@ def _part_g(r: Mapping[str, Any]) -> list[str]:
         "| --- | --- | --- |",
     ]
     for name, v in r["field_presence"].items():
-        lines.append(f"| {name} | `{v['path']}` | {_pct(v['share'])} of {_num(v['applicable'])} |")
+        present = f"{_pct(v['share'])} of {_num(v['applicable'])}"
+        if not v.get("share"):
+            present += " (not returned by API v2: not available to ingest)"
+        lines.append(f"| {name} | `{v['path']}` | {present} |")
     return lines
 
 
@@ -356,17 +486,31 @@ def _stable_fields(results: Mapping[str, Result]) -> list[str]:
     ]
 
 
+def catch_up_line(cutoff: str, today: dt.date) -> str:
+    """How far the live system must catch up with API v2 updates from the dataset cutoff."""
+    days = (today - dt.date.fromisoformat(cutoff[:10])).days
+    return (
+        f"- Catch-up for the live system: API v2 updates posted after the cutoff ({cutoff[:10]}) "
+        f"up to the report date ({today.isoformat()}): {days} days, about "
+        f"{days / 30.4375:.1f} months."
+    )
+
+
 def render_report(
-    results: Mapping[str, Result], manual: list[dict[str, str]], cfg: ProjectConfig
+    results: Mapping[str, Result],
+    manual: list[dict[str, str]],
+    cfg: ProjectConfig,
+    today: dt.date | None = None,
 ) -> str:
+    today = today or dt.date.today()
     lines = [
         "# Feasibility report (Step 2)",
         "",
         "Draft generated by `uv run python -m trialpulse.feasibility.spike --part h` from the "
-        "saved part results. Rerun it after any part changes.",
+        f"saved part results, on {today.isoformat()}. Rerun it after any part changes.",
         "",
         "**Decision: not stated.** This draft reports the measured numbers only. GO or NO-GO "
-        "is recorded after Aakrisht reviews it and the blocked parts have run.",
+        "is recorded by Aakrisht after he reviews it and completes the manual check (part e).",
         "",
         f"Dataset: `{cfg.dataset.repo_id}`, config `{cfg.dataset.config_name}`, pinned "
         f"revision `{cfg.dataset.revision or 'not pinned yet'}`.",
@@ -390,12 +534,11 @@ def render_report(
                 lines += ["", *_per_version_columns(None)]
             continue
         if part == "e":
-            lines.append(
-                f"Checklist of {len(result['trials'])} trials in `{result['checklist']}` "
-                f"(not committed); record pass or fail in `{result['results_file']}`."
-            )
+            lines += ["", *_part_e(result)]
             continue
         renderer = RENDERERS.get(part)
         if renderer and result.get("status") == "done":
             lines += ["", *renderer(result)]
+            if part == "c" and result.get("data_cutoff"):
+                lines.append(catch_up_line(str(result["data_cutoff"]), today))
     return "\n".join(lines) + "\n"
