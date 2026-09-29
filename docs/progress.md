@@ -73,12 +73,12 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 2, Feasibility spike** (draft done, awaiting review; parts a to e blocked on dataset access). **Step 6** is in progress (LLM test result in: macro-F1 0.842; the 10,000-text LLM sample is 1,375 labeled and needs about 5.5 more days; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Step 2, Feasibility spike** (parts a to e run on the dataset on 2026-09-29; the manual check and the GO or NO-GO decision are Aakrisht's). **Step 6** is in progress (LLM test result in: macro-F1 0.842; the 10,000-text LLM sample is 1,375 labeled and needs about 5.5 more days; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
-| 2 | Feasibility spike (go/no-go) | Draft done, awaiting review (parts a to e blocked; Hugging Face access still pending on 2026-09-26) |
+| 2 | Feasibility spike (go/no-go) | Parts a to e done on the dataset (2026-09-29); manual check and decision pending |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
@@ -157,7 +157,7 @@ Made by Claude, flagged for review:
 
 ## Step 2: Feasibility spike (go/no-go)
 
-Date: 2026-09-23 (unattended overnight run). Status: **draft report written, decision not stated, parts a to e blocked on dataset access**.
+Date: 2026-09-23 (unattended overnight run); parts a to e with the dataset on 2026-09-29 (below). Status at first: **draft report written, decision not stated, parts a to e blocked on dataset access**.
 
 ### What was built
 
@@ -227,6 +227,72 @@ Decisions from these follow-ups, approved by Aakrisht on 2026-09-23:
 
 1. A version with no phase recorded maps to the N/A group (1 of 973 cached versions). Any phase combination outside the five groups maps to `other` (none occurred).
 2. Offline mode is a flag on part f only.
+
+### Parts a to e with the dataset (2026-09-29)
+
+Hugging Face approved access to `brbk/clinical_trials_history`. Parts a to e ran on the real dataset, and `docs/feasibility_report.md` was regenerated. The report states no GO or NO-GO.
+
+**Access.** One read-only call (`HfApi.auth_check`, the token never printed): granted.
+
+**Part a: download.** The latest (and only) tag, `v2026.09.26` (commit `3007d00`), is pinned in `config/project.yaml`. All 9 core Parquet files downloaded to `data/raw/history/v2026.09.26/core/`: 1,020,446,428 bytes, matching the published sizes. The download took about 16 minutes and did not stall. The dataset now also publishes an `interventions` config besides `core`; adopting it would need an ADR (CLAUDE.md Section 7).
+
+**Part b: profile.** 4,444,542 versions across 604,583 trials, 0 duplicate (nct_id, nct_version) rows, 96 columns (all listed with types and null rates in `docs/data_dictionary_history.md`), no expected column missing. `status_verified_date` and `eligibility_criteria` exist as columns.
+
+Per-version columns in the core config, field by field:
+
+| Field | Per-version column in core | Evidence |
+| --- | --- | --- |
+| phases | **No** | no column name mentions a phase |
+| conditions | **No** | no condition, MeSH or keyword column |
+| interventions | **No** | only `intervention_model` and its description (the study design) and three FDA-regulation flags; the separate `interventions` config is not part of core |
+| arm counts | **No** | no arm or group column |
+| locations | **No** | no location, site, facility, country or city column |
+
+All 96 columns are scalar (no list, struct or map types). What this means for the proposed ADRs (both stay Proposed for Aakrisht):
+
+- **ADR 0006 (phase):** its condition is met, because core has no per-version phase column. Its title-based alternative is feasible: `official_title` and `brief_title` are versioned core columns.
+- **ADR 0007 (competition):** its premise holds. Core has no per-version conditions or MeSH columns, so the therapeutic area cannot be measured point-in-time from core.
+
+**Part c: cohort counts.** 420,582 cohort trials; 38,621 early stops; why_stopped present for 91.5% of them; last_update_post_date on 100.00% of versions. Latest-status totals: completed 226,294, open 99,710, unknown 55,957, terminated 25,810, withdrawn 12,811.
+
+**Data cutoff: 2026-09-25** (the maximum last_update_post_date), recorded in `config/project.yaml`. The live system would need to catch up on the API v2 updates posted from the cutoff to today, 2026-09-29: **4 days, about 0.1 months**.
+
+**Part d: automated check.** 200 seeded cohort trials, all comparable (none updated after the cutoff). Their official records were fetched with one API v2 call per trial on 2026-09-29, after the cutoff. Agreement: **99.3%** (1,192 of 1,200 field comparisons); 194 trials agree on every field. By field: overall_status 194, start_date 200, primary_completion_date 199, enrollment_count 199, lead_sponsor_class 200, why_stopped 200 (each of 200). All 8 mismatches have a known, systematic cause, labeled in the report; they still count in the strict share:
+
+- 5 trials: an open trial the registry has since marked UNKNOWN, with no new version posted;
+- 1 trial (3 fields): the dataset holds a version newer than the official record shows.
+
+**Part e: manual check checklist.** 10 of the part d trials (seeded), in the report: NCT ID, a link to the Record History page, and the version 0 values to compare (submitted date, status, study type, first posted, start, primary completion, enrollment and sponsor class, with dates at the dataset's precision). Aakrisht records pass or fail in `docs/feasibility_manual_check.csv`.
+
+**Automated GO criteria (numbers only; no decision stated):**
+
+| Criterion | Threshold | Measured |
+| --- | --- | --- |
+| Cohort trials | at least 200,000 | 420,582 |
+| last_update_post_date present on versions | at least 99% | 100.00% |
+| Automated agreement | at least 95% | 99.3% |
+| Early stops in the cohort | at least 20,000 | 38,621 |
+| why_stopped present among early stops | at least 80% | 91.5% |
+| API v2 delta pull end to end | works | 6,047 of 6,047 records (part g, 2026-09-22) |
+| Manual check | at least 9 of 10 | pending (Aakrisht) |
+
+**Findings for later steps (reported, not acted on):**
+
+1. **UNKNOWN status is set without a new version (Steps 4 and 14).** The registry marks a lapsed open trial UNKNOWN without posting a version, so the version history can lag it, and a delta pull filtered on LastUpdatePostDate never sees the change. Step 4's UNKNOWN rule and Step 14's daily job must allow for this.
+2. **The dataset can be ahead of the official record (Step 14).** One sampled trial has a dataset version (posted 2026-05-13) that the official API does not show.
+3. **HTML entities in dataset text (Step 3).** An earlier sample showed why_stopped texts with entities such as `&#x27;` where the API has plain characters (and the API has backslash escapes such as `\>`). Text normalization must unescape both.
+4. **Personal data beyond the 4 named investigator columns (Step 3).** Email addresses appear in free-text columns (most in the IPD-sharing fields), 4,086 trials have a sponsor name with a degree title, and 567 have an INDIV-class sponsor. Step 3 must drop the named columns, remove emails from text, and not store or display individual sponsors' names. The report gives counts only.
+5. **Schema drift (Step 3).** `disp_first_submit_qc_date`, `fdaaa801_violation`, `is_ppsd` have a different Parquet type in some files; `version_holder`, `expanded_access_status_for_nct_id`, `unposted_responsible_party`, `first_mcp_post_date`, `first_mcp_post_date_type`, `estimated_results_first_submit_date` are always empty. Step 3 must type columns explicitly.
+6. **Study type changes across versions (Step 4).** 7,409 trials changed study type between versions. The spike uses each trial's latest version; which version defines the population is for Step 4 to settle.
+7. **MeSH browse branches are not returned by API v2.** The report now marks that path as not available to ingest.
+
+**Internal review.** Two independent reviewers checked the code and the report; their confirmed findings are fixed:
+
+- **Part d could use stale records.** The bulk-pull freshness check trusted part g's run timestamp, which a rerun refreshes although the bulk pages come from a cache. Part d now always fetches one record per sampled trial, cached per pinned revision, and refuses records dated before the cutoff.
+- **The cohort was taken from the latest interventional version**, not the latest version, contrary to the function's docstring (422,927 trials and 38,691 early stops before the fix). It now takes each trial's latest version first; the sample and checklist changed with it.
+- **One UNKNOWN label was wrong.** It now applies only when the API shows UNKNOWN for a trial whose dataset status is open.
+- **The personal-data note named only 4 columns.** The profile now counts emails in free text and degree-titled and INDIV-class sponsors, and the report says what Step 3 must do.
+- **Smaller fixes.** The data dictionary shows type drift by file and always-empty columns; the dataset parts refuse a download of a revision other than the pinned one; the part g table marks paths that return nothing; the manual-results file follows the chosen trials without overwriting recorded results.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
@@ -485,7 +551,7 @@ Aakrisht approved the eight panel decisions and asked for two follow-ups, then f
 
 **Test isolation:** Claude saw only aggregate test numbers. Dev errors were read for prompt work, as ADR 0010 allows.
 
-**Decisions made in this step.** Review of 2026-09-26: the report listed seven decisions, and Aakrisht approved its 1 to 5 and 7, which are items 1 to 5 and 7 below (7 together with the move of scikit-learn to the runtime dependencies). The report's decision 6 is item 8. Item 6 was not in the report, so it is still pending.
+**Decisions made in this step.** Review of 2026-09-26: the report listed seven decisions, and Aakrisht approved its 1 to 5 and 7, which are items 1 to 5 and 7 below (7 together with the move of scikit-learn to the runtime dependencies). The report's decision 6 is item 8. Item 6 was not in the report; Aakrisht approved it on 2026-09-29, together with the exit codes (2 for refusals, 4 for limit or outage stops) and `--status` refusing without a sample.
 
 1. **httpx instead of the Groq SDK.** It calls Groq's OpenAI-compatible endpoint with the HTTP client the project already uses, so there is no new dependency, respx mocks it in tests, and the provider is configurable by base URL. Alternative: the Groq SDK (in the locked stack for Step 6).
 2. **Request settings:** reasoning effort medium, reasoning text not returned, at most 4,096 completion tokens, strict JSON schema. They were fixed before the first dev run and never changed.
