@@ -73,12 +73,12 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 2, Feasibility spike** (parts a to e run on the dataset on 2026-09-29; the manual check and the GO or NO-GO decision are Aakrisht's). **Step 6** is in progress (LLM test result in: macro-F1 0.842; the 10,000-text LLM sample is 1,375 labeled and needs about 5.5 more days; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Step 3, Warehouse, contracts and live schemas** (Step 2 is GO under ADR 0011, 2026-09-30). **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
-| 2 | Feasibility spike (go/no-go) | Parts a to e and i done on the dataset; ADRs 0006 and 0007 accepted (2026-09-30); manual check and decision pending |
+| 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
@@ -309,6 +309,44 @@ All 96 columns are scalar (no list, struct or map types). What this means for AD
 - **One UNKNOWN label was wrong.** It now applies only when the API shows UNKNOWN for a trial whose dataset status is open.
 - **The personal-data note named only 4 columns.** The profile now counts emails in free text and degree-titled and INDIV-class sponsors, and the report says what Step 3 must do.
 - **Smaller fixes.** The data dictionary shows type drift by file and always-empty columns; the dataset parts refuse a download of a revision other than the pinned one; the part g table marks paths that return nothing; the manual-results file follows the chosen trials without overwriting recorded results.
+
+### Part e automated, and the GO decision (2026-09-30)
+
+Aakrisht replaced the manual check with an automated one (**ADR 0011, accepted**; its line is in the CLAUDE.md Amendments section). The Record History page is fed by the same internal history API the dataset was built from, so a script checks the same source as a person, on a larger sample.
+
+**Part e: automated version check.** 50 seeded cohort trials with at least 2 versions; for each, version 0 and one seeded later version, fetched from the internal history endpoint (verification only, 20 requests per minute or less, projections cached). 150 requests (50 change logs not already cached, 100 versions), about 7.5 minutes, 0 failures.
+
+- Agreement: **99.9%** (899 of 900 fields across 100 versions). Submitted date, study type, first posted, start date, primary completion, enrollment count, enrollment type and sponsor class agree for 100 of 100 versions; status for 99 of 100.
+- The 1 mismatch has a known cause: NCT05306652's latest version (3) is RECRUITING in the dataset and UNKNOWN on the registry, which set UNKNOWN without posting a new version (the same finding as part d). 0 mismatches without a known cause.
+
+**Criteria (all met):**
+
+| Criterion | Threshold | Measured |
+| --- | --- | --- |
+| Cohort trials | at least 200,000 | 420,582 |
+| last_update_post_date present on versions | at least 99% | 100.00% |
+| Automated agreement (part d) | at least 95% | 99.3% |
+| Automated version check (part e, ADR 0011) | at least 95% of fields across 100 versions, every mismatch with a known cause | 99.9%, 0 without a known cause |
+| Early stops in the cohort | at least 20,000 | 38,621 |
+| why_stopped present among early stops | at least 80% | 91.5% |
+| API v2 delta pull end to end | works | 6,047 of 6,047 records |
+
+**Decision: GO**, recorded in `docs/feasibility_report.md` by the rule in ADR 0011. No current-record-only field passes the under-3% stability rule (ADRs 0006 and 0007 settle phase and competition).
+
+**The manual CSV.** `docs/feasibility_manual_check.csv` is now an optional human spot check that no criterion depends on. It was not modified (its SHA-256 is the same before and after the run); the report shows its status for information only.
+
+**Decision flagged for approval.** The sample is drawn from cohort trials with at least 2 versions, so that every trial contributes version 0 and a later version, as ADR 0011 records. Single-version trials are covered by part d, which compares each trial's latest version.
+
+**Files touched:** `docs/adr/0011-automated-version-check-replaces-the-manual-check.md` (new), `CLAUDE.md` (Amendments line), `src/trialpulse/feasibility/{checks,history_api,report,spike}.py`, `tests/feasibility/{test_checks,test_report_and_spike}.py`, `docs/feasibility_report.md`, `docs/progress.md`, `docs/interview_notes.md`. Tests: 88 in `tests/feasibility/`.
+
+**Verify (PowerShell):**
+
+```powershell
+uv run python -m trialpulse.feasibility.spike --part e,h
+uv run pytest -q tests/feasibility
+```
+
+On a rerun every projection comes from the cache, so the first command makes 0 requests.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 

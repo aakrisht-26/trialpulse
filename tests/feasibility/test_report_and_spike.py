@@ -85,16 +85,61 @@ def test_report_with_blocked_dataset_parts(cfg: ProjectConfig) -> None:
     assert "—" not in text  # no em dashes (CLAUDE.md writing style)
 
 
+def _e_result(
+    agree: int, total: int = 900, unexplained: int = 0, versions: int = 100
+) -> dict[str, Any]:
+    return {
+        "status": "done", "trials": 50, "versions": versions, "requests_this_run": 0,
+        "failures": {}, "unexplained": unexplained, "mismatches": [], "per_field": {},
+        "overall": {"agree": agree, "total": total, "share": agree / total},
+    }  # fmt: skip
+
+
 def test_report_criteria_verdicts(cfg: ProjectConfig) -> None:
-    results: dict[str, Any] = {"c": _c_result(150_000, 25_000), "e": {"status": "pending_manual",
-               "trials": ["NCT1"], "checklist": "x", "results_file": "y"}}  # fmt: skip
+    results: dict[str, Any] = {"c": _c_result(150_000, 25_000), "e": _e_result(880)}
     manual = [{"nct_id": f"NCT{i}", "result": "pass" if i < 9 else "fail"} for i in range(10)]
 
     text = report.render_report(results, manual, cfg)
 
     assert "| Cohort trials | >= 200,000 | 150,000 | No |" in text
     assert "| Early stops in the cohort | >= 20,000 | 25,000 | Yes |" in text
-    assert "| Manual check (part e) | >= 9 of 10 | 9 of 10 pass | Yes |" in text
+    assert (
+        "97.8% (880 of 900 fields, 100 versions); 0 mismatches without a known cause | Yes |"
+        in text
+    )
+    assert (
+        "Optional human spot check (no criterion depends on it): 10 of 10 recorded (9 pass)."
+        in text
+    )
+    assert "**Decision: not stated.**" in text  # the cohort criterion fails
+
+
+def test_go_needs_every_automated_criterion_and_ignores_the_spot_check(cfg: ProjectConfig) -> None:
+    good: dict[str, Any] = {"c": _c_result(420_000, 38_000), "e": _e_result(890)}
+    good["d"] = {
+        "status": "done", "sampled": 200, "comparable": 200, "excluded": {},
+        "overall": {"agree": 1190, "total": 1200, "share": 1190 / 1200},
+        "trials_fully_agreeing": 190, "per_field": {}, "mismatches": [],
+        "api_source": {"kind": "per trial", "data_timestamp": "2026-09-29"},
+        "data_cutoff": "2026-09-25",
+    }  # fmt: skip
+    good["g"] = _g_result()
+    ok, failing = report.criteria_met(good)
+    assert ok, failing
+    assert report.decision_line(good).startswith("**Decision: GO.**")
+    failed_spot_check = [{"nct_id": f"NCT{i}", "result": "fail"} for i in range(10)]
+    text = report.render_report(good, failed_spot_check, cfg)
+    assert "**Decision: GO.**" in text
+    assert "The check needs 150 responses" in text
+    for broken in (
+        {**good, "e": _e_result(850)},  # under 95%
+        {**good, "e": _e_result(890, unexplained=1)},  # a mismatch without a known cause
+        {**good, "e": _e_result(890, versions=98)},  # fewer than 100 versions
+        {**good, "e": {"status": "blocked", "reason": "x"}},
+    ):
+        ok, failing = report.criteria_met(broken)
+        assert not ok
+        assert "Automated version check (part e, ADR 0011)" in failing
 
 
 def test_blocked_part_b_states_per_version_columns_explicitly(cfg: ProjectConfig) -> None:
@@ -133,8 +178,11 @@ def test_part_f_shows_phase_group_and_the_original_run(cfg: ProjectConfig) -> No
     assert "Groups at version 0: mid 60, na 40." in text
 
 
-def test_manual_check_pending_until_ten_results() -> None:
-    assert report._manual_measure([{"result": "pass"}]) == ("1 of 10 recorded", None)
+def test_spot_check_status_is_information_only() -> None:
+    assert (
+        report._spot_check_status([{"result": "pass"}, {"result": ""}])
+        == "1 of 2 recorded (1 pass)"
+    )
 
 
 @pytest.fixture
@@ -281,34 +329,17 @@ def test_report_shows_the_checklist_catch_up_and_evidence(cfg: ProjectConfig) ->
 
     assert catch_up_line("2026-09-25", dt.date(2026, 9, 29)).endswith("4 days, about 0.1 months.")
     e = {
-        "status": "pending_manual", "trials": ["NCT00000001"], "fields": ["overall_status"],
-        "results_file": "docs/feasibility_manual_check.csv",
-        "rows": [{"nct_id": "NCT00000001", "overall_status": "RECRUITING",
-                  "record_history_url": "https://clinicaltrials.gov/study/NCT00000001?tab=history"}],
+        **_e_result(900), "spot_check": {
+            "trials": ["NCT00000001"], "fields": ["overall_status"],
+            "results_file": "docs/feasibility_manual_check.csv",
+            "rows": [{"nct_id": "NCT00000001", "overall_status": "RECRUITING",
+                      "record_history_url": "https://clinicaltrials.gov/study/NCT00000001?tab=history"}],
+        },
     }  # fmt: skip
     report = render_report({"e": e}, [], cfg, today=dt.date(2026, 9, 29))
     link = "[history](https://clinicaltrials.gov/study/NCT00000001?tab=history)"
     assert f"| NCT00000001 | {link} | RECRUITING |" in report
     assert "on 2026-09-29" in report
-
-
-def test_the_manual_results_file_follows_the_chosen_trials(tmp_path: Path) -> None:
-    from trialpulse.feasibility.dataset import BlockedError
-
-    path = tmp_path / "manual.csv"
-    spike.write_manual_results(path, ["NCT1", "NCT2"])
-    assert path.read_text(encoding="utf-8").splitlines() == [
-        "nct_id,result,notes",
-        "NCT1,,",
-        "NCT2,,",
-    ]
-    spike.write_manual_results(path, ["NCT3"])  # nothing recorded yet: rewritten
-    assert path.read_text(encoding="utf-8").splitlines() == ["nct_id,result,notes", "NCT3,,"]
-    path.write_text("nct_id,result,notes\nNCT3,pass,\n", encoding="utf-8")
-    spike.write_manual_results(path, ["NCT3"])  # same trials: kept with the result
-    assert "NCT3,pass," in path.read_text(encoding="utf-8")
-    with pytest.raises(BlockedError, match="recorded results for other trials"):
-        spike.write_manual_results(path, ["NCT4"])
 
 
 def test_part_i_reads_the_cache_only(
@@ -354,3 +385,42 @@ def test_part_i_reads_the_cache_only(
     assert result["trials_missing_from_dataset"] == []
     report = render_report({"i": {"status": "done", **result}}, [], pinned)
     assert "it holds no posted date" in report
+
+
+def test_version_targets_are_seeded_multi_version_trials() -> None:
+    max_versions = {f"NCT{i:08d}": i % 4 for i in range(200)}  # a quarter have one version
+    targets = spike.version_targets(max_versions, 50, seed=42)
+    assert len(targets) == 50
+    assert all(max_versions[n] >= 1 for n in targets)
+    assert all(v[0] == 0 and 1 <= v[1] <= max_versions[n] for n, v in targets.items())
+    assert targets == spike.version_targets(max_versions, 50, seed=42)
+
+
+def test_version_check_reuses_cached_change_logs(tmp_path: Path) -> None:
+    from trialpulse.feasibility.fetch import JsonCache
+    from trialpulse.feasibility.history_api import run_version_check
+
+    cache = JsonCache(tmp_path)
+    cache.put("NCT1/changes", [{"version": 0, "date": "2020-01-05", "status": "RECRUITING",
+                               "module_labels": []}])  # fmt: skip
+    calls: list[str] = []
+
+    class Fetcher:
+        def get(self, url: str, params: Any = None) -> Any:
+            calls.append(url)
+            return {"study": {"protocolSection": {
+                "statusModule": {"overallStatus": "RECRUITING"},
+                "designModule": {"studyType": "INTERVENTIONAL",
+                                 "enrollmentInfo": {"count": 20, "type": "ESTIMATED"}},
+                "sponsorCollaboratorsModule": {"leadSponsor": {"class": "OTHER"},
+                                               "responsibleParty": {"investigatorFullName": "X"}},
+            }}}  # fmt: skip
+
+    run = run_version_check(Fetcher(), cache, {"NCT1": [0]})  # type: ignore[arg-type]
+    assert calls == ["https://clinicaltrials.gov/api/int/studies/NCT1/history/0"]  # no log call
+    assert run["requests_this_run"] == 1
+    snap = run["snapshots"]["NCT1"][0]
+    assert snap["enrollment_count"] == 20
+    assert snap["lead_sponsor_class"] == "OTHER"
+    assert "X" not in str(cache.get("NCT1/v0000_check"))  # only the checklist fields are cached
+    assert run_version_check(Fetcher(), cache, {"NCT1": [0]})["requests_this_run"] == 0  # type: ignore[arg-type]

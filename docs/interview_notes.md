@@ -73,3 +73,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "How do you know your prompt engineering did not overfit?"
 
 **Short answer.** I declared the rule for choosing the prompt before running it, iterated only on a 100-item dev split, froze the prompt in git, and then scored once on 300 held-out items that were never opened during prompt work, with a bootstrap interval. Dev said 0.98 and test said 0.84: the held-out number is the one reported, and the gap itself shows why the split matters.
+
+## Step 2 (completed): an automated version check and the GO decision
+
+**What was built.** Part e of the feasibility spike now checks the version history automatically: 50 seeded trials, version 0 and one random later version of each, fetched from the same internal history source the dataset was built from and compared field by field (submitted date, status, study type, first posted, start and primary completion dates, enrollment count and type, sponsor class) at the dataset's date precision. 899 of 900 fields agree; the one mismatch is the registry's UNKNOWN status, which it sets without posting a version. Every automated criterion passed, so Step 2 is GO.
+
+**Key decision and why.** Replace a 10-trial manual check with a 100-version automated one (ADR 0011). The registry's Record History page shows the same internal source, so a person clicking through pages adds no independence, only a smaller sample and hours of work. Every mismatch must have a named cause, so the check cannot pass on a share alone while hiding a systematic error.
+
+**Rejected alternative and why not.** Checking against API v2 only: it serves the current record, so it can never confirm what version 0 said, which is exactly what point-in-time reconstruction depends on.
+
+**Likely interview question.** "Your whole approach depends on a third-party version-history dataset. How do you know it is right?"
+
+**Short answer.** Three independent checks before building on it: the latest version of 200 random trials against the official API (99.3% agreement), the version lists and submission dates of 150 trials against the official change logs (973 of 973 dates), and 100 random historical versions against the official history source (99.9%). Every disagreement was traced to a named cause, mostly the registry setting UNKNOWN without a new version, which is itself a finding the model design now handles.

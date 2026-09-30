@@ -142,6 +142,69 @@ def fetch_version(
     return dict(cached)
 
 
+# Part e (ADR 0011): the checklist fields of one version, as JSON paths in its snapshot.
+CHECK_FIELD_PATHS: dict[str, str] = {
+    "overall_status": "statusModule.overallStatus",
+    "study_type": "designModule.studyType",
+    "study_first_post_date": "statusModule.studyFirstPostDateStruct.date",
+    "start_date": "statusModule.startDateStruct.date",
+    "primary_completion_date": "statusModule.primaryCompletionDateStruct.date",
+    "enrollment_count": "designModule.enrollmentInfo.count",
+    "enrollment_type": "designModule.enrollmentInfo.type",
+    "lead_sponsor_class": "sponsorCollaboratorsModule.leadSponsor.class",
+}
+
+
+def project_check_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """The part e checklist fields of one version snapshot. Nothing else is kept: snapshots
+    hold people's names and contact details."""
+    ps = get_path(payload, "study.protocolSection") or {}
+    return {name: get_path(ps, path) for name, path in CHECK_FIELD_PATHS.items()}
+
+
+def fetch_check_fields(
+    fetcher: JsonFetcher, cache: JsonCache, nct_id: str, version: int
+) -> dict[str, Any]:
+    key = f"{nct_id}/v{version:04d}_check"
+    cached = cache.get(key)
+    if cached is None:
+        payload = fetcher.get(f"{INT_STUDIES_URL}/{nct_id}/history/{version}")
+        cached = project_check_fields(payload)
+        cache.put(key, cached)
+    return dict(cached)
+
+
+def run_version_check(
+    fetcher: JsonFetcher, cache: JsonCache, targets: dict[str, list[int]]
+) -> dict[str, Any]:
+    """Part e: the change log and the checklist fields of the target versions of each trial.
+    Cached change logs (from part f) are reused. Returns per-trial logs and snapshots, the
+    failures, and how many requests the run made."""
+    start = time.monotonic()
+    keys = [f"{n}/changes" for n in targets] + [
+        f"{n}/v{v:04d}_check" for n, versions in targets.items() for v in versions
+    ]
+    uncached = _uncached(cache, keys)
+    logs: dict[str, list[dict[str, Any]]] = {}
+    snapshots: dict[str, dict[int, dict[str, Any]]] = {}
+    failures: dict[str, str] = {}
+    for nct_id, versions in targets.items():
+        try:
+            logs[nct_id] = fetch_change_log(fetcher, cache, nct_id)
+            snapshots[nct_id] = {v: fetch_check_fields(fetcher, cache, nct_id, v) for v in versions}
+        except (httpx.HTTPError, RetryableStatusError, ValueError) as exc:
+            failures[nct_id] = f"{type(exc).__name__}: {exc}"
+            if not logs and len(failures) >= _UNAVAILABLE_AFTER:
+                raise BlockedError("internal history endpoint unavailable") from exc
+    return {
+        "logs": logs,
+        "snapshots": snapshots,
+        "failures": failures,
+        "requests_this_run": uncached,
+        "elapsed_minutes_this_run": round((time.monotonic() - start) / 60, 1),
+    }
+
+
 def versions_to_fetch(change_log: Sequence[dict[str, Any]], mode: str) -> list[int]:
     """All versions, or ("changed_modules_only") the first version plus every version
     whose module labels may touch an audited field. The skipped versions leave the

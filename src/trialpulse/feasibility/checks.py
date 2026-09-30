@@ -263,6 +263,109 @@ def summarize_version_histories(per_trial: Mapping[str, Mapping[str, Any]]) -> d
     }
 
 
+VERSION_CHECK_FIELDS: tuple[str, ...] = (
+    "submitted_date",
+    "overall_status",
+    "study_type",
+    "study_first_post_date",
+    "start_date",
+    "primary_completion_date",
+    "enrollment_count",
+    "enrollment_type",
+    "lead_sponsor_class",
+)
+# Former names of today's enum values, as older versions record them.
+LEGACY_ENUM_NAMES: dict[str, str] = {"ANTICIPATED": "ESTIMATED"}
+NO_KNOWN_CAUSE = "no known cause"
+
+
+def compare_version_fields(
+    dataset_row: Mapping[str, Any],
+    official: Mapping[str, Any],
+    is_latest: bool,
+    open_statuses: Iterable[str] = (),
+) -> dict[str, dict[str, Any]]:
+    """Part e (ADR 0011): one version in the dataset against the same version from the
+    internal history endpoint, field by field, dates at the dataset's precision. Every
+    mismatch gets a cause: a known systematic one, or "no known cause"."""
+    open_set = {s.upper() for s in open_statuses}
+    pairs = {
+        "submitted_date": (
+            dataset_row.get("last_update_submit_date"),
+            official.get("submitted_date"),
+        ),
+        **{f: (dataset_row.get(f), official.get(f)) for f in VERSION_CHECK_FIELDS[1:]},
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for name, (ds, off) in pairs.items():
+        if name in ("start_date", "primary_completion_date"):
+            agree = dates_agree(ds, off, dataset_row.get(f"{name}_precision"))
+        elif name.endswith("_date"):
+            agree = dates_agree(ds, off)
+        elif name == "enrollment_count":
+            agree = (ds is None and off is None) or (
+                ds is not None and off is not None and int(ds) == int(off)
+            )
+        else:
+            agree = normalize_text(ds) == normalize_text(off)
+        cause = None
+        if not agree:
+            cause = NO_KNOWN_CAUSE
+            ds_up, off_up = str(ds or "").upper(), str(off or "").upper()
+            if name == "overall_status" and off_up == "UNKNOWN" and ds_up in open_set and is_latest:
+                cause = (
+                    "UNKNOWN shown by the registry for the latest version, without a new version"
+                )
+            elif LEGACY_ENUM_NAMES.get(off_up) == ds_up or LEGACY_ENUM_NAMES.get(ds_up) == off_up:
+                cause = "legacy name: ANTICIPATED is today's ESTIMATED"
+        result[name] = {
+            "agree": agree,
+            "dataset": _plain(ds),
+            "official": _plain(off),
+            "cause": cause,
+        }
+    return result
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    return value
+
+
+def summarize_version_check(
+    per_version: Mapping[tuple[str, int], Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    comparisons = [(key, f, r) for key, fields in per_version.items() for f, r in fields.items()]
+    agree = sum(1 for _, _, r in comparisons if r["agree"])
+    mismatches = [
+        {"nct_id": key[0], "version": key[1], "field": f, "dataset": r["dataset"],
+         "official": r["official"], "cause": r["cause"]}
+        for key, f, r in sorted(comparisons, key=lambda c: (c[0], VERSION_CHECK_FIELDS.index(c[1])))
+        if not r["agree"]
+    ]  # fmt: skip
+    per_field = {
+        f: {
+            "agree": sum(1 for _, g, r in comparisons if g == f and r["agree"]),
+            "total": sum(1 for _, g, _ in comparisons if g == f),
+        }
+        for f in VERSION_CHECK_FIELDS
+    }
+    return {
+        "versions": len(per_version),
+        "overall": {
+            "agree": agree,
+            "total": len(comparisons),
+            "share": agree / len(comparisons) if comparisons else None,
+        },
+        "per_field": per_field,
+        "mismatches": mismatches,
+        "unexplained": sum(1 for m in mismatches if m["cause"] == NO_KNOWN_CAUSE),
+    }
+
+
 def field_changed_after_first(snapshots: Sequence[Mapping[str, Any]], name: str) -> bool:
     """True if any later snapshot differs from the first one in this field. A change
     that is later reverted still counts: the value at some landmark differed."""

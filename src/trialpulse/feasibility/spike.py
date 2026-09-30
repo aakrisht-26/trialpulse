@@ -15,7 +15,6 @@ API responses and downloads are cached under data/, so a rerun skips finished wo
 """
 
 import argparse
-import csv
 import datetime as dt
 import gzip
 import json
@@ -59,7 +58,6 @@ RESULTS_DIR = SPIKE_DIR / "results"
 CACHE_DIR = SPIKE_DIR / "cache"
 LOG_DIR = SPIKE_DIR / "logs"
 CURRENT_FIELDS_PARQUET = SPIKE_DIR / "current_fields.parquet"
-MANUAL_CHECKLIST = SPIKE_DIR / "part_e_checklist.csv"
 DOCS_DIR = REPO_ROOT / "docs"
 MANUAL_RESULTS_CSV = DOCS_DIR / "feasibility_manual_check.csv"
 REPORT_PATH = DOCS_DIR / "feasibility_report.md"
@@ -69,7 +67,8 @@ PART_ORDER = ("a", "b", "c", "g", "d", "e", "f", "i", "h")
 
 # Sample sizes and windows from the Step 2 specification (CLAUDE.md Section 18).
 AUTOMATED_CHECK_SAMPLE = 200
-MANUAL_CHECK_SAMPLE = 10
+MANUAL_CHECK_SAMPLE = 10  # the optional human spot check
+VERSION_CHECK_SAMPLE = 50  # part e (ADR 0011)
 STABILITY_SAMPLE = 150
 MANUAL_STABILITY_FALLBACK_SAMPLE = 20
 DELTA_WINDOW_DAYS = 7
@@ -428,34 +427,14 @@ def checklist_row(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def write_manual_results(path: Path, chosen: list[str]) -> None:
-    """The committed file where Aakrisht records pass or fail, one row per chosen trial. It is
-    rewritten while no result is recorded; recorded results for other trials are never
-    overwritten."""
-    if path.is_file():
-        with path.open(newline="", encoding="utf-8") as fh:
-            rows = list(csv.DictReader(fh))
-        if [r["nct_id"] for r in rows] == chosen:
-            return
-        if any((r.get("result") or "").strip() for r in rows):
-            raise BlockedError(
-                f"{path.name} holds recorded results for other trials; move it aside first"
-            )
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        results = csv.writer(fh)
-        results.writerow(["nct_id", "result", "notes"])
-        for nct_id in chosen:
-            results.writerow([nct_id, "", ""])
-
-
-def part_e(ctx: Context) -> dict[str, Any]:
-    """Prepare Aakrisht's manual check: 10 of the part d trials, their dataset version 0
-    values (kept under data/, which is gitignored) and a committed results file with
-    ids only, where he records pass or fail."""
+def _spot_check_rows(ctx: Context, glob: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """The optional human spot check: 10 of the part d trials (seeded) with their version 0
+    values. docs/feasibility_manual_check.csv is Aakrisht's; it is read, never written."""
     from trialpulse.feasibility.checks import seeded_sample
 
-    d = _require_done("d", "part e")
-    glob = _dataset_glob(ctx)
+    d = load_result("d")
+    if d is None or d.get("status") != "done":
+        return [], []
     chosen = seeded_sample(d["sample"], MANUAL_CHECK_SAMPLE, ctx.cfg.seeds.default)
     ids = ", ".join(f"'{i}'" for i in chosen)
     with duckdb.connect() as con:
@@ -467,22 +446,87 @@ def part_e(ctx: Context) -> dict[str, Any]:
         )
         names = [d_[0] for d_ in cur.description]
         rows = [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
-    checklist = [checklist_row(row) for row in rows]
-    MANUAL_CHECKLIST.parent.mkdir(parents=True, exist_ok=True)
-    with MANUAL_CHECKLIST.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh, fieldnames=["nct_id", "record_history_url", *MANUAL_CHECK_FIELDS]
-        )
-        writer.writeheader()
-        writer.writerows(checklist)
-    write_manual_results(MANUAL_RESULTS_CSV, chosen)
+    return chosen, [checklist_row(row) for row in rows]
+
+
+def version_targets(max_versions: dict[str, int], n: int, seed: int) -> dict[str, list[int]]:
+    """Part e's sample: n seeded trials with at least 2 versions, each with version 0 and one
+    later version chosen with a seed per trial."""
+    import random
+
+    from trialpulse.feasibility.checks import seeded_sample
+
+    pool = [nct_id for nct_id, top in max_versions.items() if top >= 1]
+    chosen = seeded_sample(pool, n, seed)
     return {
-        "status_override": "pending_manual",
-        "trials": chosen,
-        "fields": list(MANUAL_CHECK_FIELDS),
-        "rows": checklist,
-        "checklist": MANUAL_CHECKLIST.relative_to(REPO_ROOT).as_posix(),
-        "results_file": MANUAL_RESULTS_CSV.relative_to(REPO_ROOT).as_posix(),
+        nct_id: [0, random.Random(f"{seed}:part-e:{nct_id}").randint(1, max_versions[nct_id])]
+        for nct_id in chosen
+    }
+
+
+def part_e(ctx: Context) -> dict[str, Any]:
+    """Automated version check (ADR 0011): version 0 and one later version of 50 seeded
+    cohort trials, from the internal history endpoint (verification only, 20 requests per
+    minute or less, cached projections), against the dataset, field by field."""
+    from trialpulse.feasibility.checks import compare_version_fields, summarize_version_check
+    from trialpulse.feasibility.history_api import REQUESTS_PER_MINUTE, run_version_check
+
+    glob = _dataset_glob(ctx)
+    with duckdb.connect() as con:
+        cohort_counts(con, glob, ctx.cfg)
+        max_versions = {
+            str(n): int(v)
+            for n, v in con.execute(
+                f"""SELECT nct_id, max(nct_version) FROM read_parquet('{glob}')
+                WHERE nct_id IN (SELECT nct_id FROM spike_cohort) GROUP BY nct_id"""
+            ).fetchall()
+        }
+    targets = version_targets(max_versions, VERSION_CHECK_SAMPLE, ctx.cfg.seeds.default)
+    fetcher: Any = (
+        OfflineFetcher()
+        if ctx.offline
+        else JsonFetcher(ctx.client, RateLimiter(REQUESTS_PER_MINUTE))
+    )
+    run = run_version_check(fetcher, JsonCache(CACHE_DIR / "history"), targets)
+    keys = [(n, v) for n, versions in targets.items() for v in versions]
+    ids = ", ".join(f"'{n}'" for n in targets)
+    with duckdb.connect() as con:
+        cur = con.execute(
+            f"""SELECT nct_id, nct_version, last_update_submit_date, overall_status, study_type,
+                study_first_post_date, start_date, start_date_precision, primary_completion_date,
+                primary_completion_date_precision, enrollment_count, enrollment_type,
+                lead_sponsor_class
+            FROM read_parquet('{glob}') WHERE nct_id IN ({ids})"""
+        )
+        names = [d_[0] for d_ in cur.description]
+        dataset = {(str(r[0]), int(r[1])): dict(zip(names, r, strict=True)) for r in cur.fetchall()}
+    per_version = {}
+    for nct_id, version in keys:
+        if nct_id in run["failures"] or (nct_id, version) not in dataset:
+            continue
+        log = run["logs"][nct_id]
+        submitted = next((c["date"] for c in log if c["version"] == version), None)
+        official = {**run["snapshots"][nct_id][version], "submitted_date": submitted}
+        is_latest = bool(log) and version == max(c["version"] for c in log)
+        per_version[(nct_id, version)] = compare_version_fields(
+            dataset[(nct_id, version)], official, is_latest, ctx.cfg.statuses.open
+        )
+    summary = summarize_version_check(per_version)
+    spot_trials, spot_rows = _spot_check_rows(ctx, glob)
+    return {
+        **summary,
+        "trials": len(targets),
+        "targets": dict(targets),
+        "failures": run["failures"],
+        "responses_needed": len(targets) + len(keys),
+        "requests_this_run": run["requests_this_run"],
+        "elapsed_minutes_this_run": run["elapsed_minutes_this_run"],
+        "spot_check": {
+            "trials": spot_trials,
+            "fields": list(MANUAL_CHECK_FIELDS),
+            "rows": spot_rows,
+            "results_file": MANUAL_RESULTS_CSV.relative_to(REPO_ROOT).as_posix(),
+        },
     }
 
 

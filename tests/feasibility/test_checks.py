@@ -236,3 +236,49 @@ def test_version_histories_are_compared_version_by_version() -> None:
     assert summary["status_agreement"] == {"agree": 2, "total": 3}  # 1 of 2, 1 of 1
     assert summary["versions_posted_after_logs"] == 2
     assert [m["nct_id"] for m in summary["mismatches"]] == ["NCT1", "NCT2"]
+
+
+def test_version_fields_are_compared_with_causes() -> None:
+    from trialpulse.feasibility.checks import (
+        NO_KNOWN_CAUSE,
+        compare_version_fields,
+        summarize_version_check,
+    )
+
+    ds = {
+        "last_update_submit_date": dt.date(2020, 1, 5), "overall_status": "RECRUITING",
+        "study_type": "INTERVENTIONAL", "study_first_post_date": dt.date(2020, 1, 7),
+        "start_date": dt.date(2019, 12, 1), "start_date_precision": "month",
+        "primary_completion_date": dt.date(2021, 6, 1),
+        "primary_completion_date_precision": "month",
+        "enrollment_count": 40, "enrollment_type": "ESTIMATED", "lead_sponsor_class": "OTHER",
+    }  # fmt: skip
+    official = {
+        "submitted_date": "2020-01-05", "overall_status": "RECRUITING",
+        "study_type": "INTERVENTIONAL", "study_first_post_date": "2020-01-07",
+        "start_date": "2019-12", "primary_completion_date": "2021-06",
+        "enrollment_count": 40, "enrollment_type": "ESTIMATED", "lead_sponsor_class": "OTHER",
+    }  # fmt: skip
+    same = compare_version_fields(ds, official, is_latest=False)
+    assert all(r["agree"] for r in same.values())
+    off = {
+        **official,
+        "overall_status": "UNKNOWN",
+        "enrollment_type": "ANTICIPATED",
+        "enrollment_count": 41,
+    }
+    result = compare_version_fields(ds, off, is_latest=True, open_statuses=["RECRUITING"])
+    assert result["overall_status"]["cause"] == (
+        "UNKNOWN shown by the registry for the latest version, without a new version"
+    )
+    assert result["enrollment_type"]["cause"] == "legacy name: ANTICIPATED is today's ESTIMATED"
+    assert result["enrollment_count"]["cause"] == NO_KNOWN_CAUSE
+    not_latest = compare_version_fields(ds, off, is_latest=False, open_statuses=["RECRUITING"])
+    assert not_latest["overall_status"]["cause"] == NO_KNOWN_CAUSE
+    summary = summarize_version_check({("NCT1", 0): same, ("NCT1", 3): result})
+    assert summary["versions"] == 2
+    assert summary["overall"] == {"agree": 15, "total": 18, "share": 15 / 18}
+    assert summary["unexplained"] == 1
+    assert [m["field"] for m in summary["mismatches"]] == [
+        "overall_status", "enrollment_count", "enrollment_type",
+    ]  # fmt: skip

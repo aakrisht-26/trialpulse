@@ -44,12 +44,24 @@ def read_manual_results(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(fh)]
 
 
-def _manual_measure(manual: list[dict[str, str]]) -> tuple[str, bool | None]:
+def _spot_check_status(manual: list[dict[str, str]]) -> str:
+    """The optional human spot check (ADR 0011): shown for information, never a criterion."""
     done = [r for r in manual if r.get("result", "").strip()]
-    if len(done) < 10:
-        return f"{len(done)} of 10 recorded", None
     passed = sum(1 for r in done if r["result"].strip().casefold() == "pass")
-    return f"{passed} of {len(done)} pass", passed >= 9
+    return f"{len(done)} of {len(manual) or 10} recorded ({passed} pass)"
+
+
+def _version_check_measure(r: Mapping[str, Any]) -> tuple[str, bool | None]:
+    o = r["overall"]
+    unexplained = int(r.get("unexplained", 0))
+    measured = (
+        f"{_pct(o['share'])} ({o['agree']:,} of {o['total']:,} fields, {r['versions']} versions); "
+        f"{unexplained} mismatch{'' if unexplained == 1 else 'es'} without a known cause"
+    )
+    met = (
+        o["share"] is not None and o["share"] >= 0.95 and unexplained == 0 and r["versions"] >= 100
+    )
+    return measured, met
 
 
 CRITERIA: tuple[Criterion, ...] = (
@@ -73,6 +85,12 @@ CRITERIA: tuple[Criterion, ...] = (
         ">= 95%",
         "d",
         lambda r: (_pct(r["overall"]["share"]), _at_least(r["overall"]["share"], 0.95)),
+    ),
+    Criterion(
+        "Automated version check (part e, ADR 0011)",
+        ">= 95% of fields across 100 versions, every mismatch with a known cause",
+        "e",
+        _version_check_measure,
     ),
     Criterion(
         "Early stops in the cohort",
@@ -118,16 +136,39 @@ def _criteria_table(results: Mapping[str, Result], manual: list[dict[str, str]])
             continue
         measured, met = c.measure(result)
         rows.append((c.label, c.threshold, measured, _verdict(met, "?")))
-    e = results.get("e")
-    if e is None or e.get("status") not in {"done", "pending_manual"}:
-        rows.insert(
-            3, ("Manual check (part e)", ">= 9 of 10", f"part e {_status_word(e)}", "Blocked")
-        )
-    else:
-        measured, met = _manual_measure(manual)
-        rows.insert(3, ("Manual check (part e)", ">= 9 of 10", measured, _verdict(met, "Pending")))
     lines += [f"| {a} | {b} | {c} | {d} |" for a, b, c, d in rows]
+    if manual:
+        lines += [
+            "",
+            "Optional human spot check (no criterion depends on it): "
+            f"{_spot_check_status(manual)}.",
+        ]
     return lines
+
+
+def criteria_met(results: Mapping[str, Result]) -> tuple[bool, list[str]]:
+    """Whether every automated criterion is met, and the labels of those that are not."""
+    failing = []
+    for c in CRITERIA:
+        result = results.get(c.part)
+        if result is None or result.get("status") != "done" or c.measure(result)[1] is not True:
+            failing.append(c.label)
+    return not failing, failing
+
+
+def decision_line(results: Mapping[str, Result]) -> str:
+    """ADR 0011: Step 2 is GO when every automated criterion is met; otherwise no decision."""
+    ok, failing = criteria_met(results)
+    if ok:
+        return (
+            "**Decision: GO.** Every automated criterion is met. Under ADR 0011 (Aakrisht, "
+            "2026-09-30), Step 2 is GO when every automated criterion passes."
+        )
+    return (
+        "**Decision: not stated.** Not every automated criterion is met ("
+        + "; ".join(failing)
+        + "). Under ADR 0011, no decision is stated until they all pass."
+    )
 
 
 def _part_a(r: Mapping[str, Any]) -> list[str]:
@@ -384,21 +425,67 @@ CHECKLIST_LABELS: dict[str, str] = {
 }
 
 
+VERSION_FIELD_LABELS: dict[str, str] = {
+    "submitted_date": "submitted date",
+    "overall_status": "status",
+    "study_type": "study type",
+    "study_first_post_date": "first posted",
+    "start_date": "start date",
+    "primary_completion_date": "primary completion",
+    "enrollment_count": "enrollment count",
+    "enrollment_type": "enrollment type",
+    "lead_sponsor_class": "sponsor class",
+}
+
+
 def _part_e(r: Mapping[str, Any]) -> list[str]:
-    fields = [f for f in r.get("fields", []) if f in CHECKLIST_LABELS]
+    o = r["overall"]
     lines = [
-        f"Checklist for the manual check: {len(r['trials'])} of the part d trials (seeded). For "
-        "each trial, open its Record History page, select the earliest version (its submitted "
-        "date is in the Submitted column below), and compare the fields listed here with that "
-        "version. Dates are shown at the precision the dataset records (a year, a month or a "
-        f"day). Record pass or fail, with a note for any difference, in `{r['results_file']}`.",
+        f"- {r['trials']} cohort trials with at least 2 versions (seeded); version 0 and one "
+        f"seeded later version of each: {r['versions']} versions, compared field by field with "
+        "the same versions from the internal history endpoint (verification only, 20 requests "
+        "per minute or less, cached projections). The check needs "
+        f"{r.get('responses_needed', r['versions'] + r['trials'])} responses (a change log per "
+        f"trial and each compared version); the last run requested {r['requests_this_run']} of "
+        f"them and read the rest from the cache; {len(r.get('failures') or {})} trials failed "
+        "to fetch.",
+        f"- Agreement: {_pct(o['share'])} ({o['agree']:,} of {o['total']:,} fields); "
+        f"{r.get('unexplained', 0)} mismatches without a known cause. Dates are compared at the "
+        "dataset's precision.",
         "",
-        "| Trial | Record History | " + " | ".join(CHECKLIST_LABELS[f] for f in fields) + " |",
-        "| --- | --- |" + " --- |" * len(fields),
+        "| Field | Agree |",
+        "| --- | --- |",
     ]
-    for row in r.get("rows", []):
-        values = " | ".join("" if row.get(f) is None else str(row[f]) for f in fields)
-        lines.append(f"| {row['nct_id']} | [history]({row['record_history_url']}) | {values} |")
+    for name, v in r["per_field"].items():
+        lines.append(f"| {VERSION_FIELD_LABELS.get(name, name)} | {v['agree']} of {v['total']} |")
+    if r["mismatches"]:
+        lines += [
+            "",
+            "Mismatches (trial, version, field: dataset value, official value; cause):",
+            "",
+        ]
+        for m in r["mismatches"]:
+            lines.append(
+                f"- {m['nct_id']} version {m['version']}, "
+                f"{VERSION_FIELD_LABELS.get(m['field'], m['field'])}: {m['dataset']}, "
+                f"{m['official']}; {m['cause']}"
+            )
+    spot = r.get("spot_check") or {}
+    fields = [f for f in spot.get("fields", []) if f in CHECKLIST_LABELS]
+    if spot.get("rows"):
+        lines += [
+            "",
+            "Optional human spot check (ADR 0011: no criterion depends on it). For each trial, "
+            "open its Record History page, select the earliest version (its submitted date is in "
+            "the Submitted column), and compare these version 0 values; dates are at the "
+            f"dataset's precision. Record pass or fail in `{spot['results_file']}`.",
+            "",
+            "| Trial | Record History | " + " | ".join(CHECKLIST_LABELS[f] for f in fields) + " |",
+            "| --- | --- |" + " --- |" * len(fields),
+        ]
+        for row in spot["rows"]:
+            values = " | ".join("" if row.get(f) is None else str(row[f]) for f in fields)
+            lines.append(f"| {row['nct_id']} | [history]({row['record_history_url']}) | {values} |")
     return lines
 
 
@@ -498,6 +585,7 @@ RENDERERS: dict[str, Callable[[Mapping[str, Any]], list[str]]] = {
     "b": _part_b,
     "c": _part_c,
     "d": _part_d,
+    "e": _part_e,
     "f": _part_f,
     "g": _part_g,
     "i": _part_i,
@@ -507,7 +595,7 @@ TITLES = {
     "b": "b. Profile",
     "c": "c. Cohort counts",
     "d": "d. Automated check against API v2",
-    "e": "e. Manual check (Aakrisht)",
+    "e": "e. Automated version check (ADR 0011)",
     "f": "f. Stability audit of list fields",
     "g": "g. API v2 check",
     "i": "i. Version history against the official change logs",
@@ -548,11 +636,10 @@ def render_report(
     lines = [
         "# Feasibility report (Step 2)",
         "",
-        "Draft generated by `uv run python -m trialpulse.feasibility.spike --part h` from the "
+        "Generated by `uv run python -m trialpulse.feasibility.spike --part h` from the "
         f"saved part results, on {today.isoformat()}. Rerun it after any part changes.",
         "",
-        "**Decision: not stated.** This draft reports the measured numbers only. GO or NO-GO "
-        "is recorded by Aakrisht after he reviews it and completes the manual check (part e).",
+        decision_line(results),
         "",
         f"Dataset: `{cfg.dataset.repo_id}`, config `{cfg.dataset.config_name}`, pinned "
         f"revision `{cfg.dataset.revision or 'not pinned yet'}`.",
@@ -574,9 +661,6 @@ def render_report(
             lines.append(f"Reason: {result.get('reason') or result.get('error')}")
             if part == "b":
                 lines += ["", *_per_version_columns(None)]
-            continue
-        if part == "e":
-            lines += ["", *_part_e(result)]
             continue
         renderer = RENDERERS.get(part)
         if renderer and result.get("status") == "done":
