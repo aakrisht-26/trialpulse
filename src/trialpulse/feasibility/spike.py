@@ -5,8 +5,9 @@
     uv run python -m trialpulse.feasibility.spike --part a --pin-latest
 
 Parts: a download, b profile, c cohort counts, d automated check against API v2,
-e manual check checklist, f stability audit of list fields, g API v2 check, h report.
-"all" runs them in dependency order: a, b, c, g, d, e, f, h.
+e manual check checklist, f stability audit of list fields, g API v2 check, i version
+history against the official change logs (from the part f cache, no request), h report.
+"all" runs them in dependency order: a, b, c, g, d, e, f, i, h.
 
 Every part writes data/spike/results/part_<x>.json with a status ("done", "blocked",
 "pending_manual" or "failed") and its numbers. A blocked part does not stop the others.
@@ -64,7 +65,7 @@ MANUAL_RESULTS_CSV = DOCS_DIR / "feasibility_manual_check.csv"
 REPORT_PATH = DOCS_DIR / "feasibility_report.md"
 DATA_DICTIONARY_PATH = DOCS_DIR / "data_dictionary_history.md"
 
-PART_ORDER = ("a", "b", "c", "g", "d", "e", "f", "h")
+PART_ORDER = ("a", "b", "c", "g", "d", "e", "f", "i", "h")
 
 # Sample sizes and windows from the Step 2 specification (CLAUDE.md Section 18).
 AUTOMATED_CHECK_SAMPLE = 200
@@ -529,6 +530,48 @@ def part_f(ctx: Context) -> dict[str, Any]:
     return result
 
 
+# Part i -----------------------------------------------------------------------------
+
+
+def part_i(ctx: Context) -> dict[str, Any]:
+    """The dataset's versions against the official change logs that part f cached: version
+    lists, each version's submitted date and each version's status. Reads the cache only; it
+    never makes a request."""
+    from trialpulse.feasibility.checks import (
+        compare_version_history,
+        summarize_version_histories,
+    )
+
+    glob = _dataset_glob(ctx)
+    history = JsonCache(CACHE_DIR / "history")
+    logs: dict[str, list[dict[str, Any]]] = {}
+    if history.root.is_dir():
+        for folder in sorted(p for p in history.root.iterdir() if p.is_dir()):
+            log = history.get(f"{folder.name}/changes")
+            if log is not None:
+                logs[folder.name] = list(log)
+    if not logs:
+        raise BlockedError("the part f cache holds no change logs")
+    ids = ", ".join(f"'{i}'" for i in logs)
+    with duckdb.connect() as con:
+        rows = con.execute(
+            f"""SELECT nct_id, nct_version, last_update_submit_date, overall_status
+            FROM read_parquet('{glob}', union_by_name = true) WHERE nct_id IN ({ids})"""
+        ).fetchall()
+    versions: dict[str, list[dict[str, Any]]] = {}
+    for nct_id, version, submitted, status in rows:
+        versions.setdefault(str(nct_id), []).append(
+            {"version": version, "submitted": submitted, "status": status}
+        )
+    per_trial = {
+        nct_id: compare_version_history(versions.get(nct_id, []), log, ctx.cfg.statuses.open)
+        for nct_id, log in logs.items()
+    }
+    summary = summarize_version_histories(per_trial)
+    summary["trials_missing_from_dataset"] = sorted(set(logs) - set(versions))
+    return summary
+
+
 # Part h -----------------------------------------------------------------------------
 
 
@@ -550,6 +593,7 @@ PARTS: dict[str, Callable[[Context], dict[str, Any]]] = {
     "f": part_f,
     "g": part_g,
     "h": part_h,
+    "i": part_i,
 }
 
 
@@ -580,7 +624,7 @@ def _parse_parts(value: str) -> list[str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
-    parser.add_argument("--part", type=_parse_parts, required=True, help="a..h, a list, or all")
+    parser.add_argument("--part", type=_parse_parts, required=True, help="a..i, a list, or all")
     parser.add_argument(
         "--pin-latest",
         action="store_true",

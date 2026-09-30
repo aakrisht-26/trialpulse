@@ -309,3 +309,48 @@ def test_the_manual_results_file_follows_the_chosen_trials(tmp_path: Path) -> No
     assert "NCT3,pass," in path.read_text(encoding="utf-8")
     with pytest.raises(BlockedError, match="recorded results for other trials"):
         spike.write_manual_results(path, ["NCT4"])
+
+
+def test_part_i_reads_the_cache_only(
+    cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    import duckdb
+
+    from trialpulse.feasibility.dataset import BlockedError
+    from trialpulse.feasibility.fetch import JsonCache
+    from trialpulse.feasibility.report import render_report
+
+    raw, results, cache = tmp_path / "raw", tmp_path / "results", tmp_path / "cache"
+    monkeypatch.setattr(spike, "RAW_DIR", raw)
+    monkeypatch.setattr(spike, "RESULTS_DIR", results)
+    monkeypatch.setattr(spike, "CACHE_DIR", cache)
+    results.mkdir()
+    (results / "part_a.json").write_text(
+        json.dumps({"part": "a", "status": "done", "revision": "v1"}), encoding="utf-8"
+    )
+    core = raw / "v1" / cfg.dataset.config_name
+    core.mkdir(parents=True)
+    duckdb.sql(
+        f"""COPY (SELECT * FROM (VALUES
+            ('NCT1', 0, DATE '2020-01-05', 'RECRUITING'),
+            ('NCT1', 1, DATE '2021-02-01', 'COMPLETED')
+        ) AS t(nct_id, nct_version, last_update_submit_date, overall_status))
+        TO '{(core / "part.parquet").as_posix()}' (FORMAT parquet)"""
+    )
+    pinned = cfg.model_copy(update={"dataset": cfg.dataset.model_copy(update={"revision": "v1"})})
+    ctx = spike.Context(cfg=pinned, hf_token=None)
+    with pytest.raises(BlockedError, match="no change logs"):
+        spike.part_i(ctx)
+    JsonCache(cache / "history").put(
+        "NCT1/changes",
+        [{"version": 0, "date": "2020-01-05", "status": "RECRUITING", "module_labels": []},
+         {"version": 1, "date": "2021-02-01", "status": "COMPLETED", "module_labels": []}],
+    )  # fmt: skip
+    result = spike.part_i(ctx)
+    assert result["status_agreement"] == {"agree": 2, "total": 2}
+    assert result["date_agreement"] == {"agree": 2, "total": 2}
+    assert result["trials_missing_from_dataset"] == []
+    report = render_report({"i": {"status": "done", **result}}, [], pinned)
+    assert "it holds no posted date" in report

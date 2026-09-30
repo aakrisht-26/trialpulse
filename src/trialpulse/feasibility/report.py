@@ -329,6 +329,46 @@ def _part_d(r: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _part_i(r: Mapping[str, Any]) -> list[str]:
+    dates, statuses = r["date_agreement"], r["status_agreement"]
+    lines = [
+        f"- {r['trials']} trials from the part f cache (read from the cache only, no request): "
+        f"{r['versions_in_logs']:,} versions in the official change logs, "
+        f"{r['versions_in_dataset']:,} in the dataset; {r['trials_with_the_same_versions']} trials "
+        "have the same version list"
+        + (
+            f", and {r['versions_posted_after_logs']} dataset versions were posted after the "
+            "change logs were fetched"
+            if r["versions_posted_after_logs"]
+            else ""
+        )
+        + ".",
+        f"- Submitted date agrees for {dates['agree']:,} of {dates['total']:,} versions "
+        f"({_pct(dates['agree'] / dates['total'] if dates['total'] else None)}). The change "
+        "log dates each version by its submission; it holds no posted date, so the dataset's "
+        "last_update_post_date cannot be checked this way.",
+        f"- Status agrees for {statuses['agree']:,} of {statuses['total']:,} versions "
+        f"({_pct(statuses['agree'] / statuses['total'] if statuses['total'] else None)}).",
+    ]
+    missing = r.get("trials_missing_from_dataset") or []
+    if missing:
+        lines.append(f"- Trials with a change log but not in the dataset: {', '.join(missing)}.")
+    if r["mismatches"]:
+        lines += ["", "Differences (trial, version and field):", ""]
+        for m in r["mismatches"]:
+            notes = m.get("explained") or {}
+            parts = [f"only in the change log: {m['only_in_log']}"] if m["only_in_log"] else []
+            if m["missing_from_log"]:
+                parts.append(f"missing from the change log: {m['missing_from_log']}")
+            parts += [f"version {v} submitted date" for v in m["date_mismatches"]]
+            parts += [
+                f"version {v} status" + (f" ({notes[str(v)]})" if str(v) in notes else "")
+                for v in m["status_mismatches"]
+            ]
+            lines.append(f"- {m['nct_id']}: {'; '.join(parts)}")
+    return lines
+
+
 CHECKLIST_LABELS: dict[str, str] = {
     "last_update_submit_date": "Submitted",
     "overall_status": "Status",
@@ -460,6 +500,7 @@ RENDERERS: dict[str, Callable[[Mapping[str, Any]], list[str]]] = {
     "d": _part_d,
     "f": _part_f,
     "g": _part_g,
+    "i": _part_i,
 }
 TITLES = {
     "a": "a. Download",
@@ -469,6 +510,7 @@ TITLES = {
     "e": "e. Manual check (Aakrisht)",
     "f": "f. Stability audit of list fields",
     "g": "g. API v2 check",
+    "i": "i. Version history against the official change logs",
 }
 
 

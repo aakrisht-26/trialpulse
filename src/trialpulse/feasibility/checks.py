@@ -189,6 +189,80 @@ def summarize_comparisons(comparisons: Sequence[TrialComparison]) -> dict[str, A
     }
 
 
+def compare_version_history(
+    dataset_versions: Sequence[Mapping[str, Any]],
+    change_log: Sequence[Mapping[str, Any]],
+    open_statuses: Iterable[str] = (),
+) -> dict[str, Any]:
+    """One trial's dataset versions ({"version", "submitted", "status"}) against the official
+    change log ({"version", "date", "status"}). The change log dates each version by its
+    submission, so dates are compared with the dataset's submitted date. Dataset versions
+    numbered after the last logged one were posted after the log was fetched, and are not
+    disagreements."""
+    log = {int(c["version"]): c for c in change_log}
+    ds = {int(v["version"]): v for v in dataset_versions}
+    last_logged = max(log) if log else -1
+    both = sorted(set(log) & set(ds))
+    only_dataset = sorted(set(ds) - set(log))
+    open_set = {s.upper() for s in open_statuses}
+    date_mismatches = [
+        v for v in both if str(ds[v]["submitted"] or "")[:10] != str(log[v]["date"] or "")[:10]
+    ]
+    status_mismatches = [
+        v for v in both if str(ds[v]["status"] or "").upper() != str(log[v]["status"] or "").upper()
+    ]
+    explained = {
+        v: "UNKNOWN shown by the registry for the latest version, without a new version"
+        for v in status_mismatches
+        if v == last_logged
+        and str(log[v]["status"]).upper() == "UNKNOWN"
+        and str(ds[v]["status"] or "").upper() in open_set
+    }
+    return {
+        "versions_in_log": len(log),
+        "versions_in_dataset": len(ds),
+        "compared": len(both),
+        "only_in_log": sorted(set(log) - set(ds)),
+        "missing_from_log": [v for v in only_dataset if v <= last_logged],
+        "posted_after_log": [v for v in only_dataset if v > last_logged],
+        "date_mismatches": date_mismatches,
+        "status_mismatches": status_mismatches,
+        "explained": explained,
+    }
+
+
+def summarize_version_histories(per_trial: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    compared = sum(r["compared"] for r in per_trial.values())
+    dates = sum(len(r["date_mismatches"]) for r in per_trial.values())
+    statuses = sum(len(r["status_mismatches"]) for r in per_trial.values())
+    same = [t for t, r in per_trial.items() if not r["only_in_log"] and not r["missing_from_log"]]
+    return {
+        "trials": len(per_trial),
+        "trials_with_the_same_versions": len(same),
+        "versions_in_logs": sum(r["versions_in_log"] for r in per_trial.values()),
+        "versions_in_dataset": sum(r["versions_in_dataset"] for r in per_trial.values()),
+        "versions_compared": compared,
+        "versions_posted_after_logs": sum(len(r["posted_after_log"]) for r in per_trial.values()),
+        "date_agreement": {"agree": compared - dates, "total": compared},
+        "status_agreement": {"agree": compared - statuses, "total": compared},
+        "mismatches": [
+            {
+                "nct_id": t,
+                "only_in_log": r["only_in_log"],
+                "missing_from_log": r["missing_from_log"],
+                "date_mismatches": r["date_mismatches"],
+                "status_mismatches": r["status_mismatches"],
+                "explained": {str(k): v for k, v in r["explained"].items()},
+            }
+            for t, r in sorted(per_trial.items())
+            if r["only_in_log"]
+            or r["missing_from_log"]
+            or r["date_mismatches"]
+            or r["status_mismatches"]
+        ],
+    }
+
+
 def field_changed_after_first(snapshots: Sequence[Mapping[str, Any]], name: str) -> bool:
     """True if any later snapshot differs from the first one in this field. A change
     that is later reverted still counts: the value at some landmark differed."""

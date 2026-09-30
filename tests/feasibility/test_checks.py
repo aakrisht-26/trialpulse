@@ -199,3 +199,40 @@ def test_a_dataset_version_newer_than_the_official_record_is_labeled() -> None:
     )
     older = {**ds, "last_update_post_date": dt.date(2023, 8, 28)}
     assert explain_mismatch("enrollment_count", older, api) is None
+
+
+def test_version_histories_are_compared_version_by_version() -> None:
+    from trialpulse.feasibility.checks import (
+        compare_version_history,
+        summarize_version_histories,
+    )
+
+    dataset = [
+        {"version": 0, "submitted": dt.date(2020, 1, 5), "status": "RECRUITING"},
+        {"version": 1, "submitted": dt.date(2021, 2, 1), "status": "RECRUITING"},
+        {"version": 2, "submitted": dt.date(2026, 9, 24), "status": "COMPLETED"},  # after the log
+    ]
+    log = [
+        {"version": 0, "date": "2020-01-05", "status": "RECRUITING"},
+        {"version": 1, "date": "2021-02-01", "status": "UNKNOWN"},
+    ]
+    result = compare_version_history(dataset, log, ["RECRUITING"])
+    assert result["compared"] == 2
+    assert result["posted_after_log"] == [2]
+    assert result["missing_from_log"] == []
+    assert result["date_mismatches"] == []
+    assert result["status_mismatches"] == [1]
+    assert result["explained"] == {
+        1: "UNKNOWN shown by the registry for the latest version, without a new version"
+    }
+    gap = compare_version_history(dataset[:1] + dataset[2:], log, ["RECRUITING"])
+    assert gap["only_in_log"] == [1]  # a logged version the dataset lacks
+    shifted = [{**dataset[0], "submitted": dt.date(2020, 1, 6)}]
+    assert compare_version_history(shifted, log[:1])["date_mismatches"] == [0]
+
+    summary = summarize_version_histories({"NCT1": result, "NCT2": gap})
+    assert summary["trials"] == 2
+    assert summary["trials_with_the_same_versions"] == 1
+    assert summary["status_agreement"] == {"agree": 2, "total": 3}  # 1 of 2, 1 of 1
+    assert summary["versions_posted_after_logs"] == 2
+    assert [m["nct_id"] for m in summary["mismatches"]] == ["NCT1", "NCT2"]
