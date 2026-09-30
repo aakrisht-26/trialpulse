@@ -20,6 +20,20 @@ jobs:
     name: Lint, types and tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # A throwaway Postgres 16, the same major version as docker-compose.yml, so every run
+    # applies the Alembic migrations to a real database.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: trialpulse
+          POSTGRES_PASSWORD: trialpulse
+          POSTGRES_DB: trialpulse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trialpulse -d trialpulse"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       # Third-party actions are pinned to full commit SHAs; the comment names the release.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -44,3 +58,11 @@ jobs:
 
       - name: Tests
         run: uv run pytest -q --cov --cov-report=term-missing
+
+      - name: Migrations (upgrade, downgrade, upgrade)
+        env:
+          DATABASE_URL: postgresql+psycopg://trialpulse:trialpulse@127.0.0.1:5432/trialpulse
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
