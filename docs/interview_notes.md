@@ -85,3 +85,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "Your whole approach depends on a third-party version-history dataset. How do you know it is right?"
 
 **Short answer.** Three independent checks before building on it: the latest version of 200 random trials against the official API (99.3% agreement), the version lists and submission dates of 150 trials against the official change logs (973 of 973 dates), and 100 random historical versions against the official history source (99.9%). Every disagreement was traced to a named cause, mostly the registry setting UNKNOWN without a new version, which is itself a finding the model design now handles.
+
+## Step 3: Warehouse, contracts and live schemas
+
+**What was built.** A DuckDB warehouse built from the pinned version-history revision: `raw_versions` (only the columns a planned feature, label or audit needs, each typed explicitly), `texts` (every distinct normalized text once, keyed by SHA-256), `versions` (canonical rows validated with Pandera), `versions_quarantine` (rows that fail, with reasons), `trials` and `build_info`. One canonical version contract serves both the offline dataset and live API v2 records, including a content hash that is identical for an unchanged record from either source. Alembic creates the empty live, serving and monitoring schemas in Postgres, and a generated data audit reports duplicates, version order, impossible dates, enum drift, status reversals and personal-data handling.
+
+**Key decision and why.** Make the two sources meet in one canonical form instead of comparing them loosely. The dataset stores most text as HTML and API v2 returns Markdown for the same record, so the contract reduces both to one plain text (one line per paragraph or list item). On live samples of 259 trials the normalized texts agree on every field, which is what lets the daily job tell a real amendment from a formatting difference, and lets the serving-parity test in Step 14 be exact.
+
+**Rejected alternative and why not.** Loading all 96 columns "in case". It would copy personal data (investigator names, emails in free text, people named as sponsors) into the warehouse and every derived artifact. Loading only what a planned use needs, dropping personal columns at the source and scrubbing emails from kept text makes privacy a property of the pipeline rather than a promise.
+
+**Likely interview question.** "How do you know your warehouse build is reproducible?"
+
+**Short answer.** Every table is deterministic by construction (sorted inputs, hash-keyed texts, no timestamps in tables), and the build computes each table's row count and an order-independent checksum, then compares them with the previous build. Building twice from the same pinned revision gives identical checksums, independent of the number of worker processes, which a test also checks on a synthetic dataset.

@@ -73,13 +73,13 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 3, Warehouse, contracts and live schemas** (Step 2 is GO under ADR 0011, 2026-09-30). **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Step 3, Warehouse, contracts and live schemas**, built and waiting for review (Step 2 is GO under ADR 0011, 2026-09-30). **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
 | 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
-| 3 | Warehouse, contracts and live schemas | Not started |
+| 3 | Warehouse, contracts and live schemas | Built 2026-09-30, waiting for review (ADR 0012 proposed) |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
@@ -103,6 +103,7 @@ Aakrisht's guidance from the Step 2 review. Each item is formalized with an ADR 
 1. **Step 4: the population is decided point-in-time.** A landmark row exists only if the version effective at that landmark says INTERVENTIONAL. This covers the 7,409 trials whose study type changed between versions. (Step 2's counts use each trial's latest version, which is right for the spike only.)
 2. **Steps 4 and 14: do not rely on the registry's UNKNOWN status**, since it can appear without a new version. Apply the registry's own rule from versioned fields instead: an open trial whose completion date has passed and whose status has not been verified for 2 years is treated as unknown, and censored at its status verified date. Use the same rule offline and live.
 3. **Step 7: evaluate the new `interventions` config.** If it is per version, intervention type becomes a candidate feature, adopted through an ADR.
+4. **Step 7: individual sponsors fall back to the class-level rate** (Aakrisht, 2026-09-30, Step 3 instruction). The warehouse stores no name or key for an individual sponsor (class INDIV, and, pending ADR 0012, a person's name with a degree title under another class), so the sponsor track record feature uses the smoothed class-level early-stop rate for them, and their prior-registration count is not computed per person.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -347,6 +348,110 @@ uv run pytest -q tests/feasibility
 ```
 
 On a rerun every projection comes from the cache, so the first command makes 0 requests.
+
+## Step 3: Warehouse, contracts and live schemas
+
+Date: 2026-09-30. Status: **built, waiting for review**.
+
+### What was built
+
+- `src/trialpulse/contracts/`: the canonical version contract shared by the offline dataset and live API v2 records.
+  - `text.py`: one plain-text form for both sources (the dataset holds HTML, API v2 holds Markdown): one line per paragraph or list item, entities unescaped, Markdown escapes removed, email addresses replaced by a marker (ADR 0012, proposed).
+  - `sponsor.py`: sponsor display name and key (lowercase, punctuation removed); no name or key for an individual sponsor (class INDIV, or a person's name with a degree title and no organization word; ADR 0012).
+  - `versions.py`: the canonical columns and their types, the enums (API v2 names, with ANTICIPATED mapped to ESTIMATED), partial dates with a precision flag, placeholder dates (before 1901 or from 2100) stored as missing, ages in years, a content hash that is the same for an unchanged record from either source, the Pandera schemas (`VERSION_SCHEMA`, `TEXT_SCHEMA`), the quarantine split, and `canonical_from_api_v2`.
+- `src/trialpulse/warehouse/build.py`: `uv run python -m trialpulse.warehouse.build` builds `data/warehouse.duckdb`:
+  - `raw_versions`: 35 columns, each typed explicitly and each with a planned use (listed in the audit); the three drifting columns are typed and kept for the audit only; no personal-data column, no free text, no sponsor name;
+  - `texts`: each distinct normalized text once, keyed by SHA-256;
+  - `versions`: canonical rows that pass validation; `versions_quarantine`: rows that fail, with reasons;
+  - `trials`: time zero, first and last version, version count, latest status and study type, quarantined versions;
+  - `build_info`: the revision and the build's counts.
+
+  The build writes a new file and swaps it in only when complete, runs text normalization, hashing and validation in a worker pool, and compares each table's row count and checksum with the previous build.
+- `src/trialpulse/warehouse/audit.py`: writes `docs/data_audit.md` (part 1) from the warehouse; `uv run python -m trialpulse.warehouse.audit` regenerates it.
+- `src/trialpulse/warehouse/parity.py`: `uv run python -m trialpulse.warehouse.parity` compares a seeded sample of live API v2 records, mapped with `canonical_from_api_v2`, with their latest warehouse versions, column by column. Raw API records are not stored.
+- Alembic: `alembic.ini`, `alembic/env.py` (DATABASE_URL from the environment or .env, never printed), and revision `0001`, which creates the schemas `live` (study_versions, texts, trial_state, outcome_events, quarantine), `serving` (trial_scores_latest, trial_score_history) and `monitoring` (pipeline_runs, graded_predictions, promotions), all empty. `live.study_versions` has exactly the canonical columns (tested).
+- CI: a Postgres 16 service, and a step that runs `alembic upgrade head`, `downgrade base` and `upgrade head` on every push.
+- Tests: `tests/contracts/` and `tests/warehouse/`, on synthetic data only.
+- Dependencies (locked stack, Section 15): pandera[pandas], SQLAlchemy 2, psycopg 3 (binary), Alembic.
+
+### Acceptance criteria
+
+| Criterion | Result |
+| --- | --- |
+| Building the warehouse twice gives identical row counts and table checksums | **Met in my shell.** Builds B and C of the final code, from revision v2026.09.26, give identical row counts and checksums for all six tables (build C printed "Identical to the previous build: yes"). Also tested on a synthetic dataset with 1 and 2 worker processes (`test_building_twice_gives_identical_tables`). An earlier build A, made before the last normalization fix, matched B on `raw_versions`, `trials` and `build_info` and differed only in `texts` and `versions`, as expected |
+| Pandera validates the cohort, with failures quarantined and counted | **Met in my shell.** All 4,444,542 versions validated (every study type and year, so that Step 4 can apply the point-in-time population): 4,444,542 passed, 0 quarantined. The quarantine path is tested on six failure kinds: a non-canonical enum, a duplicated version key, an individual's name kept, a precision without a date, a dataset row without a version number, and a structural error, which raises instead (`test_invalid_rows_are_quarantined_with_reasons`, `test_quarantine_and_trials`) |
+| `alembic upgrade head` works on local Postgres | **Met in my shell**: Docker Compose Postgres 16 on 127.0.0.1:15432; `upgrade head`, `downgrade base`, `upgrade head` give revision 0001 and 10 empty tables in the 3 schemas. CI now runs the same three commands on a Postgres 16 service |
+| Tests cover date parsing, enum mapping and idempotency on a small fixture | **Met.** `test_partial_dates`, `test_ages_in_years`, `test_sql_twins_match_the_python_rules` (the SQL enum and date rules equal the Python ones), `test_versions_are_canonical` and `test_building_twice_gives_identical_tables`, on the synthetic dataset in `tests/warehouse/conftest.py` |
+
+The additions from Aakrisht's Step 3 instruction:
+
+| Instruction | Result |
+| --- | --- |
+| 1. Load only the columns a planned feature, label or audit needs; never write personal-data columns; scrub emails from kept text | 35 of 96 columns are loaded into `raw_versions`, each with its planned use listed in the audit. 6 more (the five text fields and the lead sponsor name) are read only to derive normalized values. The 4 personal-data columns are never read. 334 distinct texts had an email address removed; 0 remain (validated). `test_no_personal_data_is_written` searches every text column of every table for the fixture's investigator, individual sponsors and email |
+| 2. No names for individual sponsors; the Step 7 note | 0 names or keys are stored for individual sponsors (2,625 versions with class INDIV, and 20,554 with a person's name under another class; 4,960 trials). The Step 7 fallback to the class-level rate is item 4 of "Guidance for later steps" above |
+| 3. Unescape HTML entities in all text | Done for every text field, from both sources. 1,084,686 distinct raw texts were HTML; the audit counts them per field |
+| 4. Explicit types for the drifting columns | `disp_first_submit_qc_date` DATE, `is_ppsd` BOOLEAN and `fdaaa801_violation` BOOLEAN (like every other loaded column), whatever type each Parquet file has; the audit shows the types by file |
+| 5. Alembic on the local Postgres, port 15432 | Done, as above |
+
+### Results
+
+- **Warehouse** (`data/warehouse.duckdb`, 4.1 GB): 4,444,542 versions of 604,583 trials; 2,889,754 distinct normalized texts; 0 quarantined. A build takes about 18 minutes with 8 worker processes on this machine and uses about 7.4 GB of memory at its peak; `--workers 4` uses less.
+- **Source parity** (`uv run python -m trialpulse.warehouse.parity`, one API v2 request): 200 seeded interventional trials, 199 unchanged since the dataset. 192 of 199 canonical rows are identical in every column, content hash included. Each of the other 7 has a known registry-side cause: 5 open trials the registry now shows as UNKNOWN, and 2 sponsors whose name the registry changed, all without a new version. 0 differences without a known cause. On text alone, 559 of 559 trials agree on all five text fields across three samples; the last sample (300 trials) was drawn fresh after the final rule fix.
+- **Data audit, part 1** (`docs/data_audit.md`): 0 duplicate version keys; 0 non-monotonic post dates; 14,041 versions (4,846 trials) share a post date with the previous version; 19.8% of versions change only columns the warehouse does not load; placeholder dates set to missing (for example 1,287 primary completion dates); 5,321 trials show an open status after a first terminal one; no enum value outside the canonical sets.
+
+### Findings for later steps
+
+1. **The registry changes some fields without posting a version (Steps 7 and 14).** Besides UNKNOWN (Step 2), the parity sample found sponsor organizations renamed centrally (for example Endo Pharmaceuticals is now "Endo USA Inc., a Keenova Therapeutics Company"). A delta pull filtered on LastUpdatePostDate never sees such changes. Since the sponsor key follows the name, a renamed sponsor would start a new track record; Step 7 and Step 14 should decide how to handle that.
+2. **Tie-break on post dates (Step 4).** 14,041 versions share a post date with the previous version; the state on such a day is the one with the higher version number.
+3. **Reversals and terminal-status changes (Step 4).** 5,321 trials have an open status after a first terminal one, and in 4,879 trials COMPLETED is followed by another terminal status, which matters for which terminal version defines the event.
+4. **Stand-in values (Step 7).** 11,591 versions have an age limit above 120 years and 5,842 an enrollment target of 1,000,000 or more (up to 999,999,999); the features need caps.
+
+### Decisions flagged for approval
+
+1. **Individual sponsors include person-named sponsors under other classes** (ADR 0012, proposed): a degree title and no organization word. 2,676 distinct names match; 3 contain a word that may indicate an organization.
+2. **One canonical plain text for both sources** (ADR 0012, proposed), including the list rules that make the dataset's HTML and API v2's Markdown agree. The content hash depends on it: an unchanged record gets the same hash from either source.
+3. **Placeholder dates** before 1901 or from 2100 on are stored as missing, with counts in the audit; unusual but possible dates are kept.
+4. **Columns kept for planned uses**: both titles (ADR 0006, phase stated in the title), `why_stopped` (the Step 6 label) and `last_update_submit_date` (version-order audit, live parity). The drifting columns are loaded for the audit only.
+5. **Ages in years** in `versions` ("6 Months" is 0.5); the raw strings stay in `raw_versions`.
+6. **Quarantined rows leave `versions`** (none today); `trials.quarantined_versions` counts them so that Step 4 can exclude such trials.
+7. **Two live tables beyond the names in CLAUDE.md**: `live.texts` (the normalized texts that versions reference by hash) and `live.quarantine` (Section 12's quarantined records). The columns of the empty serving and monitoring tables are provisional; Steps 13, 14 and 17 may change them with new migrations.
+8. **The local DATABASE_URL host is 127.0.0.1, not localhost.** In my shell `localhost` resolves to IPv6 first and stalls, because the container port is bound to 127.0.0.1 only. `.env.example` and `alembic.ini` now show `postgresql+psycopg://trialpulse:trialpulse@127.0.0.1:15432/trialpulse`, and `alembic/env.py` sets a 10-second connect timeout.
+9. **Tooling**: mypy treats pandas as untyped, like scikit-learn (pandas-stubs would be a new dependency); ruff treats `alembic` as a third-party import; CI gets a Postgres 16 service and a migrations step.
+10. **API v2 requests during Step 3**: 8 in total (a first look at two records, text samples of 60, 200 and 300 trials, two diagnostics, and two parity runs), far below 40 per minute.
+
+### Blocked, skipped or deferred
+
+- **Your `.env` has no DATABASE_URL** (checked through the Secrets class, without opening the file). `uv run alembic upgrade head` refuses with one line until you add it; the value is in `.env.example`.
+- **Faster chunk conversion deferred.** The main process spends about 20 seconds per chunk converting rows to pandas. Moving that conversion into the workers would need pyarrow as a direct dependency (today it comes only through Streamlit), so I did not do it without approval. The build is well under the one-hour limit.
+- The daily Step 6 sample labeling was not run (yours). `docs/feasibility_manual_check.csv` was not touched.
+
+### Files touched
+
+- New: `src/trialpulse/contracts/{__init__,text,sponsor,versions}.py`, `src/trialpulse/warehouse/{__init__,build,audit,parity}.py`, `alembic.ini`, `alembic/{env.py,script.py.mako}`, `alembic/versions/0001_live_serving_monitoring.py`, `tests/contracts/{test_text_and_sponsor,test_versions}.py`, `tests/warehouse/{conftest,test_build,test_parity,test_migrations}.py`, `docs/adr/0012-canonical-text-and-individual-sponsors.md`, `docs/data_audit.md`.
+- Changed: `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`, `.env.example`, `docs/progress.md`, `docs/interview_notes.md`.
+
+### Verify (PowerShell)
+
+First add one line to `.env`: `DATABASE_URL=postgresql+psycopg://trialpulse:trialpulse@127.0.0.1:15432/trialpulse`. Each build takes about 18 minutes; the second should print "Identical to the previous build: yes".
+
+```powershell
+uv sync
+uv run python -m trialpulse.warehouse.build
+uv run python -m trialpulse.warehouse.build
+docker compose up -d
+uv run alembic upgrade head
+uv run alembic current
+uv run pytest -q
+```
+
+Optional: one API v2 request, then the audit regenerated with its result.
+
+```powershell
+uv run python -m trialpulse.warehouse.parity --sample 200
+uv run python -m trialpulse.warehouse.audit
+```
+
+Then open `docs/data_audit.md`.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
