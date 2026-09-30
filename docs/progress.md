@@ -78,7 +78,7 @@ Current step: **Step 2, Feasibility spike** (parts a to e run on the dataset on 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
-| 2 | Feasibility spike (go/no-go) | Parts a to e done on the dataset (2026-09-29); manual check and decision pending |
+| 2 | Feasibility spike (go/no-go) | Parts a to e and i done on the dataset; ADRs 0006 and 0007 accepted (2026-09-30); manual check and decision pending |
 | 3 | Warehouse, contracts and live schemas | Not started |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
@@ -95,6 +95,14 @@ Current step: **Step 2, Feasibility spike** (parts a to e run on the dataset on 
 | 16 | Dashboard | Not started |
 | 17 | Monitoring, retraining and replay | Not started |
 | 18 | Documentation and polish | Not started |
+
+## Guidance for later steps (recorded 2026-09-30)
+
+Aakrisht's guidance from the Step 2 review. Each item is formalized with an ADR when its step starts; until then it is guidance, not a locked definition.
+
+1. **Step 4: the population is decided point-in-time.** A landmark row exists only if the version effective at that landmark says INTERVENTIONAL. This covers the 7,409 trials whose study type changed between versions. (Step 2's counts use each trial's latest version, which is right for the spike only.)
+2. **Steps 4 and 14: do not rely on the registry's UNKNOWN status**, since it can appear without a new version. Apply the registry's own rule from versioned fields instead: an open trial whose completion date has passed and whose status has not been verified for 2 years is treated as unknown, and censored at its status verified date. Use the same rule offline and live.
+3. **Step 7: evaluate the new `interventions` config.** If it is per version, intervention type becomes a candidate feature, adopted through an ADR.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -248,7 +256,7 @@ Per-version columns in the core config, field by field:
 | arm counts | **No** | no arm or group column |
 | locations | **No** | no location, site, facility, country or city column |
 
-All 96 columns are scalar (no list, struct or map types). What this means for the proposed ADRs (both stay Proposed for Aakrisht):
+All 96 columns are scalar (no list, struct or map types). What this means for ADRs 0006 and 0007 (proposed then; both accepted on 2026-09-30):
 
 - **ADR 0006 (phase):** its condition is met, because core has no per-version phase column. Its title-based alternative is feasible: `official_title` and `brief_title` are versioned core columns.
 - **ADR 0007 (competition):** its premise holds. Core has no per-version conditions or MeSH columns, so the therapeutic area cannot be measured point-in-time from core.
@@ -285,6 +293,14 @@ All 96 columns are scalar (no list, struct or map types). What this means for th
 5. **Schema drift (Step 3).** `disp_first_submit_qc_date`, `fdaaa801_violation`, `is_ppsd` have a different Parquet type in some files; `version_holder`, `expanded_access_status_for_nct_id`, `unposted_responsible_party`, `first_mcp_post_date`, `first_mcp_post_date_type`, `estimated_results_first_submit_date` are always empty. Step 3 must type columns explicitly.
 6. **Study type changes across versions (Step 4).** 7,409 trials changed study type between versions. The spike uses each trial's latest version; which version defines the population is for Step 4 to settle.
 7. **MeSH browse branches are not returned by API v2.** The report now marks that path as not available to ingest.
+
+**Review of 2026-09-30 (Aakrisht).** Approved: the four decisions from the report (fresh records for part d, the cohort from each trial's latest version for Step 2's counts, the cutoff written to config with the refusal on a mismatch, and the mismatch labels with the strict share unchanged). ADRs 0006 and 0007 are **accepted** and in the CLAUDE.md Amendments section. Guidance for Steps 4, 7 and 14 is recorded in "Guidance for later steps" near the top of this file. `docs/feasibility_manual_check.csv` is Aakrisht's to fill in and was not touched.
+
+**Part i: version history against the official change logs (2026-09-30, no new request).** The part f cache holds the official change log of each of its 150 trials, with every version's number, date and status. Part i compares them with the dataset, reading the cache only:
+
+- the version lists match for 150 of 150 trials (973 versions on each side, numbered the same way);
+- each version's submitted date agrees for 973 of 973 versions. The change log dates versions by their submission and holds no posted date, so the dataset's posted date (last_update_post_date) cannot be checked from it;
+- each version's status agrees for 971 of 973 versions. The 2 differences are the latest version of single-version trials, which the change log shows as UNKNOWN (the registry's status, set without a new version) and the dataset shows with the open status that was submitted.
 
 **Internal review.** Two independent reviewers checked the code and the report; their confirmed findings are fixed:
 
