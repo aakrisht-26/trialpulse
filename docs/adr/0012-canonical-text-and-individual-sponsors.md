@@ -1,7 +1,7 @@
 # 0012. Canonical version contract: one plain-text form for both sources, and no names for person-named sponsors
 
 - Date: 2026-09-30
-- Status: Proposed (Step 3). Pending Aakrisht's approval.
+- Status: **Accepted** by Aakrisht on 2026-09-30 (Step 3 review). Proposed in Step 3.
 
 ## Context
 

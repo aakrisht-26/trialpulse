@@ -73,13 +73,13 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 3, Warehouse, contracts and live schemas**, built and waiting for review (Step 2 is GO under ADR 0011, 2026-09-30). **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Step 4, Cohort, outcomes and landmarks** (Step 3 approved on 2026-09-30). **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
 | 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
-| 3 | Warehouse, contracts and live schemas | Built 2026-09-30, waiting for review (ADR 0012 proposed) |
+| 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
 | 4 | Cohort, outcomes and landmarks | Not started |
 | 5 | Exploratory data analysis | Not started |
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
@@ -103,7 +103,8 @@ Aakrisht's guidance from the Step 2 review. Each item is formalized with an ADR 
 1. **Step 4: the population is decided point-in-time.** A landmark row exists only if the version effective at that landmark says INTERVENTIONAL. This covers the 7,409 trials whose study type changed between versions. (Step 2's counts use each trial's latest version, which is right for the spike only.)
 2. **Steps 4 and 14: do not rely on the registry's UNKNOWN status**, since it can appear without a new version. Apply the registry's own rule from versioned fields instead: an open trial whose completion date has passed and whose status has not been verified for 2 years is treated as unknown, and censored at its status verified date. Use the same rule offline and live.
 3. **Step 7: evaluate the new `interventions` config.** If it is per version, intervention type becomes a candidate feature, adopted through an ADR.
-4. **Step 7: individual sponsors fall back to the class-level rate** (Aakrisht, 2026-09-30, Step 3 instruction). The warehouse stores no name or key for an individual sponsor (class INDIV, and, pending ADR 0012, a person's name with a degree title under another class), so the sponsor track record feature uses the smoothed class-level early-stop rate for them, and their prior-registration count is not computed per person.
+4. **Step 7: individual sponsors fall back to the class-level rate** (Aakrisht, 2026-09-30, Step 3 instruction). The warehouse stores no name or key for an individual sponsor (class INDIV, and, under ADR 0012, a person's name with a degree title under another class), so the sponsor track record feature uses the smoothed class-level early-stop rate for them, and their prior-registration count is not computed per person.
+5. **Step 7: sponsor renames are aliases, not new sponsors** (Aakrisht, 2026-09-30, Step 3 review). When the registry renames a trial's lead sponsor without a new version (the Step 3 parity sample found two, for example Endo Pharmaceuticals to "Endo USA Inc., a Keenova Therapeutics Company"), names that replace each other on the same trial are treated as aliases of one sponsor, so a rename does not start a new track record. Formalized with an ADR in Step 7.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -351,7 +352,7 @@ On a rerun every projection comes from the cache, so the first command makes 0 r
 
 ## Step 3: Warehouse, contracts and live schemas
 
-Date: 2026-09-30. Status: **built, waiting for review**.
+Date: 2026-09-30. Status: **approved** by Aakrisht on 2026-09-30.
 
 ### What was built
 
@@ -452,6 +453,14 @@ uv run python -m trialpulse.warehouse.audit
 ```
 
 Then open `docs/data_audit.md`.
+
+### Review of 2026-09-30 (Aakrisht)
+
+**Approved:** Step 2 GO and Step 3; sampling only trials with at least 2 versions for part e (ADR 0011); ADR 0012 (the canonical text form and the individual-sponsor rule), now **accepted** and in the CLAUDE.md Amendments section; placeholder dates stored as missing and ages in years; both titles kept; quarantined rows leaving the versions table; `live.texts` and `live.quarantine`; 127.0.0.1 in the local URL; mypy treating pandas as untyped; the CI Postgres service. pyarrow is approved as a direct dependency wherever it makes builds meaningfully faster.
+
+**Verification on Aakrisht's machine:** he added DATABASE_URL to `.env` and ran `uv sync`, `uv run alembic upgrade head`, `uv run alembic current` and `uv run pytest -q`, all as expected. He skipped the two full rebuilds, because they were run in this session on the same machine with identical checksums (builds B and C above).
+
+**Guidance added for Step 7:** sponsor renames without a new version are treated as aliases of one sponsor (item 5 of "Guidance for later steps").
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
