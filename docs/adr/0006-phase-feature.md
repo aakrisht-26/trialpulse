@@ -1,7 +1,8 @@
 # 0006. Phase: keep current-record phase out of the main model, use the phase stated in the versioned title
 
 - Date: 2026-09-23
-- Status: **Proposed**. For Aakrisht to accept after Step 2 part b has run. It applies only if part b shows that the core config has no per-version phase column.
+- Status: **Accepted** by Aakrisht on 2026-09-30. Proposed on 2026-09-23, pending Step 2 part b.
+- Part b result (2026-09-29, revision `v2026.09.26`): the core config has no per-version phase column (none of its 96 columns mentions a phase, and all are scalar), so the condition below is met. `official_title` and `brief_title` are versioned core columns, so the title-based feature is feasible.
 
 ## Context
 
@@ -16,15 +17,15 @@ Phase matters to the model plan: it is a design feature, M0 stratifies by phase 
 
 **Evidence from the cached part g pull:** none. The pull requested no title field. The cohort Parquet file has no title column, and none of the 856 cached API v2 pages contains `officialTitle` or `briefTitle`. As instructed, nothing was pulled again. The share of cohort trials whose title states a phase, and its agreement with the current phase field, will be measured from the dataset in Step 7.
 
-## Decision (proposed)
+## Decision
 
-1. If part b confirms there is no per-version phase column, **current-record phase stays out of the main model**. It is not a feature of M1 to M4, and M0 stratifies by sponsor class. The 3% rule holds as written.
+1. Part b confirmed there is no per-version phase column, so **current-record phase stays out of the main model**. It is not a feature of M1 to M4, and M0 stratifies by sponsor class. The 3% rule holds as written.
 2. Add a **"phase stated in the title"** feature, parsed from the official title (falling back to the brief title) as of the landmark. Titles are versioned, so it is point-in-time.
    - A deterministic parser recognizes Arabic and Roman numerals and combined phases (for example "Phase 1/2", "Phase I/II", "Early Phase 1").
    - It maps to the same groups as the audit (early, mid, late, post-approval), plus "not stated".
    - The parser has unit tests. Step 7 reports its coverage and its agreement with the current phase field.
 3. Current-record phase appears only in a **sensitivity analysis**, labeled as using a field that fails the stability rule, reported separately and never in headline results.
-4. If part b finds a per-version phase column, this ADR is withdrawn and that column is used directly.
+4. Had part b found a per-version phase column, this ADR would have been withdrawn in favor of that column. It found none.
 
 ## Alternatives
 

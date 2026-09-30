@@ -1,7 +1,8 @@
 # 0007. Competition: use the versioned count of all open interventional trials
 
 - Date: 2026-09-23
-- Status: **Proposed**. For Aakrisht to accept after Step 2 part b has run.
+- Status: **Accepted** by Aakrisht on 2026-09-30. Proposed on 2026-09-23, pending Step 2 part b.
+- Part b result (2026-09-29, revision `v2026.09.26`): the core config has no per-version conditions, MeSH or keyword column (all 96 columns are scalar), so the therapeutic area cannot be measured point-in-time from core, as the context below assumed.
 
 ## Context
 
@@ -11,7 +12,7 @@ CLAUDE.md Section 8 defines the competition family as the number of open interve
 - API v2 does return NLM's MeSH condition terms (77.5% of cohort trials) and their ancestors (76.0%). But NLM derives them from the current conditions, and conditions changed after version 0 in 8.0% of sampled trials (part f). The version snapshots carry no derived section, so these terms have no history to audit.
 - The phase-group split fails the stability rule too (3.3%, see ADR 0006).
 
-## Decision (proposed)
+## Decision
 
 The competition family is the **count of all open interventional trials at the landmark**, computed from the status history of every trial. It uses only versioned data: a trial counts as open at L if its latest version on or before L has an open status. The therapeutic-area and phase-group splits are dropped from v1.
 
