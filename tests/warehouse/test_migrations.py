@@ -50,13 +50,20 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
     }
     for word in ("investigator", "email", "contact", "phone", "affiliation"):
         assert word not in sql.lower()
-    down = _render(capsys, "0001", "base")
+    down = _render(capsys, "head", "base")
     for table in tables:
         assert f"DROP TABLE {table};" in down
+    assert "ALTER TABLE live.study_versions DROP COLUMN last_known_status;" in down
 
 
 def test_live_versions_match_the_canonical_schema(capsys: pytest.CaptureFixture[str]) -> None:
-    columns = _create_table(_render(capsys, "head"), "live.study_versions")
+    """The columns after every migration (created, then added) equal the canonical contract."""
+    sql = _render(capsys, "head")
+    columns = _create_table(sql, "live.study_versions")
+    for name, kind in re.findall(
+        r"ALTER TABLE live\.study_versions ADD COLUMN ([a-z_0-9]+) ([A-Z][A-Z ]*?);", sql
+    ):
+        columns[name] = kind
     postgres: dict[str, Any] = {
         "VARCHAR": "TEXT",
         "DATE": "DATE",

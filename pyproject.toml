@@ -15,6 +15,7 @@ dependencies = [
     "numpy>=2.5.3",
     "pandera[pandas]>=0.33.1",
     "psycopg[binary]>=3",
+    "pyarrow>=25",
     "pydantic>=2.13.5",
     "pydantic-settings[yaml]>=2.15.0",
     "scikit-learn>=1.9.1",
@@ -56,10 +57,10 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
-# scikit-learn, joblib and pandas ship no type information (pandas-stubs would be a new
+# scikit-learn, joblib, pandas and pyarrow ship no type information (pandas-stubs would be a new
 # dependency outside the locked stack).
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib", "pandas", "pandas.*"]
+module = ["sklearn.*", "joblib", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

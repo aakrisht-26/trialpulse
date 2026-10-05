@@ -127,8 +127,14 @@ def _cause(
 ) -> str | None:
     """A known registry-side change behind a difference, when the difference is exactly one:
     both sides have the same last update posted date, so no version records the change."""
-    unknown = api["overall_status"] == "UNKNOWN" and dataset["overall_status"] in open_statuses
-    if differing == ["overall_status"] and unknown:
+    # The registry shows UNKNOWN over the submitted status, which API v2 keeps in
+    # last_known_status; the dataset still holds that submitted status as the overall status.
+    unknown = (
+        api["overall_status"] == "UNKNOWN"
+        and dataset["overall_status"] in open_statuses
+        and api["last_known_status"] in (None, dataset["overall_status"])
+    )
+    if set(differing) <= {"overall_status", "last_known_status"} and unknown:
         return UNKNOWN_CAUSE
     if differing == SPONSOR_COLUMNS and not api["sponsor_is_individual"]:
         return SPONSOR_CAUSE

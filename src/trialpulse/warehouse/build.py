@@ -36,7 +36,9 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
 import pandas as pd
+import pyarrow as pa
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
@@ -63,7 +65,7 @@ WAREHOUSE_PATH = REPO_ROOT / "data" / "warehouse.duckdb"
 BUILD_LOG_PATH = REPO_ROOT / "data" / "warehouse_build.json"
 RAW_DIR = REPO_ROOT / "data" / "raw" / "history"
 TEMP_DIR = REPO_ROOT / "data" / "duckdb_tmp"
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"  # 2: last_known_status (ADR 0014)
 TABLES: tuple[str, ...] = (
     "raw_versions",
     "texts",
@@ -83,6 +85,7 @@ RAW_COLUMNS: dict[str, tuple[str, str]] = {
     "last_update_post_date_type": ("VARCHAR", "ESTIMATED post-date share (Step 5)"),
     "last_update_submit_date": ("DATE", "version order audit"),
     "overall_status": ("VARCHAR", "outcomes (Step 4)"),
+    "last_known_status": ("VARCHAR", "submitted status behind UNKNOWN (Step 4, ADR 0014)"),
     "status_verified_date": ("DATE", "UNKNOWN rule (Step 4), amendment signals (Step 7)"),
     "study_type": ("VARCHAR", "population (Step 4)"),
     "study_first_post_date": ("DATE", "time zero (Section 6)"),
@@ -186,9 +189,20 @@ def load_raw(con: duckdb.DuckDBPyConnection, glob: str) -> None:
 # Texts -----------------------------------------------------------------------------------
 
 
-def normalize_batch(raws: list[str]) -> list[tuple[str | None, str | None, bool]]:
-    """(normalized text, its hash, whether the raw text was HTML) for each raw text."""
-    return [(*hash_text(raw), is_html(raw)) for raw in raws]
+def normalize_batch(batch: pa.Table) -> pa.Table:
+    """Normalize a batch of raw texts (columns rid, raw): the normalized text and its hash
+    (both empty when nothing is left) and whether the raw text was HTML."""
+    rids = batch.column("rid").to_pylist()
+    raws = batch.column("raw").to_pylist()
+    normalized = [hash_text(raw) for raw in raws]
+    return pa.table(
+        {
+            "rid": pa.array(rids, pa.int64()),
+            "text_hash": pa.array([key for _, key in normalized], pa.string()),
+            "text": pa.array([clean for clean, _ in normalized], pa.string()),
+            "html": pa.array([is_html(raw) for raw in raws], pa.bool_()),
+        }
+    )
 
 
 class _InlineExecutor(Executor):
@@ -243,30 +257,30 @@ def build_texts(
         )
         total = _scalar(con, "SELECT count(*) FROM raw_text")
         counts = {"distinct": total, "html": 0, "email_removed": 0, "empty": 0}
-        group = TEXT_BATCH * max(workers, 1)
-        for low in range(0, total, group):
-            rows = con.execute(
+        batches = (
+            con.execute(
                 "SELECT rid, raw FROM raw_text WHERE rid > ? AND rid <= ? ORDER BY rid",
-                [low, low + group],
-            ).fetchall()
-            batches = [rows[i : i + TEXT_BATCH] for i in range(0, len(rows), TEXT_BATCH)]
-            results = pool.map(normalize_batch, [[raw for _, raw in b] for b in batches])
-            kept: list[tuple[int, str, str]] = []
-            for batch, normalized in zip(batches, results, strict=True):
-                for (rid, _), (clean, key, html) in zip(batch, normalized, strict=True):
-                    counts["html"] += html
-                    if clean is None or key is None:
-                        counts["empty"] += 1
-                        continue
-                    counts["email_removed"] += EMAIL_MARKER in clean
-                    kept.append((rid, key, clean))
-            frame = pd.DataFrame(kept, columns=["rid", "text_hash", "text"])
-            con.register("normalized", frame)
+                [low, low + TEXT_BATCH],
+            ).to_arrow_table()
+            for low in range(0, total, TEXT_BATCH)
+        )
+        for normalized in _ordered(pool, normalize_batch, batches, 2 * max(workers, 1)):
+            con.register("normalized", normalized)
+            html, empty, email = con.execute(
+                f"""SELECT count(*) FILTER (WHERE html), count(*) FILTER (WHERE text_hash IS NULL),
+                  count(*) FILTER (WHERE contains(text, '{EMAIL_MARKER}')) FROM normalized"""
+            ).fetchone() or (0, 0, 0)
+            counts["html"] += html
+            counts["empty"] += empty
+            counts["email_removed"] += email
             con.execute(
                 f"""INSERT INTO text_keys SELECT '{field}', r.raw_key, n.text_hash
-                FROM normalized n JOIN raw_text r USING (rid)"""
+                FROM normalized n JOIN raw_text r USING (rid) WHERE n.text_hash IS NOT NULL"""
             )
-            con.execute("INSERT INTO text_stage SELECT text_hash, text FROM normalized")
+            con.execute(
+                """INSERT INTO text_stage SELECT text_hash, text FROM normalized
+                WHERE text_hash IS NOT NULL"""
+            )
             con.unregister("normalized")
         stats.update({f"texts.{field}.{name}": value for name, value in counts.items()})
         log.info("texts: %s, %s distinct", field, f"{total:,}")
@@ -281,9 +295,9 @@ def build_texts(
     return stats
 
 
-def check_texts(frame: pd.DataFrame) -> int:
-    TEXT_SCHEMA.validate(frame, lazy=True)  # a failure here is a bug: raise
-    return len(frame)
+def check_texts(table: pa.Table) -> int:
+    TEXT_SCHEMA.validate(table.to_pandas(), lazy=True)  # a failure here is a bug: raise
+    return int(table.num_rows)
 
 
 def _validate_texts(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int) -> None:
@@ -294,7 +308,7 @@ def _validate_texts(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int
         con.execute(
             "SELECT text_hash, text FROM texts WHERE text_hash >= ? AND text_hash < ?",
             [low, high],
-        ).df()
+        ).to_arrow_table()
         for low, high in pairwise(bounds)
     )
     for _ in _ordered(pool, check_texts, frames, max(workers, 1)):
@@ -351,6 +365,7 @@ def _stage_sql() -> str:
         f"{_sql_enum('r.last_update_post_date_type')} AS effective_date_type",
         f"{_sql_valid('r.last_update_submit_date')} AS submitted_date",
         f"{_sql_enum('r.overall_status')} AS overall_status",
+        f"{_sql_enum('r.last_known_status')} AS last_known_status",
         f"{_sql_enum('r.study_type')} AS study_type",
         f"{_sql_valid('r.study_first_post_date')} AS study_first_post_date",
         f"{_sql_enum('r.study_first_post_date_type')} AS study_first_post_date_type",
@@ -410,22 +425,27 @@ def _create_table(con: duckdb.DuckDBPyConnection, name: str, extra: str = "") ->
     con.execute(f"CREATE TABLE {name} ({columns}{extra})")
 
 
-def _insert(con: duckdb.DuckDBPyConnection, table: str, frame: pd.DataFrame) -> None:
-    if frame.empty:
+def _insert(con: duckdb.DuckDBPyConnection, table: str, rows: pa.Table) -> None:
+    if rows.num_rows == 0:
         return
     columns = [f"CAST({c} AS {kind}) AS {c}" for c, kind in COLUMN_TYPES.items()]
-    if "reasons" in frame:
+    if "reasons" in rows.column_names:
         columns.append("CAST(reasons AS VARCHAR) AS reasons")
-    con.register("chunk", frame)
+    con.register("chunk", rows)
     con.execute(f"INSERT INTO {table} SELECT {', '.join(columns)} FROM chunk")
     con.unregister("chunk")
 
 
-def prepare_chunk(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Typed canonical rows with content hashes, split into valid and quarantined rows."""
-    frame = typed_frame(raw)
+def prepare_chunk(raw: pa.Table) -> tuple[pa.Table, pa.Table]:
+    """Typed canonical rows with content hashes, split into valid and quarantined rows. Runs
+    in a worker: Arrow in and out, so the main process never converts rows to pandas."""
+    frame = typed_frame(raw.to_pandas(date_as_object=False))
     frame["content_hash"] = content_hashes(frame)
-    return split_valid(frame)
+    valid, failing = split_valid(frame)
+    return (
+        pa.Table.from_pandas(valid, preserve_index=False),
+        pa.Table.from_pandas(failing, preserve_index=False),
+    )
 
 
 def build_versions(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int) -> dict[str, int]:
@@ -440,14 +460,18 @@ def build_versions(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int)
     log.info("versions: staged")
     _create_table(con, "versions")
     _create_table(con, "versions_quarantine", ", reasons VARCHAR")
-    chunks = _scalar(con, "SELECT coalesce(max(chunk) + 1, 0) FROM trial_chunks")
-    frames = (
-        con.execute(
-            """SELECT * EXCLUDE (_chunk) FROM version_stage WHERE _chunk = ?
-            ORDER BY nct_id, nct_version, effective_date""",
-            [chunk],
-        ).df()
-        for chunk in range(chunks)
+    # One sorted read of the whole stage, then a compact copy per chunk: re-scanning the
+    # stage once per chunk kept the main process busy while the workers waited.
+    ordered = con.execute(
+        "SELECT * FROM version_stage ORDER BY _chunk, nct_id, nct_version, effective_date"
+    ).to_arrow_table()
+    con.execute("DROP TABLE version_stage")
+    chunk_ids = ordered.column("_chunk").to_numpy()
+    bounds = [0, *(np.flatnonzero(np.diff(chunk_ids)) + 1).tolist(), len(chunk_ids)]
+    body = ordered.drop_columns(["_chunk"])
+    chunks = len(bounds) - 1
+    frames = (  # take() copies just the chunk's rows; a slice would pickle the whole table
+        body.take(pa.array(np.arange(start, end))) for start, end in pairwise(bounds)
     )
     for done, (valid, failing) in enumerate(
         _ordered(pool, prepare_chunk, frames, max(workers, 1)), start=1
@@ -455,7 +479,8 @@ def build_versions(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int)
         _insert(con, "versions", valid)
         _insert(con, "versions_quarantine", failing)
         log.info("versions: chunk %d of %d", done, chunks)
-    for table in ("version_stage", "trial_chunks", "row_keys", "text_keys"):
+    del ordered, body
+    for table in ("trial_chunks", "row_keys", "text_keys"):
         con.execute(f"DROP TABLE {table}")
     return {
         "versions.rows": _scalar(con, "SELECT count(*) FROM versions"),

@@ -19,6 +19,7 @@ STUDY = {
         },
         "statusModule": {
             "overallStatus": "UNKNOWN",  # set by the registry without a new version
+            "lastKnownStatus": "RECRUITING",
             "statusVerifiedDate": "2019-09-09",
             "startDateStruct": {"date": "2015-04", "type": "ACTUAL"},
             "primaryCompletionDateStruct": {"date": "2017-06-30", "type": "ESTIMATED"},
@@ -78,8 +79,11 @@ def test_parity_compares_unchanged_trials_column_by_column(
     assert result["mismatches"] == [
         {
             "nct_id": "NCT00000005",
-            "columns": ["overall_status"],
-            "values": {"overall_status": ["RECRUITING", "UNKNOWN"]},
+            "columns": ["overall_status", "last_known_status"],
+            "values": {
+                "overall_status": ["RECRUITING", "UNKNOWN"],
+                "last_known_status": [None, "RECRUITING"],
+            },
             "cause": parity.UNKNOWN_CAUSE,
         }
     ]

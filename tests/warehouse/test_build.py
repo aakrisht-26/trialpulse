@@ -33,10 +33,15 @@ def _query(path: Path, sql: str) -> list[tuple[object, ...]]:
 
 def test_tables_and_counts(warehouse: Path) -> None:
     counts = {t: _query(warehouse, f"SELECT count(*) FROM {t}")[0][0] for t in TABLES}
-    assert counts["raw_versions"] == 10
-    assert counts["versions"] == 7
+    assert counts["raw_versions"] == 11
+    assert counts["versions"] == 8
     assert counts["versions_quarantine"] == 3
-    assert counts["trials"] == 4  # NCT00000004's only version is quarantined
+    assert counts["trials"] == 5  # NCT00000004's only version is quarantined
+    stored = _query(
+        warehouse,
+        "SELECT overall_status, last_known_status FROM versions WHERE nct_id = 'NCT00000006'",
+    )
+    assert stored == [("UNKNOWN", "RECRUITING")]
     assert not (warehouse.parent / "warehouse.duckdb.building").exists()
 
 
@@ -44,7 +49,7 @@ def test_raw_columns_have_their_explicit_types(warehouse: Path) -> None:
     described = {r[0]: r[1] for r in _query(warehouse, "DESCRIBE raw_versions")}
     assert {c: described[c] for c in RAW_COLUMNS} == {c: t for c, (t, _) in RAW_COLUMNS.items()}
     # The drifting column read as INTEGER in one file is cast to BOOLEAN.
-    assert _query(warehouse, "SELECT count(*) FROM raw_versions WHERE is_ppsd")[0][0] == 4
+    assert _query(warehouse, "SELECT count(*) FROM raw_versions WHERE is_ppsd")[0][0] == 5
 
 
 def test_no_personal_data_is_written(warehouse: Path) -> None:
@@ -215,7 +220,7 @@ def test_audit_reports_counts_without_names(
         assert heading in text
     for secret in (INVESTIGATOR, INDIVIDUAL, PERSON_LIKE, EMAIL, "Acme"):
         assert secret not in text
-    assert "| `is_ppsd` | BOOLEAN in 1; INTEGER in 1 | 4 | BOOLEAN |" in text
+    assert "| `is_ppsd` | BOOLEAN in 1; INTEGER in 1 | 5 | BOOLEAN |" in text
     assert "Duplicate (nct_id, nct_version) keys in the source: 1 (2 rows)." in text
     assert "| COMPLETED | 1 | 1 | 0 | 0 |" in text  # the reopened trial
     assert "| Posted on the same day as the previous version | 1 | 1 |" in text

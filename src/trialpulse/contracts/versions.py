@@ -9,6 +9,9 @@ the offline history dataset and live API v2 records, so downstream code is sourc
 - Free text is stored once, normalized (trialpulse.contracts.text), in the warehouse's texts
   table; a version holds the text's SHA-256.
 - Sponsors follow trialpulse.contracts.sponsor: no individual's name is stored.
+- `last_known_status` is the submitted status behind the registry's UNKNOWN: when the
+  registry shows UNKNOWN (a status it computes, never one a sponsor submits), both sources
+  keep the submitted status in this column (API v2 `lastKnownStatus`). It is empty otherwise.
 - `content_hash` is a SHA-256 of the canonical content: every column except the version
   number, the source and the hash itself. The same function serves both paths, so an
   unchanged record gives the same hash from either source.
@@ -50,6 +53,7 @@ SPONSOR_CLASSES: tuple[str, ...] = (
 DATE_TYPES: tuple[str, ...] = ("ACTUAL", "ESTIMATED")
 ENUMS: dict[str, tuple[str, ...]] = {
     "overall_status": STATUSES,
+    "last_known_status": STATUSES,
     "study_type": ("INTERVENTIONAL", "OBSERVATIONAL", "EXPANDED_ACCESS"),
     "allocation": ("RANDOMIZED", "NON_RANDOMIZED", "NA"),
     "intervention_model": ("PARALLEL", "SINGLE_GROUP", "CROSSOVER", "SEQUENTIAL", "FACTORIAL"),
@@ -109,6 +113,7 @@ COLUMN_TYPES: dict[str, str] = {
     "effective_date_type": "VARCHAR",
     "submitted_date": "DATE",
     "overall_status": "VARCHAR",
+    "last_known_status": "VARCHAR",
     "study_type": "VARCHAR",
     "study_first_post_date": "DATE",
     "study_first_post_date_type": "VARCHAR",
@@ -239,6 +244,7 @@ API_V2_PATHS: dict[str, str] = {
     "brief_title": "identificationModule.briefTitle",
     "official_title": "identificationModule.officialTitle",
     "overall_status": "statusModule.overallStatus",
+    "last_known_status": "statusModule.lastKnownStatus",
     "why_stopped": "statusModule.whyStopped",
     "status_verified_date": "statusModule.statusVerifiedDate",
     "start_date": "statusModule.startDateStruct.date",
@@ -277,6 +283,7 @@ _PLAIN_DATES = (
     "status_verified_date",
 )
 _PLAIN_ENUMS = (
+    "last_known_status",
     "effective_date_type",
     "overall_status",
     "study_type",
@@ -367,6 +374,10 @@ def _no_individual_name(df: pd.DataFrame) -> pd.Series:
     return ~(individual & (df["lead_sponsor_name"].notna() | df["sponsor_key"].notna()))
 
 
+def _last_known_status_only_behind_unknown(df: pd.DataFrame) -> pd.Series:
+    return df["last_known_status"].isna() | df["overall_status"].eq("UNKNOWN")
+
+
 def _precision_matches_date(df: pd.DataFrame) -> pd.Series:
     ok = pd.Series(True, index=df.index)
     for name in PRECISION_DATES:
@@ -384,6 +395,7 @@ VERSION_SCHEMA = pa.DataFrameSchema(
         "effective_date_type": _enum("effective_date_type"),
         "submitted_date": _date(),
         "overall_status": pa.Column(str, pa.Check.isin(STATUSES)),
+        "last_known_status": _enum("last_known_status"),
         "study_type": _enum("study_type"),
         "study_first_post_date": _date(),
         "study_first_post_date_type": _enum("study_first_post_date_type"),
@@ -421,6 +433,9 @@ VERSION_SCHEMA = pa.DataFrameSchema(
         pa.Check(_unique_history_version, name="unique_history_version"),
         pa.Check(_no_individual_name, name="no_individual_sponsor_name"),
         pa.Check(_precision_matches_date, name="precision_and_type_match_date"),
+        pa.Check(
+            _last_known_status_only_behind_unknown, name="last_known_status_only_behind_unknown"
+        ),
     ],
     strict=True,
     ordered=True,

@@ -33,6 +33,7 @@ def _version(nct_id: str, version: int, posted: str, **values: Any) -> dict[str,
         "last_update_post_date_type": "ACTUAL",
         "last_update_submit_date": posted,
         "overall_status": "RECRUITING",
+        "last_known_status": None,
         "status_verified_date": posted,
         "study_type": "INTERVENTIONAL",
         "study_first_post_date": "2015-03-02",
@@ -108,6 +109,9 @@ ROWS: list[dict[str, Any]] = [
     # Ordinary, with the Markdown form of NCT00000001's criteria and missing enrollment.
     _version("NCT00000005", 0, "2019-09-09", enrollment_count=None, enrollment_type=None,
              study_type="OBSERVATIONAL", allocation=None, masking=None),
+    # The registry's computed UNKNOWN over the submitted status, as the dataset stores it.
+    _version("NCT00000006", 0, "2016-02-02", overall_status="UNKNOWN",
+             last_known_status="RECRUITING"),
 ]  # fmt: skip
 
 TYPES = {**{c: kind for c, (kind, _) in RAW_COLUMNS.items()}}
