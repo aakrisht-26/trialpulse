@@ -32,6 +32,7 @@ So the dataset replaced the latest version's submitted status with the status th
 
 - **Against the dataset's own UNKNOWN labels**, applying the rule to each trial's latest version at the data cutoff (2026-09-25): 84,976 of 84,976 registry UNKNOWN labels reproduced. 11,901 more latest versions are lapsed by the rule while the dataset still shows them open, consistent with records the registry marked later and the dataset never fetched again (Step 2 part d found 5 of 200 cohort trials in this state).
 - **Against the live registry**: per-trial API v2 records fetched on 2026-09-29 (398 trials unchanged since the dataset): the rule agrees with the registry's UNKNOWN or not for 397. The exception (NCT03669965) is shown UNKNOWN in the dataset and ACTIVE_NOT_RECRUITING on the registry today, with no new version, so the registry itself changed its label.
+- **The implemented rule against the live registry** (`trialpulse.cohort.rules`, on the Step 3 parity sample fetched again on 2026-10-05): it agrees with the registry's UNKNOWN or not for all 199 sampled trials unchanged since the dataset. For the 5 trials the registry marks UNKNOWN while the dataset shows them open, API v2's `lastKnownStatus` equals the status the dataset holds.
 - **Variants rejected by the evidence**: the completion date alone misses 1,928 registry UNKNOWN trials that have no completion date of either kind; counting the verification from the first day of the month flags a trial verified in September 2024 on 2026-09-29, which the registry did not.
 
 ## Alternatives

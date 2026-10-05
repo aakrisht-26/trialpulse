@@ -171,24 +171,26 @@ Every canonical row is validated against the contract in `trialpulse.contracts.v
 
 ## Source parity sample (API v2)
 
-`uv run python -m trialpulse.warehouse.parity` on 2026-09-30: 200 seeded trials, 199 of them unchanged since the dataset (same last update posted date), mapped from API v2 with `canonical_from_api_v2` and compared column by column with their latest warehouse version. Rows identical in every column (same content hash): 192 of 199. Every other column agrees for every compared trial. Differences without a known cause: 0.
+`uv run python -m trialpulse.warehouse.parity` on 2026-10-05: 200 seeded trials, 199 of them unchanged since the dataset (same last update posted date), mapped from API v2 with `canonical_from_api_v2` and compared column by column with their latest warehouse version. Rows identical in every column (same content hash): 191 of 199. Every other column agrees for every compared trial. Differences without a known cause: 0.
 
 | Column that differs in some trial | Agree |
 | --- | --- |
 | `overall_status` | 194 of 199 |
-| `lead_sponsor_name` | 197 of 199 |
-| `sponsor_key` | 197 of 199 |
-| `content_hash` | 192 of 199 |
+| `last_known_status` | 194 of 199 |
+| `lead_sponsor_name` | 196 of 199 |
+| `sponsor_key` | 196 of 199 |
+| `content_hash` | 191 of 199 |
 
 Differences (trial: columns; cause):
 
-- NCT06297174: overall_status; UNKNOWN set by the registry without a new version
-- NCT06350357: overall_status; UNKNOWN set by the registry without a new version
-- NCT06150937: overall_status; UNKNOWN set by the registry without a new version
+- NCT06297174: overall_status, last_known_status; UNKNOWN set by the registry without a new version
+- NCT06350357: overall_status, last_known_status; UNKNOWN set by the registry without a new version
 - NCT00226395: lead_sponsor_name, sponsor_key; sponsor name changed on the registry without a new version
-- NCT06266065: overall_status; UNKNOWN set by the registry without a new version
-- NCT06339996: overall_status; UNKNOWN set by the registry without a new version
 - NCT07293325: lead_sponsor_name, sponsor_key; sponsor name changed on the registry without a new version
+- NCT06266065: overall_status, last_known_status; UNKNOWN set by the registry without a new version
+- NCT06339996: overall_status, last_known_status; UNKNOWN set by the registry without a new version
+- NCT06150937: overall_status, last_known_status; UNKNOWN set by the registry without a new version
+- NCT00119886: lead_sponsor_name, sponsor_key; sponsor name changed on the registry without a new version
 
 ## Tables
 
