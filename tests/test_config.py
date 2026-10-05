@@ -64,6 +64,14 @@ def test_committed_config_matches_locked_definitions() -> None:
         "ACTIVE_NOT_RECRUITING",
         "SUSPENDED",
     }
+    # ADR 0014: the registry's UNKNOWN rule on versioned fields.
+    assert cfg.unknown_rule.statuses == (
+        "NOT_YET_RECRUITING",
+        "RECRUITING",
+        "ENROLLING_BY_INVITATION",
+        "ACTIVE_NOT_RECRUITING",
+    )
+    assert cfg.unknown_rule.verification_lapse_months == 24
     assert cfg.stop_reasons.operational == (
         "accrual",
         "business",
@@ -130,6 +138,7 @@ def test_unknown_key_in_file_is_rejected(tmp_path: Path) -> None:
         ("stop_reasons.operational", ["accrual", "safety"], "appears in"),
         ("evaluation.confidence_level", 1.5, "less than 1"),
         ("landmarks.spacing_month", 6, "Extra inputs are not permitted"),
+        ("unknown_rule.statuses", ["RECRUITING", "COMPLETED"], "must be open statuses"),
     ],
 )
 def test_invalid_values_are_rejected(

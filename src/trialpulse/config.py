@@ -93,6 +93,13 @@ class StatusConfig(_Section):
         return self
 
 
+class UnknownRuleConfig(_Section):
+    """The registry's UNKNOWN rule on versioned fields (ADR 0014)."""
+
+    statuses: tuple[str, ...] = Field(min_length=1)
+    verification_lapse_months: PositiveInt
+
+
 class StopReasonConfig(_Section):
     """Stop-reason groups for the cause-specific targets."""
 
@@ -169,6 +176,7 @@ class ProjectConfig(BaseSettings):
     dataset: DatasetConfig
     population: PopulationConfig
     statuses: StatusConfig
+    unknown_rule: UnknownRuleConfig
     stop_reasons: StopReasonConfig
     landmarks: LandmarkConfig
     horizons_months: tuple[PositiveInt, ...] = Field(min_length=1)
@@ -188,6 +196,13 @@ class ProjectConfig(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         # Only values passed in explicitly (from the YAML file) count.
         return (init_settings,)
+
+    @model_validator(mode="after")
+    def _unknown_rule_statuses_are_open(self) -> Self:
+        outside = set(self.unknown_rule.statuses) - set(self.statuses.open)
+        if outside:
+            raise ValueError(f"unknown_rule statuses must be open statuses: {sorted(outside)}")
+        return self
 
     @model_validator(mode="after")
     def _horizons_fit_discrete_time_grid(self) -> Self:

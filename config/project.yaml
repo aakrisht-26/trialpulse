@@ -20,7 +20,14 @@ statuses:
   open: [NOT_YET_RECRUITING, RECRUITING, ENROLLING_BY_INVITATION, ACTIVE_NOT_RECRUITING, SUSPENDED]
   early_stop: [TERMINATED, WITHDRAWN]   # event of interest
   competing: [COMPLETED]                # competing event
-  unknown: [UNKNOWN]                    # censored at status_verified_date of the first UNKNOWN version
+  unknown: [UNKNOWN]                    # the registry's computed label; see unknown_rule (ADR 0014)
+
+# The registry's UNKNOWN rule, applied to versioned fields (ADR 0014): a state is lapsed
+# on a date when its submitted status is one of these, its completion date has passed and
+# its status verification is older than this many months.
+unknown_rule:
+  statuses: [NOT_YET_RECRUITING, RECRUITING, ENROLLING_BY_INVITATION, ACTIVE_NOT_RECRUITING]
+  verification_lapse_months: 24
 
 # Stop-reason groups for the cause-specific secondary targets.
 stop_reasons:
