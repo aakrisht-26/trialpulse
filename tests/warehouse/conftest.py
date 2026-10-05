@@ -141,18 +141,20 @@ def write_dataset(folder: Path, rows: list[dict[str, Any]] = ROWS) -> str:
     return (folder / "*.parquet").as_posix()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def cfg() -> ProjectConfig:
     return load_project_config()
 
 
-@pytest.fixture
-def dataset(tmp_path: Path) -> str:
-    return write_dataset(tmp_path / "raw" / "core")
+@pytest.fixture(scope="session")
+def dataset(tmp_path_factory: pytest.TempPathFactory) -> str:
+    return write_dataset(tmp_path_factory.mktemp("raw") / "core")
 
 
-@pytest.fixture
-def warehouse(tmp_path: Path, dataset: str, cfg: ProjectConfig) -> Path:
-    path = tmp_path / "warehouse.duckdb"
-    build(dataset, cfg, path, workers=1, temp_dir=tmp_path / "tmp")
+@pytest.fixture(scope="session")
+def warehouse(tmp_path_factory: pytest.TempPathFactory, dataset: str, cfg: ProjectConfig) -> Path:
+    """One synthetic warehouse for the whole session: the tests only read it."""
+    folder = tmp_path_factory.mktemp("warehouse")
+    path = folder / "warehouse.duckdb"
+    build(dataset, cfg, path, workers=1, temp_dir=folder / "tmp")
     return path

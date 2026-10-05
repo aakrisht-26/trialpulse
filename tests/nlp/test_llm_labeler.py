@@ -288,6 +288,7 @@ def test_the_llm_sample_excludes_gold_texts_after_normalization() -> None:
     assert sample != sorted(sample, key=lambda i: i.key)  # a seeded random order
 
 
+@pytest.mark.slow  # reads the real 10,000-text sample where it exists
 def test_the_real_llm_sample_holds_no_gold_text() -> None:
     """Runs where the gitignored sample exists: 10,000 distinct texts, none of them gold."""
     if not LLM_SAMPLE_PATH.is_file():

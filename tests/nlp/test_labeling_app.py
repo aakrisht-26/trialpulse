@@ -10,6 +10,8 @@ from streamlit.testing.v1 import AppTest
 from trialpulse.config import REPO_ROOT
 from trialpulse.nlp.gold import GoldItem, read_labels, text_sha256, write_sample
 
+pytestmark = pytest.mark.slow  # each test runs the whole Streamlit app
+
 APP = REPO_ROOT / "src" / "trialpulse" / "nlp" / "labeling_app.py"
 SOURCE = "ctgov-api-v2 pulled 2026-09-23"
 DEV_A = GoldItem("NCT1", text_sha256("a"), "TERMINATED", 2015, "Synthetic: too slow", "dev", SOURCE)

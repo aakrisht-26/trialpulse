@@ -70,7 +70,19 @@ warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+# A default run skips the slow tests (worker pools, full app runs, real data) and takes
+# well under a minute. Run everything, as CI does, with: pytest -m "slow or not slow"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+    "-m",
+    "not slow",
+]
+markers = [
+    "slow: worker pools, full app runs or real data; skipped by default, run in CI",
+]
 
 [tool.coverage.run]
 source = ["trialpulse"]

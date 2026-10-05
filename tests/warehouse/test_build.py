@@ -137,6 +137,7 @@ def test_quarantine_and_trials(warehouse: Path) -> None:
     assert trials[2][6] == 2
 
 
+@pytest.mark.slow  # a second build, with a pool of worker processes
 def test_building_twice_gives_identical_tables(
     tmp_path: Path, dataset: str, cfg: ProjectConfig, warehouse: Path
 ) -> None:
