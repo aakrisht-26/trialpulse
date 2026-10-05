@@ -1,7 +1,7 @@
 # 0014. UNKNOWN: derived from the registry's rule on versioned fields
 
 - Date: 2026-09-30
-- Status: **Accepted.** The principle was decided by Aakrisht on 2026-09-30 (Step 2 review, "Guidance for later steps", item 2): do not rely on the registry's UNKNOWN status; apply the registry's own rule to versioned fields, the same way offline and live. The details below (the status set, the date semantics, and the censoring of resolved lapses) were set in Step 4 from the evidence and are flagged for his review in the Step 4 report.
+- Status: **Accepted** by Aakrisht on 2026-10-05, as written, including `last_known_status` as the submitted status under UNKNOWN, the status set, the month-end dates and "a later version resolves a lapse". He decided the principle on 2026-09-30 (Step 2 review, "Guidance for later steps", item 2): do not rely on the registry's UNKNOWN status; apply the registry's own rule to versioned fields, the same way offline and live. The details were set in Step 4 from the evidence below.
 - Changes CLAUDE.md Section 6 ("UNKNOWN", "Landmarks") and the canonical version contract (Step 3).
 
 ## Context

@@ -1,7 +1,7 @@
 # 0013. Population: decided point-in-time, from the version in effect at each landmark
 
 - Date: 2026-09-30
-- Status: **Accepted.** The principle was decided by Aakrisht on 2026-09-30 (Step 2 review, "Guidance for later steps", item 1). The details in Decision items 3 to 5 were set in Step 4 and are flagged for his review in the Step 4 report.
+- Status: **Accepted** by Aakrisht on 2026-10-05, as written. He decided the principle on 2026-09-30 (Step 2 review, "Guidance for later steps", item 1); the details in Decision items 3 to 5 were set in Step 4.
 - Changes CLAUDE.md Section 6 ("Population", "Landmarks").
 
 ## Context
