@@ -73,18 +73,18 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 4, Cohort, outcomes and landmarks** (Step 3 approved on 2026-09-30). **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Step 4, Cohort, outcomes and landmarks**, built, independently reviewed and waiting for Aakrisht's review (2026-10-06). Step 5 (EDA) is being built, unreviewed, on branch `provisional/step5-eda` under the extension of 2026-10-05; main holds nothing of it. **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
 | 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
-| 4 | Cohort, outcomes and landmarks | Not started |
+| 4 | Cohort, outcomes and landmarks | Built and independently reviewed 2026-10-06, waiting for review (ADRs 0013 and 0014 accepted, ADR 0015 proposed, 3 open questions) |
 | 5 | Exploratory data analysis | Not started |
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
 | 7 | Point-in-time features | Not started |
-| 8 | Evaluation harness and test lock | Approved 2026-09-23 (the real M0 run waits for Step 4) |
+| 8 | Evaluation harness and test lock | Approved 2026-09-23; M0 ran end to end on the development origins on the real cohort (Step 4), which closes its last criterion |
 | 9 | Baselines and Cox analysis | Not started |
 | 10 | Discrete-time models and tuning | Not started |
 | 11 | Pre-registration, locked test and results | Not started |
@@ -464,7 +464,7 @@ Then open `docs/data_audit.md`.
 
 ## Step 4: Cohort, outcomes and landmarks
 
-Date: 2026-09-30 to 2026-10-06. Status: **built, waiting for review**.
+Date: 2026-09-30 to 2026-10-06. Status: **built and independently reviewed, waiting for Aakrisht's review**.
 
 ### What was built
 
@@ -480,8 +480,8 @@ Date: 2026-09-30 to 2026-10-06. Status: **built, waiting for review**.
   - `audit.py`, `build.py`: `uv run python -m trialpulse.cohort.build` writes `data/cohort/{landmarks,person_period,outcomes}.parquet`, the sanity table, and part 2 of `docs/data_audit.md`.
 - `src/trialpulse/reports.py`: each audit part regenerates only its own section of `docs/data_audit.md`.
 - `config/project.yaml`: `unknown_rule` (the four lapsing statuses, 24 months), validated in `config.py`.
-- Tests: `tests/cohort/` (33 tests), plus updates in `tests/warehouse/` and `tests/test_config.py`.
-- The `slow` marker: a default local run skips 6 slow tests (the worker-pool rebuild, the Streamlit app runs, the real-data sample check) and takes about half a minute; CI runs everything. The warehouse tests share one synthetic warehouse per session.
+- Tests: `tests/cohort/` (52 tests) and `tests/test_reports.py`, plus additions in `tests/warehouse/` and `tests/test_config.py`.
+- The `slow` marker: a default local run (410 tests) skips 7 slow ones (two extra warehouse builds, one with a worker pool, the Streamlit app runs and the real-data sample check); CI runs all 417. Measured on this machine while a browser and other applications were running: 45 seconds for the default run and 57 for the full one (72 for the default run before the last two changes). Two changes made the difference: the warehouse tests share one synthetic warehouse per session, and the tests share one TLS context instead of loading the CA bundle for every HTTP client (about 0.15 seconds each, some 70 times).
 
 ### Acceptance criteria
 
@@ -491,15 +491,15 @@ Date: 2026-09-30 to 2026-10-06. Status: **built, waiting for review**.
 | Added by Aakrisht: unknown by the derived rule with no UNKNOWN version; study type changing between versions; a status reversal | **Met.** `test_unknown_by_the_derived_rule_without_an_unknown_version`, `test_study_type_is_decided_at_each_landmark`, `test_a_reversal_is_excluded_and_counted` (two forms, one reopened on the same day) |
 | Aalen-Johansen sanity table printed and saved, by sponsor class (ADR 0006) | **Met in my shell.** Printed by the build, saved in `docs/data_audit.md` part 2 and `data/cohort/aj_sanity_by_sponsor_class.csv`. Early-stop CIF from L0 (landmarks before 2018-01-01, Section 10): 2.0% at 12 months and 5.0% at 24 months overall; INDUSTRY 3.5% and 7.0%; the other classes 0.8% to 1.5% and 2.7% to 4.2% (the UNKNOWN sponsor class, 66 trials, has no early stop in 24 months) |
 | The landmark output satisfies the Step 8 input contract exactly | **Met.** `data/cohort/landmarks.parquet` has trial_id, landmark_index, landmark_date, event, event_date and `stratum` (M0's feature), and nothing else; `test_the_landmarks_file_is_the_step_8_input_contract` loads it with the harness's own `load_landmark_rows`. M0 ran on it (below) |
-| The person-period table feeds the discrete-time models without reshaping | **Met.** One row per (trial, landmark, interval) with `interval` (j), `outcome` (0 continue, 1 stop, 2 complete) and the landmark's features; `training_rows(rows, origin)` gives an origin's training set by filtering and recoding only (`tests/cohort/test_person_period.py`) |
+| The person-period table feeds the discrete-time models without reshaping | **Met.** One row per (trial, landmark, interval) with `interval` (j), `outcome` (0 continue, 1 stop, 2 complete) and the landmark's features; `training_rows(rows, origin)` gives an origin's training set by filtering and recoding only (`tests/cohort/test_person_period.py`). With no covariates the rows reproduce Aalen-Johansen's CIF (0.0319 against 0.0318 at 12 months on the 2016 origin), the property Section 9 requires of the discrete-time models |
 | M0 through the Step 8 harness on the development origins (closes Step 8's last criterion) | **Met in my shell.** `uv run python -m trialpulse.eval.walkforward --model m0 --origins dev`, 1,000 resamples, 12 minutes, 0 invalid resamples, no unlock (results below) |
 
 ### Results
 
-- **Cohort** (`uv run python -m trialpulse.cohort.build`, about 18 seconds; a second build is identical): 330,121 trials with at least one landmark row; 1,448,969 landmark rows (328,421 at L0, falling to 99,965 at L6); 4,255,227 person-period rows; 604,583 trial outcomes.
+- **Cohort** (`uv run python -m trialpulse.cohort.build`, about 18 seconds; a second build is identical): 330,121 trials with at least one landmark row; 1,448,969 landmark rows (328,421 at L0, falling to 99,965 at L6); 4,245,278 person-period rows; 604,583 trial outcomes.
 - **Funnel:** 604,583 trials in the warehouse; 556,296 first posted from 2008; 422,927 of them interventional in some version; 3,065 excluded for a reversal. Of the 419,862 left, 89,741 have no landmark row: 51,697 were already terminal when first posted (registered after they ended), 35,938 are censored at registration under the UNKNOWN rule (never verified again), and 2,106 are not interventional, or lapsed, at every landmark.
 - **Outcomes of cohort trials:** 34,255 early stops (22,446 terminated, 11,809 withdrawn), 176,659 completed, 28,013 censored under the UNKNOWN rule, 91,194 open at the cutoff.
-- **UNKNOWN:** the registry's label is fully contained in the derived rule (55,942 trials with both, 8,098 by the rule only, 0 by the label only). 43,348 trials had a lapse that a later version resolved; censoring at the first lapse would have discarded their outcomes.
+- **UNKNOWN:** the registry's label is fully contained in the derived rule (55,942 trials with both, 8,098 by the rule only, 0 by the label only). 43,348 trials had a lapsed state followed by a later version; 39,919 of them have an outcome or are open at the cutoff, which censoring at the first lapse would have discarded.
 - **Point-in-time population:** 16,525 landmark candidates were rejected because the trial was not interventional on that date (ADR 0013); 31,502 because the state was lapsed on that date (ADR 0014); 20 because no version was public yet.
 - **M0 on the development origins** (sponsor class at L as the only feature; pooled over landmark indices; 95% cluster-bootstrap intervals):
 
@@ -511,8 +511,89 @@ Date: 2026-09-30 to 2026-10-06. Status: **built, waiting for review**.
   | 2017-01-01 | 82,627 (49,416) | 24 months | 0.534 (0.526 to 0.542) | 0.0590 | 1.25 | 1.32 |
 
   This is the base-rate floor the later models must beat: sponsor class alone carries a little signal. The full table for Step 9 goes in `docs/results_dev.md` then; the JSON is `data/results/walkforward/m0_dev.json`.
-- **Warehouse rebuild** (new schema): build F on an idle machine gave the same row counts and checksums as build E for all six tables, in 485 seconds (8.1 minutes; about 18 minutes before the pyarrow path). `texts` and `trials` are also identical to the Step 3 builds.
+- **Warehouse rebuild** (new schema): build F on an idle machine gave the same row counts and checksums as build E for all six tables, in 485 seconds (8.1 minutes; about 18 minutes before the pyarrow path). `texts` and `trials` are also identical to the Step 3 builds. Build G, after the review fixes to the build code, is identical again.
 - **Source parity, repeated on 2026-10-05** with `last_known_status` in the contract: 191 of 199 unchanged trials identical in every column; the 8 differences all have a known registry-side cause (5 UNKNOWN set without a version, with API v2's `lastKnownStatus` equal to the status the dataset holds; 3 sponsor renames). The implemented UNKNOWN rule agrees with the live registry for all 199.
+
+### Independent review (2026-10-06)
+
+Two independent reviewers, as instructed (the earlier four-reviewer attempts failed on a network outage and then the session limit). One covered outcomes, censoring and landmarks against Section 6 and ADRs 0013 and 0014; the other the Step 3 contract change, the fit with the Step 8 contract, and test adequacy. Every finding was verified before acting on it.
+
+**What they confirmed.**
+
+- Reviewer 1 re-derived every outcome and every landmark decision on the real warehouse with its own SQL written from the ADR text: 0 mismatches over 604,583 trials and 2,939,034 landmark candidates, and the audit's arithmetic is consistent.
+- Reviewer 2 recomputed `stratum` from the warehouse for all 1,448,969 landmark rows (0 differences), found the Arrow chunk path free of dropped, duplicated or reordered rows at any chunk size, and the content hash identical between the offline path and `canonical_from_api_v2` for the same record.
+
+**Findings and what was done** (commit `a3595ed` and the review-fix commits after it):
+
+| Finding | Verified | Action |
+| --- | --- | --- |
+| Person-period intervals that straddle the end of observation kept events and dropped continuations, biasing hazards upward (both reviewers) | Yes: origin 2016, no-covariate CIF at 12 months 0.0332 against Aalen-Johansen's 0.0318 | Fixed: such intervals are dropped for every trial (0.0319 after). Recorded as **ADR 0015, proposed**, because it refines Section 6's wording |
+| Walk-forward training labels are the final ones truncated at T, not the cohort as it would have been built at T (both reviewers) | Yes, by construction; reviewer 1 sized it: origin 2016, 405,251 training landmark rows built against 399,905 as of T | **Not changed. Open question 1 below** |
+| A version shown UNKNOWN without `last_known_status` was treated as neither open nor lapsed | Yes, on a mini history; 0 such versions in the dataset | Fixed: lapsed from its post date, and a reversal after a terminal version; tested |
+| States follow post dates and events follow version numbers, unchecked | Yes; 0 out-of-order versions in the dataset | Fixed: the build refuses out-of-order versions; tested |
+| The audit's "lapse resolved by a later version" overcounted | Yes: 3,429 of the 43,348 are censored under the rule anyway | Fixed: the audit reports both numbers |
+| ADR 0014's Context implied the rule keeps never-updated trials in the risk set | Yes: 35,938 eligible trials are censored at or before registration | ADR Context corrected and the figure added to its Consequences. **Open question 2 below** |
+| Tests did not pin several rules: 15 mutants survived (first of several terminal versions, stratum at the landmark, the completion reference, same-day ties, relabeled trials, boundary days, the cutoff filter) | Yes, reproduced on a scratch copy of the code | 15 cohort tests added; all 15 mutants, and 5 more for the new fixes, are now killed |
+| The sponsor lookup could hold two rows for one key (a missing and an empty name), duplicating versions (latent since Step 3) | Yes: the new test fails on the previous code | Fixed and tested |
+| A BIGINT column with a NULL passed through float64 in the chunk conversion, changing integers above 2^53 (latent) | Yes: the new test fails on the previous code | Fixed (nullable types straight from Arrow) and tested |
+| Section replacement split on any line starting with "# "; part 2 did not say which warehouse it came from | Yes | Fixed: only part headings separate parts; part 2 states the revision, schema version and versions checksum; unit tests added |
+| The content hash covers the registry's computed UNKNOWN, so one version would hash two ways before and after the registry flips it | Yes | **Not changed. Open question 3 below** (a Step 14 decision); the API v2 parity test now covers an UNKNOWN version |
+
+### Decisions pending approval
+
+1. **ADR 0015 (proposed):** an interval counts only if it ended within the observation window (the data cutoff, or the origin when training). Implemented, since the alternative is measurably biased.
+2. **A bare UNKNOWN** (no `last_known_status`) is lapsed from its post date; after a terminal version it is a reversal. None exists in the dataset; a live record could carry one.
+3. **Out-of-order versions are refused** by the cohort build instead of being interpreted.
+4. **`landmarks.parquet` holds only the contract columns and `stratum`** (the lead sponsor class of the state at L, "MISSING" when absent). Everything else about a trial's outcome is in `outcomes.parquet`, so that no label-derived column can reach a model as a feature.
+5. **Person-period conventions:** intervals are (start, end]; an event on the end belongs to that interval (as the harness counts a stop on the horizon); a trial censored on the end keeps the interval (as Aalen-Johansen's risk set does).
+6. **The sanity table** uses L0 landmarks before 2018-01-01 (Section 10) and 365.25 / 12 days per month.
+7. **Slow tests:** the test-lock tests stay in the default run although they take about 7 seconds, because they guard the lock; the warehouse tests share one synthetic warehouse per session; `tests/conftest.py` makes every test share one default TLS context by wrapping an httpx helper (test-only, and skipped if a future httpx drops the helper).
+8. **One more API v2 request** on 2026-10-05, to repeat the parity sample with the new column.
+
+### Open questions
+
+1. **Should walk-forward training labels be rebuilt as of each origin T?** Today the cohort is built once at the data cutoff and training rows are truncated at T, as Section 6 words it ("every outcome administratively censored at T"). Two things are then decided with hindsight: which trials are censored under the UNKNOWN rule and where, and which trials are excluded as reversals. Sizes at origin 2016 (reviewer 1): 19,314 of 405,251 training landmark rows exist only with hindsight (mostly lapsed at T and resolved later), 13,968 would exist only as of T (10,961 from UNKNOWN censoring decided after T, 3,007 from reversals after T), and 13,960 common rows have a different censoring date. No event label differs. Options:
+   - (a) **Build each origin's training labels as of T** (`CohortRules.from_config(cfg, cutoff=T)` already supports it; the harness would read one training file per origin). The training set is then what a model trained at T would have seen, which is also what production retraining sees. **Recommended**, before Step 9 fits anything beyond M0.
+   - (b) Keep hindsight labels and state the limitation in the preregistration and the model card.
+   - (c) As (a) for the UNKNOWN rule only, keeping the reversal exclusion with hindsight as Section 6 mandates.
+
+   Each changes how Section 6 is read and the approved Step 8 harness, so it needs an ADR. M0's numbers would move slightly.
+2. **Trials censored at or before registration.** Under ADR 0014 a trial whose last state is lapsed is censored at that state's status verified date, stored as the first day of its month. For 35,938 eligible trials (8.6%) that is not after registration, so they have no landmark row (the old definition gave them none either). Options: (a) keep as approved, **recommended for the main analysis**: these rows would carry no follow-up, and AUC does not change; (b) censor at the end of the verified month, or at the last state's post date if later, so that they keep an L0 row with a few days of follow-up. Either way the Step 11 sensitivity analysis (UNKNOWN as an early stop) needs these rows and the landmarks between a trial's last verification and its lapse, so it needs its own cohort variant.
+3. **The content hash and the registry's computed UNKNOWN (before Step 14).** A version bootstrapped from the dataset as RECRUITING and fetched from API v2 after the registry flips it to UNKNOWN hashes differently, although no version was posted (5 of 199 trials in the parity sample). With the live key (nct_id, post date, content hash) that would store one version twice. Options: (a) hash the submitted status instead of the shown status and `last_known_status`, **recommended**; (b) key live versions by (nct_id, post date) and treat the flip as an update. (a) changes the Step 3 contract and every content hash, so it needs approval and a warehouse rebuild (8 minutes).
+
+### Blocked, skipped or deferred
+
+- **`docs/results_dev.md` is not written.** M0's development results are in this file and in `data/results/walkforward/m0_dev.json`; the results document belongs to Step 9.
+- **The UNKNOWN sensitivity analysis** (Step 11) is not built; `outcomes.parquet` records each trial's lapse date for it (see open question 2).
+- **Your local database is at revision 0001.** `uv run alembic upgrade head` applies 0002 (one added column).
+- **Build D failed at its last step** (the audit) because I edited `config/project.yaml` while it ran; its process held the old config class. No code defect; builds E, F and G are the valid ones.
+- The daily Step 6 sample labeling was not run (yours).
+
+### Files touched
+
+- New: `src/trialpulse/cohort/{__init__,rules,outcomes,landmarks,person_period,audit,build}.py`, `src/trialpulse/reports.py`, `alembic/versions/0002_last_known_status.py`, `tests/cohort/{conftest,test_cohort,test_rules,test_person_period,test_build}.py`, `tests/test_reports.py`, `tests/conftest.py`, `docs/adr/0013-population-decided-at-each-landmark.md`, `docs/adr/0014-unknown-from-the-registry-rule.md`, `docs/adr/0015-intervals-end-within-the-observation-window.md`.
+- Changed: `CLAUDE.md` (Amendments: ADRs 0012, 0013, 0014), `config/project.yaml`, `src/trialpulse/config.py`, `src/trialpulse/contracts/versions.py`, `src/trialpulse/warehouse/{build,audit,parity}.py`, `tests/warehouse/{conftest,test_build,test_migrations,test_parity}.py`, `tests/test_config.py`, `tests/nlp/{test_labeling_app,test_llm_labeler}.py`, `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`, `docs/data_audit.md`, `docs/adr/0012-canonical-text-and-individual-sponsors.md`, `docs/progress.md`, `docs/interview_notes.md`.
+
+### Verify (PowerShell)
+
+Light on purpose: no warehouse rebuild (builds E, F and G ran on this machine with identical checksums). The cohort build takes about 20 seconds and should print "Identical to the previous build: yes".
+
+```powershell
+uv sync
+uv run alembic upgrade head
+uv run alembic current
+uv run python -m trialpulse.cohort.build
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+```
+
+Optional, about 12 minutes (M0 on the development origins, 1,000 resamples; it rewrites `data/results/walkforward/m0_dev.json`):
+
+```powershell
+uv run python -m trialpulse.eval.walkforward --model m0 --origins dev
+```
+
+Then open `docs/data_audit.md` (part 2).
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
