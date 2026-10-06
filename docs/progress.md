@@ -595,6 +595,14 @@ uv run python -m trialpulse.eval.walkforward --model m0 --origins dev
 
 Then open `docs/data_audit.md` (part 2).
 
+## Step 5 (provisional): Exploratory data analysis
+
+Date: 2026-10-06. Status: **in progress, unreviewed, on branch `provisional/step5-eda` only**. Built under the extension of 2026-10-05 while Aakrisht was away; main holds nothing of it, and the draft PR is not to be merged.
+
+Checkpoints (one line per finished item):
+
+- 2026-10-06: branch created from main at `0ab1da2`; matplotlib added as a dependency (approved in the extension, for static PNG figures in `docs/figures/`).
+
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
 Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to branch `provisional/step6-step8` on 2026-09-23 from main at `bd87054`, reviewed in PR #1, approved by Aakrisht, and merged into main the same day (merge commit `0d2248c`). The branch was then deleted. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
