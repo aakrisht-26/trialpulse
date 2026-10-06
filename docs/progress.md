@@ -462,6 +462,58 @@ Then open `docs/data_audit.md`.
 
 **Guidance added for Step 7:** sponsor renames without a new version are treated as aliases of one sponsor (item 5 of "Guidance for later steps").
 
+## Step 4: Cohort, outcomes and landmarks
+
+Date: 2026-09-30 to 2026-10-06. Status: **built, waiting for review**.
+
+### What was built
+
+- **ADRs 0013 and 0014**, written first as instructed, accepted by Aakrisht on 2026-10-05 and added to the CLAUDE.md Amendments:
+  - ADR 0013: the population is decided at each landmark, from the version in effect then.
+  - ADR 0014: UNKNOWN is derived from the registry's rule on versioned fields. The dataset stores the registry's computed UNKNOWN over the latest version's submitted status, which it keeps in `last_known_status`.
+- **A change back into Step 3** (approved): `last_known_status` in the canonical contract (API v2 `statusModule.lastKnownStatus`), the warehouse (schema version 2) and `live.study_versions` (Alembic revision 0002). pyarrow (approved) carries text batches and version chunks to the workers, and the version stage is read once instead of once per chunk.
+- `src/trialpulse/cohort/`:
+  - `rules.py`: the constants from `config/project.yaml`, the submitted status, and the lapse rule, each in SQL and as a Python twin;
+  - `outcomes.py`: the state sequence per trial, and one outcome per trial (the first terminal version, reversals, censoring under the UNKNOWN rule or at the cutoff);
+  - `landmarks.py`: candidates at t0 + 6k months, the state at each landmark (an as-of join), the population and at-risk rules, and the reason every rejected candidate failed;
+  - `person_period.py`: up to four 6-month intervals per landmark, and `training_rows`, which applies administrative censoring at a walk-forward origin with a filter and a recode;
+  - `audit.py`, `build.py`: `uv run python -m trialpulse.cohort.build` writes `data/cohort/{landmarks,person_period,outcomes}.parquet`, the sanity table, and part 2 of `docs/data_audit.md`.
+- `src/trialpulse/reports.py`: each audit part regenerates only its own section of `docs/data_audit.md`.
+- `config/project.yaml`: `unknown_rule` (the four lapsing statuses, 24 months), validated in `config.py`.
+- Tests: `tests/cohort/` (33 tests), plus updates in `tests/warehouse/` and `tests/test_config.py`.
+- The `slow` marker: a default local run skips 6 slow tests (the worker-pool rebuild, the Streamlit app runs, the real-data sample check) and takes about half a minute; CI runs everything. The warehouse tests share one synthetic warehouse per session.
+
+### Acceptance criteria
+
+| Criterion | Result |
+| --- | --- |
+| Mini-history tests: withdrawn at month 3, terminated at month 20, completed at month 8, UNKNOWN at month 30, open at cutoff, a reversal, registration after start, missing dates | **Met.** `tests/cohort/test_cohort.py`: `test_withdrawn_at_month_3`, `test_terminated_at_month_20`, `test_completed_at_month_8`, `test_unknown_at_month_30_is_censored_at_its_verification`, `test_open_at_the_cutoff`, `test_a_reversal_is_excluded_and_counted`, `test_registration_after_start_counts_from_registration`, `test_missing_dates` (no completion date, no verification date, no first-post date) |
+| Added by Aakrisht: unknown by the derived rule with no UNKNOWN version; study type changing between versions; a status reversal | **Met.** `test_unknown_by_the_derived_rule_without_an_unknown_version`, `test_study_type_is_decided_at_each_landmark`, `test_a_reversal_is_excluded_and_counted` (two forms, one reopened on the same day) |
+| Aalen-Johansen sanity table printed and saved, by sponsor class (ADR 0006) | **Met in my shell.** Printed by the build, saved in `docs/data_audit.md` part 2 and `data/cohort/aj_sanity_by_sponsor_class.csv`. Early-stop CIF from L0 (landmarks before 2018-01-01, Section 10): 2.0% at 12 months and 5.0% at 24 months overall; INDUSTRY 3.5% and 7.0%; the other classes 0.8% to 1.5% and 2.7% to 4.2% (the UNKNOWN sponsor class, 66 trials, has no early stop in 24 months) |
+| The landmark output satisfies the Step 8 input contract exactly | **Met.** `data/cohort/landmarks.parquet` has trial_id, landmark_index, landmark_date, event, event_date and `stratum` (M0's feature), and nothing else; `test_the_landmarks_file_is_the_step_8_input_contract` loads it with the harness's own `load_landmark_rows`. M0 ran on it (below) |
+| The person-period table feeds the discrete-time models without reshaping | **Met.** One row per (trial, landmark, interval) with `interval` (j), `outcome` (0 continue, 1 stop, 2 complete) and the landmark's features; `training_rows(rows, origin)` gives an origin's training set by filtering and recoding only (`tests/cohort/test_person_period.py`) |
+| M0 through the Step 8 harness on the development origins (closes Step 8's last criterion) | **Met in my shell.** `uv run python -m trialpulse.eval.walkforward --model m0 --origins dev`, 1,000 resamples, 12 minutes, 0 invalid resamples, no unlock (results below) |
+
+### Results
+
+- **Cohort** (`uv run python -m trialpulse.cohort.build`, about 18 seconds; a second build is identical): 330,121 trials with at least one landmark row; 1,448,969 landmark rows (328,421 at L0, falling to 99,965 at L6); 4,255,227 person-period rows; 604,583 trial outcomes.
+- **Funnel:** 604,583 trials in the warehouse; 556,296 first posted from 2008; 422,927 of them interventional in some version; 3,065 excluded for a reversal. Of the 419,862 left, 89,741 have no landmark row: 51,697 were already terminal when first posted (registered after they ended), 35,938 are censored at registration under the UNKNOWN rule (never verified again), and 2,106 are not interventional, or lapsed, at every landmark.
+- **Outcomes of cohort trials:** 34,255 early stops (22,446 terminated, 11,809 withdrawn), 176,659 completed, 28,013 censored under the UNKNOWN rule, 91,194 open at the cutoff.
+- **UNKNOWN:** the registry's label is fully contained in the derived rule (55,942 trials with both, 8,098 by the rule only, 0 by the label only). 43,348 trials had a lapse that a later version resolved; censoring at the first lapse would have discarded their outcomes.
+- **Point-in-time population:** 16,525 landmark candidates were rejected because the trial was not interventional on that date (ADR 0013); 31,502 because the state was lapsed on that date (ADR 0014); 20 because no version was public yet.
+- **M0 on the development origins** (sponsor class at L as the only feature; pooled over landmark indices; 95% cluster-bootstrap intervals):
+
+  | Origin | Evaluation rows (trials) | Horizon | AUC | Brier | Lift at 10% | Calibration slope |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 2016-01-01 | 76,734 (46,327) | 12 months | 0.543 (0.532 to 0.557) | 0.0325 | 1.41 | 0.88 |
+  | 2016-01-01 | 76,734 (46,327) | 24 months | 0.534 (0.525 to 0.544) | 0.0597 | 1.25 | 1.22 |
+  | 2017-01-01 | 82,627 (49,416) | 12 months | 0.551 (0.541 to 0.563) | 0.0310 | 1.58 | 1.09 |
+  | 2017-01-01 | 82,627 (49,416) | 24 months | 0.534 (0.526 to 0.542) | 0.0590 | 1.25 | 1.32 |
+
+  This is the base-rate floor the later models must beat: sponsor class alone carries a little signal. The full table for Step 9 goes in `docs/results_dev.md` then; the JSON is `data/results/walkforward/m0_dev.json`.
+- **Warehouse rebuild** (new schema): build F on an idle machine gave the same row counts and checksums as build E for all six tables, in 485 seconds (8.1 minutes; about 18 minutes before the pyarrow path). `texts` and `trials` are also identical to the Step 3 builds.
+- **Source parity, repeated on 2026-10-05** with `last_known_status` in the contract: 191 of 199 unchanged trials identical in every column; the 8 differences all have a known registry-side cause (5 UNKNOWN set without a version, with API v2's `lastKnownStatus` equal to the status the dataset holds; 3 sponsor renames). The implemented UNKNOWN rule agrees with the live registry for all 199.
+
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
 Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to branch `provisional/step6-step8` on 2026-09-23 from main at `bd87054`, reviewed in PR #1, approved by Aakrisht, and merged into main the same day (merge commit `0d2248c`). The branch was then deleted. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.

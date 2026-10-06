@@ -97,3 +97,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "How do you know your warehouse build is reproducible?"
 
 **Short answer.** Every table is deterministic by construction (sorted inputs, hash-keyed texts, no timestamps in tables), and the build computes each table's row count and an order-independent checksum, then compares them with the previous build. Building twice from the same pinned revision gives identical checksums, independent of the number of worker processes, which a test also checks on a synthetic dataset.
+
+## Step 4: Cohort, outcomes and landmarks
+
+**What was built.** The cohort, point-in-time, from the canonical version history: each trial's outcome (the first terminal version decides early stop or completion; reversals are excluded), landmark rows every 6 months from registration (kept only if the trial is interventional, open and uncensored on that date, judged from the version in effect then), the evaluation label per landmark in the exact format the evaluation harness reads, and person-period rows (four 6-month intervals per landmark) for the discrete-time models. 330,121 trials, 1,448,969 landmark rows and 4,255,227 person-period rows, built in about 18 seconds from the warehouse. M0 then ran end to end through the harness on the development origins (AUC at 12 months 0.543 and 0.551).
+
+**Key decision and why.** Derive UNKNOWN from the registry's own rule on versioned fields instead of trusting the registry's label (ADR 0014). The dataset turned out to store the registry's computed UNKNOWN over the latest version's submitted status: all 84,976 UNKNOWN versions are latest versions, 37,495 trials show it on version 0, and the rule holds at the version's own post date for only 172 of them. Used as a label, it would have removed tens of thousands of trials from the risk set from registration on, and it goes stale, because the registry sets it without posting a version. The derived rule reproduces all 84,976 labels, agrees with the live registry on every sampled trial, and runs the same way offline and live.
+
+**Rejected alternative and why not.** Censoring a trial at its first lapse, even when a later version resolves it. 43,348 trials lapse and then report again (often a late completion). Censoring them at the lapse would throw away outcomes that were actually observed and bias the cohort against sponsors who report late.
+
+**Likely interview question.** "How do you know your labels do not leak the future into past prediction dates?"
+
+**Short answer.** Every landmark is judged only from the version in effect on that date: its study type, its submitted status, and whether the registry's 2-year verification rule had lapsed by then. The label (what happened later) is the only thing taken from the future, and it lives in two columns the models never see as features. Hand-built mini histories test each rule, including a study type that changes after registration, a status reversal, and a trial that becomes unknown without the registry ever saying so.
