@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from trialpulse.reports import replace_section
+from trialpulse.reports import markdown_table, replace_section
 
 FAMILY = "# Data audit, part "
 ONE = "# Data audit, part 1: warehouse\n\nFirst.\n"
@@ -39,3 +39,13 @@ def test_a_part_outside_the_family_is_refused(tmp_path: Path) -> None:
         replace_section(tmp_path / "a.md", "# Other", "# Other\n", FAMILY)
     with pytest.raises(ValueError, match="must start with"):
         replace_section(tmp_path / "a.md", FAMILY + "1", "Wrong start\n", FAMILY)
+
+
+def test_markdown_table_has_a_header_a_rule_and_one_line_per_row() -> None:
+    assert markdown_table(["Year", "Trials"], [[2016, "1,200"], [2017, "n/a"]]) == [
+        "| Year | Trials |",
+        "| --- | --- |",
+        "| 2016 | 1,200 |",
+        "| 2017 | n/a |",
+    ]
+    assert markdown_table(["Only"], []) == ["| Only |", "| --- |"]
