@@ -13,7 +13,7 @@ The registry shows UNKNOWN for "a study whose last known status was recruiting, 
 - 37,495 trials have UNKNOWN on version 0, which no sponsor could have registered.
 - At the version's own post date, the rule holds for only 172 of the 84,976; at the data cutoff it holds for all of them (below).
 
-So the dataset replaced the latest version's submitted status with the status the registry computed when the record was fetched, and kept the submitted status in `last_known_status`. Used as Section 6 defines it ("censored at the status verified date recorded in the first version showing UNKNOWN"), that label would remove 37,495 trials from the risk set from registration on, and it goes stale: records the registry marks UNKNOWN later are not fetched again, because no version is posted.
+So the dataset replaced the latest version's submitted status with the status the registry computed when the record was fetched, and kept the submitted status in `last_known_status`. Used as Section 6 defines it ("censored at the status verified date recorded in the first version showing UNKNOWN"), that label says nothing true about any date before the lapse (the 37,495 trials with UNKNOWN on version 0 were open when they registered), it cannot say when a trial was lapsed in between, and it goes stale: records the registry marks UNKNOWN later are not fetched again, because no version is posted.
 
 ## Decision
 
@@ -37,7 +37,7 @@ So the dataset replaced the latest version's submitted status with the status th
 
 ## Alternatives
 
-- **Keep Section 6's definition** (the first version showing UNKNOWN): wrong at the start of a trial's life (37,495 trials), stale at the end, and unavailable live, where the daily delta pull never sees a status the registry sets without a version.
+- **Keep Section 6's definition** (the first version showing UNKNOWN): the label replaces the submitted status of the version it sits on (37,495 trials show it on version 0), it is stale at the end, and it is unavailable live, where the daily delta pull never sees a status the registry sets without a version.
 - **Censor at the first lapse, even when a later version resolves it**: discards observed outcomes of trials that report late, which are common.
 - **Treat a lapsed state as still open at landmarks**: the public record said UNKNOWN on that date, so the landmark would describe a trial nobody could see as open.
 
@@ -45,4 +45,6 @@ So the dataset replaced the latest version's submitted status with the status th
 
 - The Step 3 contract, warehouse and live schema gain `last_known_status` (warehouse schema version 2; Alembic revision 0002).
 - The UNKNOWN sensitivity analysis (Step 11, "treats UNKNOWN as an early stop") uses the derived rule: `data/cohort/outcomes.parquet` records each trial's lapse date and censoring date.
-- A trial censored under this rule loses its landmarks from its last verification on, as Section 6's "open and uncensored at L" requires.
+- A trial censored under this rule loses its landmarks from its last verification on, as Section 6's "open and uncensored at L" requires. For 35,938 eligible trials (8.6% of the 419,862 in the window, interventional in some version and without a reversal) that verification is not after registration, so they have no landmark row at all. The old definition gave them none either: of the 24,322 eligible trials with UNKNOWN on version 0, 1 has a landmark row. The stored verification date is the first day of its month, so a trial registered mid-month and verified that month is censored before its own registration.
+- The Step 11 sensitivity analysis therefore cannot be done by relabeling `landmarks.parquet`: the trials above, and the landmarks between a trial's last verification and its lapse, have no rows. It needs a cohort variant built for it.
+- A version shown UNKNOWN without `last_known_status` (none in the pinned dataset) is treated as lapsed from its post date; after a terminal version it counts as a reversal, since the registry shows UNKNOWN only over an open status. (Added after the Step 4 review, 2026-10-06.)

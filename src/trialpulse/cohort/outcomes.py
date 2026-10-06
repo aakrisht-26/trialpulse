@@ -14,15 +14,21 @@ same DuckDB connection:
     the last state when that state is lapsed at the data cutoff (`censor_reason` unknown),
     else the data cutoff (`censor_reason` cutoff);
   - `reversal`: an open status after the first terminal version (such trials are excluded
-    from training and evaluation, Section 6);
+    from training and evaluation, Section 6). A bare UNKNOWN after a terminal version counts
+    too: the registry shows UNKNOWN only over an open status;
   - `lapse_date`: the day the last state lapsed, for the UNKNOWN sensitivity analysis.
 
 Versions posted after the data cutoff are ignored, so the result depends only on the pinned
 revision.
+
+States follow post dates and the first terminal version follows version numbers. The two
+orders agree only while a trial's post dates never decrease with its version number, so
+`check_version_order` refuses a build on input where they do (the pinned dataset has none).
 """
 
 import duckdb
 
+from trialpulse.cli import RefusedError
 from trialpulse.cohort.rules import (
     CohortRules,
     completion_ref_sql,
@@ -32,6 +38,22 @@ from trialpulse.cohort.rules import (
     submitted_status_sql,
     verified_sql,
 )
+
+
+def check_version_order(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
+    """Refuse versions whose post date is earlier than a lower-numbered version's."""
+    row = con.execute(
+        f"""SELECT count(*), count(DISTINCT nct_id) FROM (
+          SELECT nct_id, effective_date < max(effective_date) OVER (
+            PARTITION BY nct_id ORDER BY nct_version
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS earlier
+          FROM versions WHERE effective_date <= {sql_date(rules.cutoff)}) WHERE earlier"""
+    ).fetchone()
+    if row and row[0]:
+        raise RefusedError(
+            f"{row[0]} versions of {row[1]} trials are posted earlier than a lower-numbered "
+            "version; the cohort rules assume post dates never decrease with the version number"
+        )
 
 
 def build_states(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
@@ -83,7 +105,9 @@ def build_outcomes(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
           FROM trial t JOIN v ON v.nct_id = t.nct_id AND v.nct_version = t.first_terminal_version
         ),
         rev AS (
-          SELECT t.nct_id, bool_or(v.status IN {sql_list(rules.open_statuses)}) AS reversal
+          SELECT t.nct_id,
+            bool_or(v.status IN {sql_list((*rules.open_statuses, *rules.unknown_labels))})
+              AS reversal
           FROM trial t JOIN v ON v.nct_id = t.nct_id AND v.nct_version > t.first_terminal_version
           GROUP BY t.nct_id
         ),

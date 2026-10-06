@@ -116,7 +116,11 @@ def render_part_2(
         ("**Cohort: trials with at least one landmark row**", f"**{_n(cohort[0])}**"),
         ("Eligible but no landmark row", _n(none[0])),
         ("... already terminal (completed, terminated, withdrawn) when first posted", _n(none[1])),
-        ("... censored on or before t0 under the UNKNOWN rule (never re-verified)", _n(none[2])),
+        (
+            "... censored on or before t0 under the UNKNOWN rule (last status verification "
+            "not after registration)",
+            _n(none[2]),
+        ),
         (
             "... other (not interventional, or lapsed, at every landmark)",
             _n(none[0] - none[1] - none[2]),
@@ -167,11 +171,12 @@ def render_part_2(
     )
     resolved = _one(
         con,
-        """SELECT count(DISTINCT s.nct_id) FROM cohort_states s
-        JOIN cohort_outcomes o ON o.trial_id = s.nct_id
+        """SELECT count(DISTINCT s.nct_id),
+          count(DISTINCT s.nct_id) FILTER (WHERE o.censor_reason = 'unknown')
+        FROM cohort_states s JOIN cohort_outcomes o ON o.trial_id = s.nct_id
         WHERE s.next_effective IS NOT NULL AND s.lapse_from < s.next_effective
           AND o.in_window AND o.ever_in_population AND NOT o.reversal""",
-    )[0]
+    )
     pp = con.execute(
         """SELECT interval, count(*), count(*) FILTER (WHERE outcome = 0),
           count(*) FILTER (WHERE outcome = 1), count(*) FILTER (WHERE outcome = 2)
@@ -251,8 +256,11 @@ def render_part_2(
         f"- censored by the derived rule (last state lapsed at the cutoff): {_n(u[1])};",
         f"- both: {_n(u[2])}; the rule only: {_n(u[3])} (records the registry marked after the "
         f"dataset last fetched them, or not yet marked); the label only: {_n(u[4])};",
-        f"- trials with a lapse that a later version resolved (not censored; ADR 0014): "
-        f"{_n(resolved)}.",
+        f"- trials with a lapsed state that a later version followed: {_n(resolved[0])}. "
+        f"{_n(resolved[1])} of them are censored under the rule anyway, because their last "
+        f"state is lapsed too; the other {_n(resolved[0] - resolved[1])} have an outcome or "
+        "are open at the cutoff, which censoring at the first lapse would have discarded "
+        "(ADR 0014).",
         "",
         "## Person-period rows",
         "",

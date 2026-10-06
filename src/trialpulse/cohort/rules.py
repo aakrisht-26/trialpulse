@@ -11,6 +11,9 @@
   `verification_lapse_months` after its status-verified month is before t. A missing
   status-verified date falls back to the version's post date. The first such day is the
   state's `lapse_from`.
+- **A bare UNKNOWN.** A version shown UNKNOWN without `last_known_status` (none exists in the
+  pinned dataset; a live record could carry one) has no submitted status to judge. The
+  registry itself says the trial is lapsed, so the state is lapsed from the day it is posted.
 
 Every rule has a SQL form (used by the build over millions of rows) and a Python twin (used
 by tests, and later by live scoring); a test checks that they agree.
@@ -111,10 +114,12 @@ def verified_sql(alias: str = "v") -> str:
 def lapse_from_sql(
     rules: CohortRules, status: str, effective: str, completion: str, verified: str
 ) -> str:
-    """The first day a state is lapsed, or NULL for a status the rule does not apply to."""
+    """The first day a state is lapsed, or NULL for a status the rule does not apply to. A
+    status that is still the registry's UNKNOWN label is lapsed from the state's first day."""
     verification_ends = f"last_day({verified} + INTERVAL {rules.lapse_months} MONTH)"
     return (
-        f"(CASE WHEN {status} IN {sql_list(rules.lapse_statuses)} THEN greatest({effective}, "
+        f"(CASE WHEN {status} IN {sql_list(rules.unknown_labels)} THEN {effective} "
+        f"WHEN {status} IN {sql_list(rules.lapse_statuses)} THEN greatest({effective}, "
         f"coalesce({completion} + 1, {effective}), {verification_ends} + 1) END)"
     )
 
@@ -158,6 +163,8 @@ def lapse_from(
     completion_ref: dt.date | None,
     verified: dt.date | None,
 ) -> dt.date | None:
+    if status in rules.unknown_labels:
+        return effective
     if status not in rules.lapse_statuses:
         return None
     verification_ends = last_day(add_months(verified or effective, rules.lapse_months))

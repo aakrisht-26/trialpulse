@@ -9,12 +9,23 @@ does. Per interval the outcome is 0 (continue), 1 (early stop) or 2 (completion)
 - an event inside the interval sets the outcome and ends the sequence;
 - a trial censored at c keeps the interval if c is on or after the interval's end (it was
   followed through the whole interval, the same convention as Aalen-Johansen's risk set);
-  an interval censored before its end is dropped and ends the sequence.
+  an interval censored before its end is dropped and ends the sequence;
+- **an interval that ends after the end of observation is dropped for every trial, whatever
+  happened in it.** Observation ends for all trials on the data cutoff (and, for training
+  at a walk-forward origin T, on T). Keeping such an interval only when it holds an event
+  would leave it with events and no continuations, and bias every hazard upward: on the
+  2016 development origin that inflated the no-covariate CIF at 12 months from 0.0319 to
+  0.0332, against Aalen-Johansen's 0.0318.
 
 The table feeds the models without reshaping: the features are the landmark's (frozen at
 L) plus `interval`; the target is `outcome`. For walk-forward training at origin T,
 `training_rows` applies Section 6's administrative censoring at T to these rows with a
-filter and a recode, and nothing else.
+filter and a recode.
+
+What `training_rows` does not do: it does not re-derive the cohort as it would have been
+built at T. The labels are the final ones (reversals excluded and the UNKNOWN censoring of
+ADR 0014 decided at the data cutoff), truncated at T, exactly as the harness's
+`training_rows` treats landmark rows. docs/progress.md lists this as an open question.
 """
 
 from collections.abc import Mapping
@@ -46,17 +57,20 @@ Columns = dict[str, npt.NDArray[Any]]
 
 def expand(landmarks: Mapping[str, npt.NDArray[Any]], rules: CohortRules) -> Columns:
     """Person-period columns from landmark columns (trial_id, landmark_index,
-    landmark_date, event, event_date, stratum), ordered by landmark then interval."""
+    landmark_date, event, event_date, stratum), ordered by landmark then interval. Only
+    intervals that end on or before the data cutoff exist."""
     landmark_date = np.asarray(landmarks["landmark_date"], dtype="datetime64[D]")
     event = np.asarray(landmarks["event"], dtype=np.int64)
     event_date = np.asarray(landmarks["event_date"], dtype="datetime64[D]")
+    cutoff = np.datetime64(rules.cutoff, "D")
     row = np.arange(len(event))
     parts: list[Columns] = []
     for j in range(1, rules.n_intervals + 1):
         start = add_months(landmark_date, rules.interval_months * (j - 1))
         end = add_months(landmark_date, rules.interval_months * j)
         has_event = event != EVENT_CENSORED
-        keep = np.where(has_event, event_date > start, event_date >= end)
+        followed = np.where(has_event, event_date > start, event_date >= end)
+        keep = followed & (end <= cutoff)
         outcome = np.where(has_event & (event_date <= end), event, OUTCOME_CONTINUE)
         parts.append(
             {
@@ -84,17 +98,18 @@ def expand(landmarks: Mapping[str, npt.NDArray[Any]], rules: CohortRules) -> Col
 
 
 def training_rows(rows: Mapping[str, npt.NDArray[Any]], origin: np.datetime64) -> Columns:
-    """The rows known at origin T, for training: landmarks before T, with every outcome
+    """The rows for training at origin T: landmarks before T, with every outcome
     administratively censored at T (Section 6), as the harness's training_rows does for
-    landmark rows. An event dated T or later becomes unknown; an interval that ends after T
-    without a known event was censored before its end and is dropped."""
+    landmark rows. Only intervals that end on or before T are kept, whatever their outcome,
+    and an event dated T itself is not yet known (its interval, ending on T, is a
+    continuation)."""
     origin = np.datetime64(origin, "D")
     landmark_date = np.asarray(rows["landmark_date"], dtype="datetime64[D]")
     outcome = np.asarray(rows["outcome"], dtype=np.int64)
     event_date = np.asarray(rows["event_date"], dtype="datetime64[D]")
     interval_end = np.asarray(rows["interval_end"], dtype="datetime64[D]")
+    keep = (landmark_date < origin) & (interval_end <= origin)
     known_event = (outcome != OUTCOME_CONTINUE) & (event_date < origin)
-    keep = (landmark_date < origin) & (known_event | (interval_end <= origin))
     out = {k: np.asarray(v)[keep] for k, v in rows.items()}
     out["outcome"] = np.where(known_event, outcome, OUTCOME_CONTINUE)[keep].astype(np.int64)
     return out

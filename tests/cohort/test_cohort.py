@@ -270,3 +270,44 @@ def test_every_landmark_row_is_open_before_its_event(con: duckdb.DuckDBPyConnect
     ).fetchone() or (0, 0)
     assert kept == con.execute("SELECT count(*) FROM cohort_landmarks").fetchone()[0]  # type: ignore[index]
     assert candidates == 7 * 14  # 14 trials in the window without a reversal
+
+
+def test_a_bare_unknown_is_lapsed_from_its_post_date(rules: CohortRules) -> None:
+    """UNKNOWN without last_known_status: none in the pinned dataset, possible in a live row."""
+    con = cohort(
+        [
+            version("NCT00000101", 0, month(0), "RECRUITING"),
+            version("NCT00000101", 1, month(5), "UNKNOWN"),
+            # After a terminal version it is a reversal: the registry shows UNKNOWN only over
+            # an open status.
+            version("NCT00000102", 0, month(0), "RECRUITING"),
+            version("NCT00000102", 1, month(8), "COMPLETED"),
+            version("NCT00000102", 2, month(40), "UNKNOWN"),
+        ],
+        rules,
+    )
+    o = outcome(con, "NCT00000101")
+    assert (o["event"], o["event_date"], o["censor_reason"]) == (0, month(5), "unknown")
+    assert o["lapse_date"] == month(5)
+    assert landmarks(con, "NCT00000101") == [(0, T0, 0, month(5), "INDUSTRY")]
+    assert outcome(con, "NCT00000102")["reversal"] is True
+    assert landmarks(con, "NCT00000102") == []
+
+
+def test_versions_posted_out_of_order_are_refused(rules: CohortRules) -> None:
+    """Events follow version numbers and states follow post dates; they must agree."""
+    from trialpulse.cli import RefusedError
+
+    rows = [
+        version("NCT00000201", 0, month(0), "RECRUITING"),
+        version("NCT00000201", 1, month(20), "COMPLETED"),
+        version("NCT00000201", 2, month(8), "TERMINATED"),  # posted before version 1
+    ]
+    with pytest.raises(RefusedError, match="posted earlier than a lower-numbered version"):
+        cohort(rows, rules)
+    # Versions sharing a post date are in order.
+    same_day = [
+        version("NCT00000202", 0, month(0), "RECRUITING"),
+        version("NCT00000202", 1, month(0), "RECRUITING"),
+    ]
+    assert len(landmarks(cohort(same_day, rules), "NCT00000202")) == 7

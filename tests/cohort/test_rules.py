@@ -43,8 +43,12 @@ def test_completion_counts_at_the_end_of_its_period(rules: CohortRules) -> None:
 
 
 def test_only_the_rule_statuses_lapse(rules: CohortRules) -> None:
-    for status in ("SUSPENDED", "COMPLETED", "TERMINATED", "WITHDRAWN", "UNKNOWN"):
+    for status in ("SUSPENDED", "COMPLETED", "TERMINATED", "WITHDRAWN", "WITHHELD"):
         assert lapse_from(rules, status, D(2010, 1, 1), D(2010, 6, 1), D(2010, 1, 1)) is None
+    # A bare UNKNOWN (no last_known_status) is the registry saying the trial is lapsed.
+    assert lapse_from(rules, "UNKNOWN", D(2010, 1, 1), D(2030, 1, 1), D(2010, 1, 1)) == D(
+        2010, 1, 1
+    )
     for status in rules.lapse_statuses:
         assert lapse_from(rules, status, D(2010, 1, 1), D(2010, 6, 1), D(2010, 1, 1)) == D(
             2012, 2, 1
@@ -74,7 +78,7 @@ def test_add_months_clamps_like_the_harness() -> None:
 
 
 def test_sql_forms_agree_with_their_python_twins(rules: CohortRules) -> None:
-    statuses = ["RECRUITING", "ACTIVE_NOT_RECRUITING", "SUSPENDED", "COMPLETED"]
+    statuses = ["RECRUITING", "ACTIVE_NOT_RECRUITING", "SUSPENDED", "COMPLETED", "UNKNOWN"]
     posted = [D(2016, 2, 29), D(2020, 7, 15)]
     completions = [
         (None, None, None, None),

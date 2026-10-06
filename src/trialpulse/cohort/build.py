@@ -33,7 +33,7 @@ import pandas as pd
 from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.audit import PART_2_HEADING, aj_sanity_table, render_part_2
 from trialpulse.cohort.landmarks import LANDMARK_COLUMNS, build_landmarks
-from trialpulse.cohort.outcomes import build_outcomes, build_states
+from trialpulse.cohort.outcomes import build_outcomes, build_states, check_version_order
 from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import load_project_config
@@ -67,6 +67,7 @@ OUTCOME_COLUMNS: tuple[str, ...] = (
 
 def build_cohort(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
     """From a `versions` table or view to the cohort_* tables in `con`."""
+    check_version_order(con, rules)
     build_states(con, rules)
     build_outcomes(con, rules)
     build_landmarks(con, rules)
