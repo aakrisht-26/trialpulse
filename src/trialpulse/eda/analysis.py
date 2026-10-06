@@ -1,18 +1,23 @@
 """The numbers behind docs/eda.md (CLAUDE.md Step 5).
 
-Every function returns plain rows (lists of dicts) or arrays; `report.py` turns them into
-tables and `figures.py` into charts.
+Every function returns plain rows (lists of dicts) or arrays; `document.py` turns them into
+tables and `charts.py` into figures.
 
 Two rules decide what may inform modeling (CLAUDE.md Section 10):
 
-- **Modeling-relevant analysis uses landmarks before 2018-01-01 only.** Every function that
-  takes `before` restricts its landmarks to dates before it. Outcomes are still followed to
-  the data cutoff: the rule limits when a prediction is made, not how long it is followed.
+- **Modeling-relevant analysis reads nothing dated on or after 2018-01-01.** Every function
+  that takes `before` keeps only landmarks before that date, and censors each outcome
+  there: an event on or after it counts as "not observed yet", exactly as for a model
+  trained at the 2018 origin (Section 6). The locked test years stay unseen.
 - **Anything later is descriptive only.** `covid_period_monthly` is descriptive by purpose,
   and `registration_by_year` and `post_dates_by_year` flag each later year.
 
 Phase is not versioned (ADR 0006), so the phase breakdown uses each trial's current-record
 phase and is descriptive only: a phase edited after the outcome could leak it.
+
+Dates in the registry are given to the month through 2016 and mostly to the day from 2017.
+Comparisons of dates here are made by calendar month, so that a change of precision is not
+read as a change of behavior.
 
 Nothing here reads a name or a free text: counts, dates, statuses and classes only.
 """
@@ -28,7 +33,6 @@ import numpy as np
 import numpy.typing as npt
 
 from trialpulse.cohort.audit import DAYS_PER_MONTH, MODELING_EDA_BEFORE
-from trialpulse.cohort.rules import period_end_sql
 from trialpulse.dates import days_between
 from trialpulse.eval import EVENT_CENSORED, EVENT_COMPLETE, EVENT_STOP
 from trialpulse.eval.ipcw import kaplan_meier
@@ -36,12 +40,16 @@ from trialpulse.models.aalen_johansen import aalen_johansen
 
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
+BoolArray = npt.NDArray[np.bool_]
 Rows = list[dict[str, Any]]
 
-# Event kinds of the four-state view: the early stop split by its terminal status.
+# Event kinds of the detailed views: the early stop split by its terminal status, and
+# censoring under the UNKNOWN rule (ADR 0014) told apart from censoring at the end of the
+# observation window.
 KIND_TERMINATED = 1
 KIND_COMPLETED = 2
 KIND_WITHDRAWN = 3
+KIND_LAPSED = 4
 
 # Current-record phases (API v2 names) to phase groups.
 EARLY_PHASE = "Early (Early Phase 1, Phase 1)"
@@ -68,10 +76,11 @@ MAIN_CLASSES: tuple[str, ...] = ("INDUSTRY", "OTHER", "NIH")
 OTHER_CLASSES = "Remaining classes"
 SPONSOR_ORDER: tuple[str, ...] = (*MAIN_CLASSES, OTHER_CLASSES)
 
-# Registration timing: where the first version's start date falls against the first post.
-PROSPECTIVE = "Registered on or before the start"
-LATE_WITHIN_YEAR = "Registered up to 1 year after the start"
-LATE_OVER_YEAR = "Registered more than 1 year after the start"
+# Registration timing: the month of the first version's start date against the month of
+# the first post.
+PROSPECTIVE = "Registered in or before the start month"
+LATE_WITHIN_YEAR = "Registered up to 1 year after the start month"
+LATE_OVER_YEAR = "Registered more than 1 year after the start month"
 NO_START_DATE = "No start date"
 TIMING_ORDER: tuple[str, ...] = (PROSPECTIVE, LATE_WITHIN_YEAR, LATE_OVER_YEAR, NO_START_DATE)
 
@@ -103,6 +112,30 @@ def phase_group(phases: Sequence[str]) -> str:
     return PHASE_GROUPS.get(frozenset(phases), OTHER_PHASE)
 
 
+def month_end_sql(date: str, precision: str) -> str:
+    """The last day of the calendar month a date falls in (of its year, for a date given
+    only to the year). A date given to the day and one given to the month are then compared
+    the same way."""
+    return (
+        f"(CASE {precision} WHEN 'year' THEN make_date(year({date}), 12, 31) "
+        f"ELSE last_day({date}) END)"
+    )
+
+
+def _day(day: dt.date) -> str:
+    return f"DATE '{day.isoformat()}'"
+
+
+def _censored(alias: str, before: dt.date) -> tuple[str, str]:
+    """SQL for a landmark row's outcome as known on `before`: (event code, event date). An
+    event on or after that date is not observed yet, so the row is censored there."""
+    event = (
+        f"(CASE WHEN {alias}.event_date >= {_day(before)} THEN {EVENT_CENSORED} "
+        f"ELSE {alias}.event END)"
+    )
+    return event, f"least({alias}.event_date, {_day(before)})"
+
+
 def _column(data: dict[str, Any], name: str, fill: Any) -> npt.NDArray[Any]:
     """A fetched column as a plain array: DuckDB returns a masked array where a column has
     NULLs, and `fill` takes their place."""
@@ -116,39 +149,49 @@ def _days(data: dict[str, Any], start: str, end: str) -> FloatArray:
     )
 
 
+def _records(cursor: duckdb.DuckDBPyConnection) -> Rows:
+    names = [d[0] for d in cursor.description or []]
+    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+
 # Cumulative incidence ---------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Registrations:
-    """L0 landmark rows: one per trial open at registration."""
+    """L0 landmark rows: one per trial open at registration, with the outcome as known on
+    the `before` date."""
 
     time: FloatArray  # days from L0 to the event or censoring
     event: IntArray  # 0 censored, 1 early stop, 2 completion
     kind: IntArray  # 0 censored, 1 terminated, 2 completed, 3 withdrawn
+    lapsed: BoolArray  # censored under the UNKNOWN rule (ADR 0014), not by the window's end
     sponsor_class: npt.NDArray[Any]  # the lead sponsor class at registration
     sponsor_group: npt.NDArray[Any]  # the three large classes, and the rest pooled
     year: IntArray  # registration year
-    timing: npt.NDArray[Any]  # registration against the first version's start date
+    timing: npt.NDArray[Any]  # registration month against the first version's start month
     phase: npt.NDArray[Any]  # current-record phase group: descriptive only
 
 
 def registrations(
     con: duckdb.DuckDBPyConnection, before: dt.date = MODELING_EDA_BEFORE
 ) -> Registrations:
-    start_end = period_end_sql("f.start_date", "f.start_date_precision")
+    event, event_date = _censored("l", before)
+    start_month_end = month_end_sql("f.start_date", "f.start_date_precision")
     data = con.execute(
         f"""WITH first_version AS (
           SELECT nct_id, start_date, start_date_precision FROM wh.versions
           QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version) = 1
         )
-        SELECT l.landmark_date, l.event, l.event_date, l.stratum,
+        SELECT l.landmark_date, {event} AS event, {event_date} AS event_date, l.stratum,
           year(l.landmark_date) AS y,
-          CASE WHEN l.event = {EVENT_STOP} AND o.terminal_status = 'WITHDRAWN'
-            THEN {KIND_WITHDRAWN} ELSE l.event END AS kind,
+          CASE WHEN {event} = {EVENT_STOP} AND o.terminal_status = 'WITHDRAWN'
+            THEN {KIND_WITHDRAWN} ELSE {event} END AS kind,
+          coalesce({event} = {EVENT_CENSORED} AND o.censor_reason = 'unknown'
+            AND l.event_date < {_day(before)}, false) AS lapsed,
           CASE WHEN f.start_date IS NULL THEN 3
-            WHEN {start_end} >= l.landmark_date THEN 0
-            WHEN date_diff('day', {start_end}, l.landmark_date) <= 365 THEN 1
+            WHEN {start_month_end} >= l.landmark_date THEN 0
+            WHEN date_diff('day', {start_month_end}, l.landmark_date) <= 365 THEN 1
             ELSE 2 END AS timing,
           c.nct_id IS NOT NULL AS has_record,
           coalesce(array_to_string(list_sort(c.phases), '|'), '') AS phases
@@ -156,7 +199,7 @@ def registrations(
         JOIN outcomes o USING (trial_id)
         LEFT JOIN first_version f ON f.nct_id = l.trial_id
         LEFT JOIN current_fields c ON c.nct_id = l.trial_id
-        WHERE l.landmark_index = 0 AND l.landmark_date < DATE '{before.isoformat()}'
+        WHERE l.landmark_index = 0 AND l.landmark_date < {_day(before)}
         ORDER BY l.trial_id"""
     ).fetchnumpy()
     sponsor_class = np.asarray(data["stratum"]).astype(str)
@@ -172,6 +215,7 @@ def registrations(
         time=_days(data, "landmark_date", "event_date"),
         event=np.asarray(data["event"], dtype=np.int64),
         kind=np.asarray(data["kind"], dtype=np.int64),
+        lapsed=np.asarray(data["lapsed"], dtype=np.bool_),
         sponsor_class=sponsor_class,
         sponsor_group=np.where(np.isin(sponsor_class, MAIN_CLASSES), sponsor_class, OTHER_CLASSES),
         year=np.asarray(data["y"], dtype=np.int64),
@@ -180,10 +224,20 @@ def registrations(
     )
 
 
-def cif_at(time: FloatArray, event: IntArray, months: Sequence[int]) -> list[float]:
-    """The early-stop CIF (Aalen-Johansen, completion competing) at each horizon."""
-    curve = aalen_johansen(time, event)
+def cif_at(
+    time: FloatArray, event: IntArray, months: Sequence[int], cause: int = EVENT_STOP
+) -> list[float]:
+    """The CIF of one cause (Aalen-Johansen, every other event competing) at each horizon. A
+    horizon of m months is m times 365.25 / 12 days after the landmark."""
+    curve = aalen_johansen(time, event, cause=cause)
     return [float(curve.at(m * DAYS_PER_MONTH)) for m in months]
+
+
+def _masks(groups: npt.NDArray[Any], order: Sequence[Any]) -> list[tuple[Any, BoolArray]]:
+    """Each group in `order` that has rows, then all rows together."""
+    named = [(name, groups == name) for name in order]
+    everyone = (ALL, np.ones(len(groups), dtype=np.bool_))
+    return [(name, mask) for name, mask in [*named, everyone] if mask.any()]
 
 
 def cif_by_group(
@@ -194,12 +248,9 @@ def cif_by_group(
     months: Sequence[int],
 ) -> Rows:
     """One row per group in `order` that has rows, then all rows together: trials, early
-    stops, and the early-stop CIF at each horizon."""
+    stops observed, and the early-stop CIF at each horizon."""
     rows: Rows = []
-    masks = [(g, groups == g) for g in order] + [(ALL, np.ones(len(groups), dtype=np.bool_))]
-    for name, mask in masks:
-        if not mask.any():
-            continue
+    for name, mask in _masks(groups, order):
         row: dict[str, Any] = {
             "group": name,
             "trials": int(mask.sum()),
@@ -207,6 +258,43 @@ def cif_by_group(
         }
         for m, value in zip(months, cif_at(time[mask], event[mask], months), strict=True):
             row[f"cif_{m}m"] = value
+        rows.append(row)
+    return rows
+
+
+def stop_kinds_by_group(
+    reg: Registrations, groups: npt.NDArray[Any], order: Sequence[Any], month: int
+) -> dict[Any, dict[str, float]]:
+    """Per group: the CIF of withdrawal and of termination at one horizon. The two add up to
+    the early-stop CIF."""
+    return {
+        name: {
+            "withdrawn": cif_at(reg.time[mask], reg.kind[mask], [month], KIND_WITHDRAWN)[0],
+            "terminated": cif_at(reg.time[mask], reg.kind[mask], [month], KIND_TERMINATED)[0],
+        }
+        for name, mask in _masks(groups, order)
+    }
+
+
+def lapse_by_group(
+    reg: Registrations, groups: npt.NDArray[Any], order: Sequence[Any], months: Sequence[int]
+) -> Rows:
+    """Per group: trials censored under the UNKNOWN rule (ADR 0014: the record passed its
+    completion date and went 2 years without a status verification), and the cumulative
+    incidence of that censoring at each horizon, with early stop and completion competing.
+    The estimator of the early-stop CIF treats this censoring as uninformative; this shows
+    how much of it there is, and for whom."""
+    code = np.where(reg.lapsed, KIND_LAPSED, reg.kind)
+    rows: Rows = []
+    for name, mask in _masks(groups, order):
+        row: dict[str, Any] = {
+            "group": name,
+            "trials": int(mask.sum()),
+            "lapsed": int(reg.lapsed[mask].sum()),
+        }
+        values = cif_at(reg.time[mask], code[mask], months, KIND_LAPSED)
+        for m, value in zip(months, values, strict=True):
+            row[f"lapse_{m}m"] = value
         rows.append(row)
     return rows
 
@@ -233,9 +321,12 @@ def cif_by_landmark_index(
     con: duckdb.DuckDBPyConnection, months: Sequence[int], before: dt.date = MODELING_EDA_BEFORE
 ) -> Rows:
     """The early-stop CIF over the horizons after each landmark, by landmark index."""
+    event, event_date = _censored("l", before)
     data = con.execute(
-        f"""SELECT landmark_index, landmark_date, event, event_date FROM landmarks
-        WHERE landmark_date < DATE '{before.isoformat()}' ORDER BY trial_id, landmark_index"""
+        f"""SELECT l.landmark_index, l.landmark_date, {event} AS event,
+          {event_date} AS event_date
+        FROM landmarks l WHERE l.landmark_date < {_day(before)}
+        ORDER BY l.trial_id, l.landmark_index"""
     ).fetchnumpy()
     index = np.asarray(data["landmark_index"], dtype=np.int64)
     rows = cif_by_group(
@@ -277,36 +368,45 @@ def competing_view(reg: Registrations, max_months: int) -> dict[str, FloatArray]
 
 # Amendments at a landmark -----------------------------------------------------------------
 
-# (key, label, what it compares). Each is 1 (yes), 0 (no) or -1 (not known: an input is
-# missing) per landmark row, from versions posted on or before the landmark.
-SIGNALS: tuple[tuple[str, str], ...] = (
-    ("ever_suspended", "Suspended at some point"),
-    ("start_overdue", "Not yet recruiting, planned start passed"),
-    ("not_yet_recruiting", "Still not yet recruiting"),
-    ("primary_completion_overdue", "Primary completion date passed"),
-    ("primary_completion_later", "Primary completion date moved later"),
-    ("completion_later", "Completion date moved later"),
-    ("primary_completion_earlier", "Primary completion date moved earlier"),
-    ("enrollment_cut", "Enrollment target cut by 10% or more"),
-    ("enrollment_raised", "Enrollment target raised by 10% or more"),
-    ("quiet", "No version posted in the last 6 months"),
+EVERYONE = "all trials"
+COUNT_ESTIMATED = "trials with an ESTIMATED enrollment count"
+COUNT_ACTUAL = "trials with an ACTUAL enrollment count"
+# (key, label, the trials it is compared among). Each is 1 (yes), 0 (no) or -1 (outside the
+# comparison, or an input is missing) per landmark row, from versions posted on or before
+# the landmark. The enrollment count is a target while its type is ESTIMATED and the number
+# enrolled once it is ACTUAL, so a change of the count is read with the type.
+SIGNALS: tuple[tuple[str, str, str], ...] = (
+    ("ever_suspended", "Suspended at some point", EVERYONE),
+    ("start_overdue", "Not yet recruiting, planned start month passed", EVERYONE),
+    ("not_yet_recruiting", "Still not yet recruiting", EVERYONE),
+    ("primary_completion_overdue", "Primary completion month passed", EVERYONE),
+    ("primary_completion_later", "Primary completion date moved later", EVERYONE),
+    ("completion_later", "Completion date moved later", EVERYONE),
+    ("primary_completion_earlier", "Primary completion date moved earlier", EVERYONE),
+    ("enrollment_closed", "Enrollment count is ACTUAL (enrollment closed)", EVERYONE),
+    ("target_cut", "Enrollment target cut by 10% or more", COUNT_ESTIMATED),
+    ("target_raised", "Enrollment target raised by 10% or more", COUNT_ESTIMATED),
+    ("enrollment_short", "Enrolled 10% or more below the first target", COUNT_ACTUAL),
+    ("quiet", "No version posted in the last 6 months", EVERYONE),
 )
+SIGNAL_LABELS = {key: label for key, label, _ in SIGNALS}
 LATER_OUTCOMES: tuple[tuple[int, str], ...] = (
     (EVENT_STOP, "Stopped early later"),
     (EVENT_COMPLETE, "Completed later"),
-    (EVENT_CENSORED, "No outcome by the end of follow-up"),
+    (EVENT_CENSORED, "No outcome observed"),
 )
 
 
 @dataclass(frozen=True)
 class Amendments:
-    """Landmark rows at one landmark index, with what each record showed at the landmark."""
+    """Landmark rows at one landmark index, with what each record showed at the landmark and
+    the outcome as known on the `before` date."""
 
     time: FloatArray  # days from the landmark to the event or censoring
     event: IntArray
     signals: dict[str, IntArray]
     versions: IntArray  # versions posted on or before the landmark
-    slip_months: FloatArray  # primary completion date against version 0, NaN if unknown
+    slip_months: FloatArray  # primary completion date against the first version, NaN if unknown
 
 
 def amendment_signals(
@@ -319,29 +419,53 @@ def amendment_signals(
     landmark is the latest version posted on or before it (the higher version number when
     two share a post date); nothing posted later is read. Dates are compared by calendar
     month, so a date that only gained a day of precision has not moved."""
-    start_end = period_end_sql("s.start_date", "s.start_date_precision")
-    primary_end = period_end_sql("s.primary_completion_date", "s.primary_completion_date_precision")
-
-    def flag(condition: str) -> str:
-        return f"coalesce(CAST(({condition}) AS TINYINT), -1)"
-
-    def months_moved(now: str, first: str) -> str:
-        return f"date_diff('month', {first}, {now})"
-
+    event, event_date = _censored("l", before)
+    start_month_end = month_end_sql("s.start_date", "s.start_date_precision")
+    primary_month_end = month_end_sql(
+        "s.primary_completion_date", "s.primary_completion_date_precision"
+    )
+    primary_moved = "date_diff('month', f.pc0, s.primary_completion_date)"
+    completion_moved = "date_diff('month', f.c0, s.completion_date)"
+    target = "s.enrollment_type = 'ESTIMATED' AND f.t0 = 'ESTIMATED' AND f.n0 > 0"
+    enrolled = "s.enrollment_type = 'ACTUAL' AND f.t0 = 'ESTIMATED' AND f.n0 > 0"
+    conditions = {
+        "ever_suspended": "h.ever_suspended",
+        "start_overdue": (
+            f"s.overall_status = 'NOT_YET_RECRUITING' AND {start_month_end} < l.landmark_date"
+        ),
+        "not_yet_recruiting": "s.overall_status = 'NOT_YET_RECRUITING'",
+        "primary_completion_overdue": f"{primary_month_end} < l.landmark_date",
+        "primary_completion_later": f"{primary_moved} >= 1",
+        "completion_later": f"{completion_moved} >= 1",
+        "primary_completion_earlier": f"{primary_moved} <= -1",
+        "enrollment_closed": (
+            "CASE s.enrollment_type WHEN 'ACTUAL' THEN true WHEN 'ESTIMATED' THEN false END"
+        ),
+        "target_cut": f"CASE WHEN {target} THEN s.enrollment_count <= 0.9 * f.n0 END",
+        "target_raised": f"CASE WHEN {target} THEN s.enrollment_count >= 1.1 * f.n0 END",
+        "enrollment_short": f"CASE WHEN {enrolled} THEN s.enrollment_count <= 0.9 * f.n0 END",
+        "quiet": f"h.last_post <= l.landmark_date - INTERVAL {int(quiet_months)} MONTH",
+    }
+    flags = ",\n          ".join(
+        f"coalesce(CAST(({conditions[key]}) AS TINYINT), -1) AS {key}" for key, _, _ in SIGNALS
+    )
     data = con.execute(
         f"""WITH l AS (
-          SELECT trial_id, landmark_date, event, event_date FROM landmarks
-          WHERE landmark_index = {int(landmark_index)}
-            AND landmark_date < DATE '{before.isoformat()}'
+          SELECT l.trial_id, l.landmark_date, {event} AS event, {event_date} AS event_date
+          FROM landmarks l
+          WHERE l.landmark_index = {int(landmark_index)} AND l.landmark_date < {_day(before)}
         ),
         states AS (
-          SELECT * FROM wh.versions
+          SELECT nct_id, effective_date, overall_status, start_date, start_date_precision,
+            primary_completion_date, primary_completion_date_precision, completion_date,
+            enrollment_count, enrollment_type
+          FROM wh.versions
           QUALIFY row_number() OVER (
             PARTITION BY nct_id, effective_date ORDER BY nct_version DESC) = 1
         ),
         first_version AS (
           SELECT nct_id, primary_completion_date AS pc0, completion_date AS c0,
-            enrollment_count AS n0
+            enrollment_count AS n0, enrollment_type AS t0
           FROM wh.versions
           QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version) = 1
         ),
@@ -353,22 +477,8 @@ def amendment_signals(
           GROUP BY l.trial_id
         )
         SELECT l.landmark_date, l.event, l.event_date, h.versions,
-          CAST({months_moved("s.primary_completion_date", "f.pc0")} AS DOUBLE) AS slip_months,
-          {flag("h.ever_suspended")} AS ever_suspended,
-          {flag(f"s.overall_status = 'NOT_YET_RECRUITING' AND {start_end} < l.landmark_date")}
-            AS start_overdue,
-          {flag("s.overall_status = 'NOT_YET_RECRUITING'")} AS not_yet_recruiting,
-          {flag(f"{primary_end} < l.landmark_date")} AS primary_completion_overdue,
-          {flag(months_moved("s.primary_completion_date", "f.pc0") + " >= 1")}
-            AS primary_completion_later,
-          {flag(months_moved("s.completion_date", "f.c0") + " >= 1")} AS completion_later,
-          {flag(months_moved("s.primary_completion_date", "f.pc0") + " <= -1")}
-            AS primary_completion_earlier,
-          {flag("CASE WHEN f.n0 > 0 THEN s.enrollment_count <= 0.9 * f.n0 END")}
-            AS enrollment_cut,
-          {flag("CASE WHEN f.n0 > 0 THEN s.enrollment_count >= 1.1 * f.n0 END")}
-            AS enrollment_raised,
-          {flag(f"h.last_post <= l.landmark_date - INTERVAL {int(quiet_months)} MONTH")} AS quiet
+          CAST({primary_moved} AS DOUBLE) AS slip_months,
+          {flags}
         FROM l
         JOIN first_version f ON f.nct_id = l.trial_id
         JOIN history h USING (trial_id)
@@ -378,7 +488,7 @@ def amendment_signals(
     return Amendments(
         time=_days(data, "landmark_date", "event_date"),
         event=np.asarray(data["event"], dtype=np.int64),
-        signals={key: np.asarray(data[key], dtype=np.int64) for key, _ in SIGNALS},
+        signals={key: np.asarray(data[key], dtype=np.int64) for key, _, _ in SIGNALS},
         versions=np.asarray(data["versions"], dtype=np.int64),
         slip_months=_column(data, "slip_months", np.nan).astype(np.float64),
     )
@@ -386,13 +496,13 @@ def amendment_signals(
 
 def amendments_by_outcome(am: Amendments) -> Rows:
     """Per later outcome of the landmark row: how many rows, the share showing each signal
-    (among rows where it is known), the median number of versions, and the median slip of
-    the primary completion date among rows where it moved later."""
+    (among the rows where the signal is defined and known), the median number of versions,
+    and the median slip of the primary completion date among rows where it moved later."""
     rows: Rows = []
     for code, label in LATER_OUTCOMES:
         mask = am.event == code
         row: dict[str, Any] = {"group": label, "trials": int(mask.sum())}
-        for key, _ in SIGNALS:
+        for key, _, _ in SIGNALS:
             known = mask & (am.signals[key] >= 0)
             row[key] = float(am.signals[key][known].mean()) if known.any() else None
         later = mask & (am.signals["primary_completion_later"] == 1)
@@ -403,11 +513,12 @@ def amendments_by_outcome(am: Amendments) -> Rows:
 
 
 def amendments_cif(am: Amendments, months: int) -> Rows:
-    """Per signal: rows with and without it, and the early-stop CIF `months` after the
-    landmark in each group (Aalen-Johansen, so censored rows count for as long as they
-    were followed). Sorted by the CIF with the signal, highest first."""
+    """Per signal: rows with and without it among the trials it is compared among, and the
+    early-stop CIF `months` after the landmark in each group (Aalen-Johansen, so censored
+    rows count for as long as they were followed). Sorted by the CIF with the signal,
+    highest first."""
     rows: Rows = []
-    for key, label in SIGNALS:
+    for key, label, among in SIGNALS:
         with_signal, without = am.signals[key] == 1, am.signals[key] == 0
         if not with_signal.any() or not without.any():
             continue
@@ -417,9 +528,10 @@ def amendments_cif(am: Amendments, months: int) -> Rows:
             {
                 "key": key,
                 "signal": label,
+                "among": among,
                 "with": int(with_signal.sum()),
                 "without": int(without.sum()),
-                "unknown": int((am.signals[key] < 0).sum()),
+                "outside": int((am.signals[key] < 0).sum()),
                 "cif_with": cif_with,
                 "cif_without": cif_without,
                 "ratio": cif_with / cif_without if cif_without > 0 else None,
@@ -434,12 +546,13 @@ def amendments_cif(am: Amendments, months: int) -> Rows:
 def registration_by_year(
     con: duckdb.DuckDBPyConnection, before: dt.date = MODELING_EDA_BEFORE
 ) -> Rows:
-    """Per registration year, for trials open at registration (L0 rows): the share registered
-    after they started (the start date's whole period is before the first-post date), the
-    median days from start to registration among those, the share registered more than a
-    year late, and the median days from first submission to first posting. Years from
-    `before` on are flagged descriptive."""
-    start_end = period_end_sql("f.start_date", "f.start_date_precision")
+    """Per registration year, for trials open at registration (L0 rows): the share whose
+    first version gives the start date to the day, the share registered after the start
+    month (among trials with a start date: the start date's calendar month ended before the
+    first-post date), the median days from the end of the start month to registration among
+    those, the share registered more than a year late, and the median days from first
+    submission to first posting. Years from `before` on are flagged descriptive."""
+    start_month_end = month_end_sql("f.start_date", "f.start_date_precision")
     cursor = con.execute(
         f"""WITH first_version AS (
           SELECT nct_id, start_date, start_date_precision, study_first_submit_date
@@ -447,12 +560,15 @@ def registration_by_year(
           QUALIFY row_number() OVER (PARTITION BY nct_id ORDER BY nct_version) = 1
         ),
         r AS (
-          SELECT year(l.landmark_date) AS year, l.landmark_date AS t0, {start_end} AS start_end,
+          SELECT year(l.landmark_date) AS year, l.landmark_date AS t0,
+            {start_month_end} AS start_end, f.start_date_precision AS precision,
             f.study_first_submit_date AS submitted
           FROM landmarks l JOIN first_version f ON f.nct_id = l.trial_id
           WHERE l.landmark_index = 0
         )
-        SELECT year, count(*) AS trials,
+        SELECT year, count(*) AS trials, count(start_end) AS with_start_date,
+          avg(CASE WHEN precision = 'day' THEN 1.0 WHEN start_end IS NOT NULL THEN 0.0 END)
+            AS share_day_precision,
           avg(CASE WHEN start_end < t0 THEN 1.0 WHEN start_end IS NOT NULL THEN 0.0 END)
             AS share_after_start,
           median(date_diff('day', start_end, t0)) FILTER (WHERE start_end < t0)
@@ -492,9 +608,27 @@ def post_dates_by_year(
     return rows
 
 
-def _records(cursor: duckdb.DuckDBPyConnection) -> Rows:
-    names = [d[0] for d in cursor.description or []]
-    return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+def posting_lag(con: duckdb.DuckDBPyConnection, before: dt.date = MODELING_EDA_BEFORE) -> Rows:
+    """Days from submission to posting for versions of cohort trials posted before `before`,
+    by whether the post date is ESTIMATED or ACTUAL and whether the version is the trial's
+    first: versions, median and 90th percentile. The ACTUAL rows show how far a recorded
+    post date trails its submission, which is the likely size of the error in an estimated
+    one. First versions set time zero and every landmark, so they are shown apart."""
+    cursor = con.execute(
+        f"""WITH v AS (
+          SELECT v.effective_date, v.effective_date_type, v.submitted_date,
+            row_number() OVER (PARTITION BY v.nct_id ORDER BY v.nct_version) = 1 AS is_first
+          FROM wh.versions v
+          JOIN (SELECT DISTINCT trial_id FROM landmarks) c ON c.trial_id = v.nct_id
+        )
+        SELECT effective_date_type AS date_type, is_first, count(*) AS versions,
+          median(date_diff('day', submitted_date, effective_date)) AS median_days,
+          quantile_cont(date_diff('day', submitted_date, effective_date), 0.9) AS p90_days
+        FROM v
+        WHERE effective_date < {_day(before)} AND effective_date_type IN ('ESTIMATED', 'ACTUAL')
+        GROUP BY 1, 2 ORDER BY 1, 2 DESC"""
+    )
+    return _records(cursor)
 
 
 # The COVID period: descriptive only -------------------------------------------------------
@@ -512,11 +646,10 @@ def covid_period_monthly(
     """DESCRIPTIVE ONLY: it looks at calendar time after 2018-01-01 (Section 10), so nothing
     here may shape a model. Per calendar month from `start` to `end`, for cohort trials: how
     many were under follow-up at the start of the month, and how many were terminated,
-    withdrawn, or newly suspended (a SUSPENDED version after a version that was not) during
-    it, per 1,000 trials under follow-up."""
+    withdrawn, or newly suspended (a SUSPENDED version that follows a version with another
+    status) during it, per 1,000 trials under follow-up."""
     months = f"""SELECT CAST(m AS DATE) AS month_start
-      FROM generate_series(DATE '{start.isoformat()}', DATE '{end.isoformat()}',
-        INTERVAL 1 MONTH) AS s(m)"""
+      FROM generate_series({_day(start)}, {_day(end)}, INTERVAL 1 MONTH) AS s(m)"""
     data = con.execute(
         f"""WITH months AS ({months}),
         cohort AS (SELECT DISTINCT trial_id FROM landmarks),
@@ -544,7 +677,7 @@ def covid_period_monthly(
         suspensions AS (
           SELECT date_trunc('month', effective_date) AS month_start, count(*) AS suspended
           FROM status_changes
-          WHERE overall_status = 'SUSPENDED' AND previous IS DISTINCT FROM 'SUSPENDED'
+          WHERE overall_status = 'SUSPENDED' AND previous <> 'SUSPENDED'
           GROUP BY 1
         )
         SELECT m.month_start, coalesce(n.n, 0) AS open_trials,

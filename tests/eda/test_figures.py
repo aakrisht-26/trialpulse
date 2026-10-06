@@ -78,6 +78,7 @@ def _draw_all(out: Path) -> list[Path]:
         [1.0, 1.0, 0.12, 0.0],
         x_label="Year",
         labeled=[2015, 2017, 2018],
+        divider=(2017.5, "From 2018: descriptive only"),
         **TEXT,
     )
     return sorted(out.iterdir())

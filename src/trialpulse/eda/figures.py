@@ -108,6 +108,13 @@ def _grid(ax: Axes, axis: Literal["x", "y"]) -> None:
     ax.grid(visible=True, axis=axis, color=GRIDLINE, linewidth=0.8, linestyle="-")
 
 
+def _divider(ax: Axes, divider: tuple[float, str], top: float) -> None:
+    """A hairline at an x position, with a short text beside its top."""
+    ax.axvline(divider[0], color=BASELINE, linewidth=0.8, zorder=1)
+    ax.annotate(divider[1], xy=(divider[0], top), xytext=(5, -4), textcoords="offset points",
+                va="top", ha="left", fontsize=8.5, color=INK_MUTED)  # fmt: skip
+
+
 def _x_label(ax: Axes, text: str) -> None:
     ax.set_xlabel(text, labelpad=6, **SMALL)
 
@@ -213,9 +220,7 @@ def line_chart(
                 solid_joinstyle="round", marker="o" if markers else None, markersize=5,
                 markeredgecolor=SURFACE, markeredgewidth=1.0, clip_on=False, zorder=3)  # fmt: skip
     if divider is not None:
-        ax.axvline(divider[0], color=BASELINE, linewidth=0.8, zorder=1)
-        ax.annotate(divider[1], xy=(divider[0], top), xytext=(5, -4), textcoords="offset points",
-                    va="top", ha="left", fontsize=8.5, color=INK_MUTED)  # fmt: skip
+        _divider(ax, divider, top)
     if note is not None:
         ax.annotate(note[2], xy=(note[0], note[1]), xytext=(8, 0), textcoords="offset points",
                     va="center", ha="left", fontsize=LABEL_SIZE, color=INK)  # fmt: skip
@@ -249,7 +254,8 @@ def dot_ranges(
     left = TEXT_LEFT + (0.068 * max(len(label) for label, _, _ in rows) + 0.15) / WIDTH
     fig, ax = _figure(title, subtitle, source, height, legend=True, left=left, right=0.93)
     _grid(ax, "x")
-    ax.set_xlim(0, 1.18 * max(max(a, b) for _, a, b in rows))
+    largest = max(max(a, b) for _, a, b in rows)
+    ax.set_xlim(-0.09 * largest, 1.18 * largest)  # room for a value label left of a low dot
     ax.set_ylim(len(rows) - 0.4, -0.85)
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels([label for label, _, _ in rows], color=INK)
@@ -331,9 +337,11 @@ def bars_by_year(
     source: str,
     x_label: str,
     labeled: Sequence[int],
+    divider: tuple[float, str] | None = None,
 ) -> None:
     """One share per year as thin bars from a zero baseline, with the values that carry the
-    story (the `labeled` years) written above their bars."""
+    story (the `labeled` years) written above their bars. `divider` draws a hairline at an x
+    position with a short text beside it, as in `line_chart`."""
     fig, ax = _figure(title, subtitle, source, 4.2, legend=False, right=0.95)
     _grid(ax, "y")
     ax.set_xlim(years[0] - 0.7, years[-1] + 0.7)
@@ -343,6 +351,8 @@ def bars_by_year(
     ax.set_xticks(list(years))
     ax.set_xticklabels([str(year) if year % 2 == 0 else "" for year in years])
     _x_label(ax, x_label)
+    if divider is not None:
+        _divider(ax, divider, 1.12)
     fig.canvas.draw()
     for year, share in zip(years, shares, strict=True):
         if share > 0:

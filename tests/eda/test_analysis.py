@@ -1,8 +1,13 @@
-"""The EDA numbers on the synthetic registry of conftest.py, where every answer is known."""
+"""The EDA numbers on the synthetic registry of conftest.py, where every answer is known.
+
+Most tests compare the SQL with the Python twins of conftest.py, row by row. The edge cases
+of the registry (a version on the landmark day, two versions on one post date, month
+precision, missing inputs, the first locked day) are then named one by one.
+"""
 
 import datetime as dt
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,29 +15,33 @@ import duckdb
 import numpy as np
 import pytest
 
-from trialpulse.cohort.rules import add_months
+from trialpulse.cohort.audit import DAYS_PER_MONTH
 from trialpulse.eda import analysis as an
+from trialpulse.eval import EVENT_CENSORED, EVENT_COMPLETE, EVENT_STOP
 
 from .conftest import (
+    BEFORE,
     COVID_SUSPENDED,
     COVID_TRIALS,
     COVID_YEAR,
     HISTORIES,
     MODELING_YEARS,
+    Trial,
     World,
-    first_post,
+    month_end,
+    outcome,
+    signals_at,
+    state_at,
+    timing_of,
+)
+from .conftest import (
+    cif as _cif,
+)
+from .conftest import (
+    followed as _followed,
 )
 
-CUTOFF = dt.date(2026, 9, 25)
 AT_12_MONTHS = 2  # landmark index
-BEFORE_2017 = tuple(y for y in MODELING_YEARS if y < 2017)  # their 12-month landmark is before 2018
-ENDED_BY_12_MONTHS = ("withdrawn_early", "completed_short")
-EARLY_STOPS_BY_24_MONTHS = (
-    "withdrawn_early",
-    "stalled_withdrawn",
-    "suspended_terminated",
-    "slipped_terminated",
-)
 
 
 @pytest.fixture(scope="module")
@@ -46,23 +55,99 @@ def reg(con: duckdb.DuckDBPyConnection) -> an.Registrations:
     return an.registrations(con)
 
 
+@pytest.fixture(scope="module")
+def registered(world: World) -> list[Trial]:
+    """The trials with a registration landmark before 2018, by trial id."""
+    return [trial for trial, _ in world.landmark_rows(0)]
+
+
+@pytest.fixture(scope="module")
+def signals(con: duckdb.DuckDBPyConnection) -> an.Amendments:
+    return an.amendment_signals(con, AT_12_MONTHS, quiet_months=6)
+
+
 def test_phase_groups_follow_the_registry_names() -> None:
-    assert an.phase_group(["EARLY_PHASE1"]) == an.EARLY_PHASE
-    assert an.phase_group(["PHASE1", "PHASE2"]) == an.MID_PHASE
-    assert an.phase_group(["PHASE2", "PHASE3"]) == an.LATE_PHASE
+    assert an.phase_group(["EARLY_PHASE1"]) == an.phase_group(["PHASE1"]) == an.EARLY_PHASE
+    assert an.phase_group(["PHASE1", "PHASE2"]) == an.phase_group(["PHASE2"]) == an.MID_PHASE
+    assert an.phase_group(["PHASE2", "PHASE3"]) == an.phase_group(["PHASE3"]) == an.LATE_PHASE
     assert an.phase_group(["PHASE4"]) == an.POST_APPROVAL_PHASE
     assert an.phase_group(["NA"]) == an.phase_group([]) == an.NO_PHASE
     assert an.phase_group(["PHASE1", "PHASE4"]) == an.OTHER_PHASE
 
 
+def test_a_hand_worked_cif_with_a_censored_trial() -> None:
+    """Four trials: an early stop at 10 days, a censoring at 20, an early stop at 30 and a
+    completion at 40. After the first stop 3 remain; the censored one leaves 2 at risk on
+    day 30, so the second stop adds 0.75 * 1/2: the CIF is 0.25, then 0.625."""
+    time = np.array([10.0, 20.0, 30.0, 40.0])
+    event = np.array([EVENT_STOP, EVENT_CENSORED, EVENT_STOP, EVENT_COMPLETE])
+    months = [15 / DAYS_PER_MONTH, 35 / DAYS_PER_MONTH, 45 / DAYS_PER_MONTH]
+    assert an.cif_at(time, event, months) == pytest.approx([0.25, 0.625, 0.625])
+    assert an.cif_at(time, event, months, cause=EVENT_COMPLETE) == pytest.approx([0, 0, 0.375])
+
+
 def test_registrations_keep_only_landmarks_before_2018(
-    con: duckdb.DuckDBPyConnection, reg: an.Registrations, world: World
+    con: duckdb.DuckDBPyConnection, reg: an.Registrations, world: World, registered: list[Trial]
 ) -> None:
-    assert len(reg.time) == world.count(*HISTORIES)
+    assert len(reg.time) == len(registered)
     assert set(reg.year.tolist()) == set(MODELING_YEARS)
+    assert world.named("landmark_on_2018_01_01") in registered  # first posted 2017-01-01
+    assert world.named("registered_2018_01_01") not in registered  # 2018-01-01 is locked
     everything = an.registrations(con, before=dt.date(2100, 1, 1))
-    assert COVID_YEAR in everything.year  # only the date rule kept that year out
+    assert {COVID_YEAR, 2018} <= set(everything.year.tolist())  # only the date kept them out
     assert len(everything.time) == len(world.trials)
+
+
+def test_outcomes_are_censored_at_2018_01_01(
+    con: duckdb.DuckDBPyConnection, reg: an.Registrations, world: World, registered: list[Trial]
+) -> None:
+    """Section 10: an event on or after 2018-01-01 is not observed yet. Row by row against
+    the twin, then one trial by name, then the same trials followed to the data cutoff."""
+    rows = world.landmark_rows(0)
+    time, event, kind, lapsed = _followed(rows)
+    assert np.array_equal(reg.time, time)
+    assert np.array_equal(reg.event, event)
+    assert np.array_equal(reg.kind, kind)
+    assert np.array_equal(reg.lapsed, lapsed)
+
+    late = registered.index(world.named("landmark_on_2018_01_01"))  # terminated 2018-03-01
+    assert reg.event[late] == EVENT_CENSORED
+    assert reg.time[late] == (BEFORE - dt.date(2017, 1, 1)).days
+    assert not reg.lapsed[late]
+    assert (reg.event == EVENT_STOP).sum() < sum(
+        outcome(trial)[1] in (an.KIND_TERMINATED, an.KIND_WITHDRAWN) for trial in registered
+    )
+
+    to_cutoff = an.registrations(con, before=dt.date(2100, 1, 1))
+    everyone = world.landmark_rows(0, dt.date(2100, 1, 1))
+    _, _, kind_to_cutoff, lapsed_to_cutoff = _followed(everyone, dt.date(2100, 1, 1))
+    assert np.array_equal(to_cutoff.kind, kind_to_cutoff)
+    # A trial still open at the data cutoff is censored too, but not by the UNKNOWN rule.
+    assert np.array_equal(to_cutoff.lapsed, lapsed_to_cutoff)
+    assert (to_cutoff.event == EVENT_CENSORED).sum() > to_cutoff.lapsed.sum() == 1
+
+
+def test_the_unknown_rule_censoring_is_told_apart(
+    reg: an.Registrations, world: World, registered: list[Trial]
+) -> None:
+    trial = world.named("lapsed")
+    lapsed = registered.index(trial)
+    assert reg.lapsed.sum() == 1
+    assert reg.lapsed[lapsed]
+    assert reg.event[lapsed] == EVENT_CENSORED
+    assert reg.time[lapsed] == (outcome(trial)[0] - trial.first_post).days
+
+    rows = an.lapse_by_group(reg, reg.sponsor_group, an.SPONSOR_ORDER, (12, 24))
+    by_group = {row["group"]: row for row in rows}
+    assert by_group["OTHER"]["lapsed"] == by_group[an.ALL]["lapsed"] == 1
+    assert by_group["INDUSTRY"]["lapsed"] == 0
+    assert by_group["INDUSTRY"]["lapse_24m"] == 0
+    code = np.where(reg.lapsed, an.KIND_LAPSED, reg.kind)
+    other = reg.sponsor_group == "OTHER"
+    for months in (12, 24):
+        expected = _cif(reg.time[other], code[other], months, an.KIND_LAPSED)
+        assert by_group["OTHER"][f"lapse_{months}m"] == pytest.approx(expected)
+        assert expected > 0
 
 
 def test_small_sponsor_classes_are_pooled(reg: an.Registrations) -> None:
@@ -71,20 +156,14 @@ def test_small_sponsor_classes_are_pooled(reg: an.Registrations) -> None:
     assert (reg.sponsor_group == an.OTHER_CLASSES).sum() == (reg.sponsor_class == "FED").sum()
 
 
-def test_registration_timing_compares_the_start_date_with_the_first_post(
-    reg: an.Registrations, world: World
+def test_registration_timing_reads_the_first_version_by_calendar_month(
+    reg: an.Registrations, world: World, registered: list[Trial]
 ) -> None:
-    def expected(test: Callable[[int | None], bool]) -> int:
-        return sum(t.year in MODELING_YEARS and test(t.start_month) for t in world.trials)
-
-    counts = {name: int((reg.timing == name).sum()) for name in an.TIMING_ORDER}
-    assert counts == {
-        an.PROSPECTIVE: expected(lambda m: m is not None and m >= 0),
-        an.LATE_WITHIN_YEAR: expected(lambda m: m is not None and -12 <= m < 0),
-        an.LATE_OVER_YEAR: expected(lambda m: m is not None and m < -12),
-        an.NO_START_DATE: expected(lambda m: m is None),
-    }
-    assert all(counts.values())
+    assert reg.timing.tolist() == [timing_of(trial) for trial in registered]
+    assert all((reg.timing == name).any() for name in an.TIMING_ORDER)
+    # The start date moves 22 months earlier in a later version; the first version counts.
+    changed = registered.index(world.named("start_date_changes"))
+    assert reg.timing[changed] == an.PROSPECTIVE
 
 
 def test_phase_comes_from_the_current_record_snapshot(reg: an.Registrations) -> None:
@@ -94,28 +173,32 @@ def test_phase_comes_from_the_current_record_snapshot(reg: an.Registrations) -> 
     assert (reg.phase == an.NO_CURRENT_RECORD).sum() == 1
 
 
-def test_cif_is_the_plain_fraction_when_nothing_is_censored(
-    reg: an.Registrations, world: World
+def test_cif_tables_match_the_estimator_on_the_twin_outcomes(
+    reg: an.Registrations, world: World, registered: list[Trial]
 ) -> None:
-    """No synthetic trial is censored in its first 60 months, so the Aalen-Johansen CIF at a
-    horizon is the share of trials that stopped early by then."""
+    time, event, kind, _ = _followed(world.landmark_rows(0))
+    sponsor = np.array([trial.sponsor for trial in registered])
     rows = an.cif_by_group(reg.time, reg.event, reg.sponsor_class, ["INDUSTRY", "OTHER"], (12, 24))
     assert [row["group"] for row in rows] == ["INDUSTRY", "OTHER", an.ALL]
     for row in rows:
-        mine = [
-            t
-            for t in world.trials
-            if t.year in MODELING_YEARS and row["group"] in (t.sponsor, an.ALL)
-        ]
-        assert row["trials"] == len(mine)
-        assert row["cif_12m"] == pytest.approx(
-            sum(t.history == "withdrawn_early" for t in mine) / len(mine)
-        )
-        assert row["cif_24m"] == pytest.approx(
-            sum(t.history in EARLY_STOPS_BY_24_MONTHS for t in mine) / len(mine)
-        )
+        mask = np.ones(len(sponsor), bool) if row["group"] == an.ALL else sponsor == row["group"]
+        assert row["trials"] == mask.sum()
+        assert row["early_stops"] == (event[mask] == EVENT_STOP).sum()
+        assert row["early_stops"] != (event[mask] == EVENT_COMPLETE).sum()
+        for months in (12, 24):
+            expected = _cif(time[mask], event[mask], months)
+            assert row[f"cif_{months}m"] == pytest.approx(expected)
+            assert 0 < expected < 1
     only_all = an.cif_by_group(reg.time, reg.event, reg.sponsor_class, ["NETWORK"], (12,))
     assert [row["group"] for row in only_all] == [an.ALL]  # a class without trials has no row
+
+    kinds = an.stop_kinds_by_group(reg, reg.sponsor_class, ["INDUSTRY"], 24)
+    mask = sponsor == "INDUSTRY"
+    withdrawn = _cif(time[mask], kind[mask], 24, an.KIND_WITHDRAWN)
+    terminated = _cif(time[mask], kind[mask], 24, an.KIND_TERMINATED)
+    assert kinds["INDUSTRY"] == pytest.approx({"withdrawn": withdrawn, "terminated": terminated})
+    assert withdrawn != pytest.approx(terminated)
+    assert withdrawn + terminated == pytest.approx(rows[0]["cif_24m"])
 
 
 def test_cif_curves_match_the_table(reg: an.Registrations) -> None:
@@ -131,93 +214,141 @@ def test_cif_curves_match_the_table(reg: an.Registrations) -> None:
         assert np.all(np.diff(cif) >= 0)
 
 
-def test_landmark_rows_are_the_trials_still_open_and_before_2018(
+def test_landmark_rows_are_before_2018_with_outcomes_censored_there(
     con: duckdb.DuckDBPyConnection, world: World
 ) -> None:
     rows = {row["group"]: row for row in an.cif_by_landmark_index(con, (12, 24))}
-    assert rows[0]["trials"] == world.count(*HISTORIES)
-    still_open = [h for h in HISTORIES if h not in ENDED_BY_12_MONTHS]
-    assert rows[AT_12_MONTHS]["trials"] == world.count(*still_open, years=BEFORE_2017)
-    # In the 12 months after the 12-month landmark: withdrawn at 15, terminated at 16 and 20.
-    stops = world.count(
-        "stalled_withdrawn", "suspended_terminated", "slipped_terminated", years=BEFORE_2017
-    )
-    assert rows[AT_12_MONTHS]["cif_12m"] == pytest.approx(stops / rows[AT_12_MONTHS]["trials"])
     assert an.ALL not in rows
+    for index, row in rows.items():
+        mine = world.landmark_rows(index)
+        time, event, _, _ = _followed(mine)
+        assert row["trials"] == len(mine)
+        assert row["early_stops"] == (event == EVENT_STOP).sum()
+        assert row["cif_12m"] == pytest.approx(_cif(time, event, 12))
+    # The 12-month landmark of the trial first posted on 2017-01-01 is 2018-01-01: locked.
+    at_12 = [trial.name for trial, _ in world.landmark_rows(AT_12_MONTHS)]
+    assert "landmark_on_2018_01_01" not in at_12
+    assert "on_landmark_day" in at_12
 
 
-def test_the_four_states_add_up_and_the_naive_estimate_is_never_lower(
+def test_the_four_states_add_up_and_the_naive_estimate_is_pinned(
     reg: an.Registrations, world: World
 ) -> None:
-    view = an.competing_view(reg, 60)
+    view = an.competing_view(reg, 48)
     total = view["terminated"] + view["withdrawn"] + view["completed"] + view["open"]
     assert np.allclose(total, 1.0)
-    assert np.allclose(view["early_stop"], view["terminated"] + view["withdrawn"])
-    assert np.all(view["naive_early_stop"] >= view["early_stop"] - 1e-12)
-    assert view["naive_early_stop"][60] > view["early_stop"][60]
-    trials = world.count(*HISTORIES)
-    assert view["withdrawn"][12] == pytest.approx(world.count("withdrawn_early") / trials)
-    assert view["terminated"][12] == 0
-    assert view["completed"][12] == pytest.approx(world.count("completed_short") / trials)
     assert view["open"][0] == 1
+    time, event, kind, _ = _followed(world.landmark_rows(0))
+    for name, cause in (("terminated", an.KIND_TERMINATED), ("withdrawn", an.KIND_WITHDRAWN),
+                        ("completed", an.KIND_COMPLETED)):  # fmt: skip
+        assert view[name][24] == pytest.approx(_cif(time, kind, 24, cause)), name
+    assert view["early_stop"][24] == pytest.approx(_cif(time, event, 24))
+    # The naive estimate treats a completion as a censoring: the CIF of early stop when
+    # completions are recoded as censored, and so above the competing-risks estimate.
+    as_censoring = np.where(event == EVENT_STOP, EVENT_STOP, EVENT_CENSORED)
+    assert view["naive_early_stop"][36] == pytest.approx(_cif(time, as_censoring, 36))
+    assert view["naive_early_stop"][36] > view["early_stop"][36] + 0.01
 
 
-def test_amendment_signals_have_the_scripted_counts(
-    con: duckdb.DuckDBPyConnection, world: World
-) -> None:
-    am = an.amendment_signals(con, AT_12_MONTHS, quiet_months=6)
-
-    def scripted(*histories: str) -> int:
-        return world.count(*histories, years=BEFORE_2017)
-
-    assert len(am.time) == scripted(*[h for h in HISTORIES if h not in ENDED_BY_12_MONTHS])
-    yes = {key: int((values == 1).sum()) for key, values in am.signals.items()}
-    assert yes == {
-        "ever_suspended": scripted("suspended_terminated"),
-        "start_overdue": scripted("stalled_withdrawn", "waiting_completed"),
-        "not_yet_recruiting": scripted("stalled_withdrawn", "waiting_completed"),
-        "primary_completion_overdue": scripted("overdue_completed"),
-        "primary_completion_later": scripted("slipped_terminated", "slipped_completed"),
-        "completion_later": 0,
-        "primary_completion_earlier": 0,
-        "enrollment_cut": scripted("cut_completed"),
-        "enrollment_raised": scripted("slipped_completed"),
-        "quiet": scripted(
-            "stalled_withdrawn",
-            "terminated_late",
-            "overdue_completed",
-            "waiting_completed",
-            "still_open",
-        ),
-    }
-    assert all((values >= 0).all() for values in am.signals.values())  # nothing unknown here
-    moved = am.signals["primary_completion_later"] == 1
-    assert set(am.slip_months[moved].tolist()) == {12.0}  # from 24 to 36 months
-    assert set(am.versions.tolist()) == {1, 2}
+def test_amendment_signals_match_the_twin_row_by_row(signals: an.Amendments, world: World) -> None:
+    rows = world.landmark_rows(AT_12_MONTHS)
+    assert len(signals.time) == len(rows) > 0
+    time, event, _, _ = _followed(rows)
+    assert np.array_equal(signals.time, time)
+    assert np.array_equal(signals.event, event)
+    expected = [signals_at(trial, day) for trial, day in rows]
+    for key, _, _ in an.SIGNALS:
+        mine = [row[key] for row in expected]
+        assert signals.signals[key].tolist() == mine, key
+        assert {0, 1} <= set(mine), key  # the registry shows the signal both ways
+    assert signals.versions.tolist() == [
+        sum(v["effective_date"] <= day for v in trial.versions) for trial, day in rows
+    ]
+    moved = signals.signals["primary_completion_later"] == 1
+    assert set(signals.slip_months[moved].tolist()) == {12.0}  # from month 24 to month 36
+    assert np.isnan(signals.slip_months).sum() == 1  # the trial with no first primary date
 
 
-def test_amendment_tables(con: duckdb.DuckDBPyConnection, world: World) -> None:
-    am = an.amendment_signals(con, AT_12_MONTHS, quiet_months=6)
-    cif = {row["key"]: row for row in an.amendments_cif(am, 24)}
-    suspended = cif["ever_suspended"]
-    assert suspended["with"] == world.count("suspended_terminated", years=BEFORE_2017)
-    assert suspended["cif_with"] == pytest.approx(1.0)  # every one is terminated at month 16
-    assert suspended["with"] + suspended["without"] + suspended["unknown"] == len(am.time)
-    assert cif["enrollment_cut"]["cif_with"] == 0  # the trials with a cut target all complete
-    assert "completion_later" not in cif  # no trial shows it, so there is nothing to compare
-    ordered = [row["cif_with"] for row in an.amendments_cif(am, 24)]
-    assert ordered == sorted(ordered, reverse=True)
+def test_the_edge_cases_of_the_state_at_the_landmark(signals: an.Amendments, world: World) -> None:
+    names = [trial.name for trial, _ in world.landmark_rows(AT_12_MONTHS)]
 
-    outcomes = an.amendments_by_outcome(am)
-    assert [row["group"] for row in outcomes] == [label for _, label in an.LATER_OUTCOMES]
-    assert sum(row["trials"] for row in outcomes) == len(am.time)
-    stopped = outcomes[0]
-    stops = ("stalled_withdrawn", "suspended_terminated", "slipped_terminated", "terminated_late")
-    assert stopped["trials"] == world.count(*stops, years=BEFORE_2017)
-    assert stopped["ever_suspended"] == pytest.approx(
-        world.count("suspended_terminated", years=BEFORE_2017) / stopped["trials"]
+    def shown(name: str) -> dict[str, int]:
+        at = names.index(name)
+        return {key: int(values[at]) for key, values in signals.signals.items()}
+
+    # A version posted on the landmark day is in effect on that day.
+    assert shown("on_landmark_day")["ever_suspended"] == 1
+    # On a shared post date the higher version number wins: recruiting, target unchanged.
+    tied = shown("shared_post_date")
+    assert (tied["not_yet_recruiting"], tied["target_cut"]) == (0, 0)
+    # Suspended at some point is not suspended now.
+    assert shown("suspended_and_resumed")["ever_suspended"] == 1
+    # Waiting is overdue only once the start month has ended.
+    assert shown("start_month_passed")["start_overdue"] == 1
+    for waiting in ("start_in_landmark_month", "start_still_ahead"):
+        assert (shown(waiting)["not_yet_recruiting"], shown(waiting)["start_overdue"]) == (1, 0)
+    # A primary completion day earlier in the landmark's month has not passed, by month.
+    assert shown("completion_in_landmark_month")["primary_completion_overdue"] == 0
+    assert shown("overdue_completed")["primary_completion_overdue"] == 1
+    # The quiet rule is 6 months, inclusive.
+    assert shown("quiet_for_6_months")["quiet"] == 1
+    assert shown("quiet_for_5_months")["quiet"] == 0
+    # The 10% thresholds are inclusive, and 5% is under them.
+    assert [shown(f"target_{n}")["target_cut"] for n in (90, 95)] == [1, 0]
+    assert [shown(f"target_{n}")["target_raised"] for n in (110, 105)] == [1, 0]
+    # Once the count is ACTUAL it is the number enrolled, not a target.
+    short = shown("closed_short")
+    assert (short["enrollment_closed"], short["enrollment_short"], short["target_cut"]) == (
+        1,
+        1,
+        -1,
     )
+    assert shown("closed_on_target")["enrollment_short"] == 0
+    assert shown("closed_from_the_start")["enrollment_short"] == -1
+    assert shown("target_90")["enrollment_short"] == -1
+    # Missing inputs make a signal unknown, never "no".
+    missing = shown("missing_inputs")
+    for key in ("primary_completion_later", "primary_completion_earlier", "target_cut"):
+        assert missing[key] == -1, key
+
+
+def test_amendment_tables(signals: an.Amendments, world: World) -> None:
+    rows = world.landmark_rows(AT_12_MONTHS)
+    expected = [signals_at(trial, day) for trial, day in rows]
+    time, event, _, _ = _followed(rows)
+    table = an.amendments_cif(signals, 24)
+    assert [r["cif_with"] for r in table] == sorted((r["cif_with"] for r in table), reverse=True)
+    assert {row["key"] for row in table} == {key for key, _, _ in an.SIGNALS}
+    for row in table:
+        flag = np.array([e[row["key"]] for e in expected])
+        counts = ((flag == 1).sum(), (flag == 0).sum(), (flag == -1).sum())
+        assert (row["with"], row["without"], row["outside"]) == counts, row["key"]
+        with_signal = _cif(time[flag == 1], event[flag == 1], 24)
+        without = _cif(time[flag == 0], event[flag == 0], 24)
+        assert row["cif_with"] == pytest.approx(with_signal), row["key"]
+        assert row["cif_without"] == pytest.approx(without), row["key"]
+        assert row["signal"] == an.SIGNAL_LABELS[row["key"]]
+    among = {row["key"]: row["among"] for row in table}
+    assert among["target_cut"] == among["target_raised"] == an.COUNT_ESTIMATED
+    assert among["enrollment_short"] == an.COUNT_ACTUAL
+    assert among["ever_suspended"] == an.EVERYONE
+
+    outcomes = an.amendments_by_outcome(signals)
+    assert [row["group"] for row in outcomes] == [label for _, label in an.LATER_OUTCOMES]
+    assert sum(row["trials"] for row in outcomes) == len(rows)
+    for code, row in zip((EVENT_STOP, EVENT_COMPLETE, EVENT_CENSORED), outcomes, strict=True):
+        assert row["trials"] == (event == code).sum()
+        for key in ("ever_suspended", "target_cut", "enrollment_short"):
+            flag = np.array([e[key] for e in expected])[event == code]
+            known = flag[flag >= 0]  # the share is taken among the rows where it is known
+            if known.size:
+                assert row[key] == pytest.approx(known.mean()), key
+            else:
+                assert row[key] is None, key  # no row to take a share of
+    stopped = outcomes[0]
     assert stopped["median_slip_months"] == 12
+    assert stopped["median_versions"] == 2
+    assert stopped["target_cut"] < 1
 
 
 def _altered(world: World, tmp_path: Path, where: str) -> an.Amendments:
@@ -229,13 +360,14 @@ def _altered(world: World, tmp_path: Path, where: str) -> an.Amendments:
             f"""UPDATE versions SET overall_status = 'SUSPENDED',
               primary_completion_date = primary_completion_date + INTERVAL 5 YEAR,
               completion_date = completion_date + INTERVAL 5 YEAR,
-              start_date = DATE '2001-01-01', enrollment_count = 1
+              start_date = DATE '2001-01-01', enrollment_count = 1, enrollment_type = 'ACTUAL'
             WHERE {where}"""
         )
         edit.execute(
             """INSERT INTO versions BY NAME
-            SELECT * REPLACE (nct_version + 100 AS nct_version, DATE '2026-09-01' AS effective_date,
-              'SUSPENDED' AS overall_status, 5 AS enrollment_count)
+            SELECT * REPLACE (nct_version + 100 AS nct_version,
+              DATE '2026-09-01' AS effective_date, 'SUSPENDED' AS overall_status,
+              5 AS enrollment_count)
             FROM versions WHERE nct_version = 0"""
         )
     with an.connect(replace(world.sources, warehouse=warehouse)) as con:
@@ -243,67 +375,99 @@ def _altered(world: World, tmp_path: Path, where: str) -> an.Amendments:
 
 
 def test_signals_ignore_everything_posted_after_the_landmark(
-    con: duckdb.DuckDBPyConnection, world: World, tmp_path: Path
+    signals: an.Amendments, world: World, tmp_path: Path
 ) -> None:
     """Point-in-time (Section 8, rule 1): rewrite every version posted after the 12-month
     landmark and add a later version to every trial. Nothing may change."""
-    original = an.amendment_signals(con, AT_12_MONTHS, quiet_months=6)
     after = "effective_date > study_first_post_date + INTERVAL 12 MONTH"
     altered = _altered(world, tmp_path, after)
-    assert np.array_equal(altered.versions, original.versions)
-    assert np.array_equal(altered.slip_months, original.slip_months, equal_nan=True)
-    for key, values in original.signals.items():
+    assert np.array_equal(altered.versions, signals.versions)
+    assert np.array_equal(altered.slip_months, signals.slip_months, equal_nan=True)
+    for key, values in signals.signals.items():
         assert np.array_equal(altered.signals[key], values), key
 
 
-def test_signals_do_change_when_an_earlier_version_changes(
-    con: duckdb.DuckDBPyConnection, world: World, tmp_path: Path
+def test_signals_do_change_when_a_version_on_or_before_the_landmark_changes(
+    signals: an.Amendments, world: World, tmp_path: Path
 ) -> None:
     """The control for the test above: the same rewrite on versions posted on or before the
-    landmark is seen."""
-    original = an.amendment_signals(con, AT_12_MONTHS, quiet_months=6)
+    landmark is seen, and so is a rewrite of the landmark day alone."""
     on_or_before = "nct_version > 0 AND effective_date <= study_first_post_date + INTERVAL 12 MONTH"
     altered = _altered(world, tmp_path, on_or_before)
-    assert not np.array_equal(altered.signals["ever_suspended"], original.signals["ever_suspended"])
-    assert not np.array_equal(altered.signals["enrollment_cut"], original.signals["enrollment_cut"])
+    for key in ("ever_suspended", "enrollment_closed"):
+        assert not np.array_equal(altered.signals[key], signals.signals[key]), key
+
+    landmark_day = tmp_path / "day"
+    landmark_day.mkdir()
+    on_the_day = "effective_date = study_first_post_date + INTERVAL 12 MONTH"
+    altered = _altered(world, landmark_day, on_the_day)
+    names = [trial.name for trial, _ in world.landmark_rows(AT_12_MONTHS)]
+    before, after = signals.signals["enrollment_closed"], altered.signals["enrollment_closed"]
+    assert [names[i] for i in np.flatnonzero(before != after)] == ["on_landmark_day"]
 
 
-def test_registration_by_year_marks_later_years_descriptive(
+def test_registration_by_year_is_by_month_and_marks_later_years(
     con: duckdb.DuckDBPyConnection, world: World
 ) -> None:
     rows = {row["year"]: row for row in an.registration_by_year(con)}
-    assert sorted(rows) == [*MODELING_YEARS, COVID_YEAR]
-    assert [rows[y]["descriptive"] for y in sorted(rows)] == [False] * len(MODELING_YEARS) + [True]
-    year = MODELING_YEARS[0]
-    mine = [t for t in world.trials if t.year == year]
-    dated = [t for t in mine if t.start_month is not None]
-    late = [t for t in dated if t.start_month is not None and t.start_month < 0]
-    over = [t for t in dated if t.start_month is not None and t.start_month < -12]
-    assert rows[year]["trials"] == len(mine)
-    assert rows[year]["share_after_start"] == pytest.approx(len(late) / len(dated))
-    assert rows[year]["share_over_a_year_late"] == pytest.approx(len(over) / len(dated))
-    assert rows[year]["median_days_submit_to_post"] == 5
-    assert rows[COVID_YEAR]["share_after_start"] == 1.0
+    assert sorted(rows) == [*MODELING_YEARS, 2018, COVID_YEAR]
+    assert [rows[y]["descriptive"] for y in sorted(rows)] == [False] * 4 + [True, True]
+    for year in (2015, 2018):
+        mine = [t for t, _ in world.landmark_rows(0, dt.date(2100, 1, 1)) if t.year == year]
+        starts = [(t, month_end(t.versions[0]["start_date"])) for t in mine]
+        dated = [(t, end) for t, end in starts if end is not None]
+        late = [(t.first_post - end).days for t, end in dated if end < t.first_post]
+        by_day = [t for t, _ in dated if t.versions[0]["start_date_precision"] == "day"]
+        row = rows[year]
+        assert row["trials"] == len(mine)
+        assert row["with_start_date"] == len(dated)
+        assert row["share_after_start"] == pytest.approx(len(late) / len(dated))
+        assert row["share_day_precision"] == pytest.approx(len(by_day) / len(dated))
+        assert row["median_days_late"] == pytest.approx(np.median(late))
+        assert row["share_over_a_year_late"] == pytest.approx(
+            sum(days > 365 for days in late) / len(dated)
+        )
+        assert row["median_days_submit_to_post"] == 5
+    assert 0 < rows[2015]["share_day_precision"] < 1
+    assert 0 < rows[2015]["share_over_a_year_late"] < rows[2015]["share_after_start"] < 1
+    assert rows[2015]["with_start_date"] < rows[2015]["trials"]
 
 
-def test_post_dates_by_year(con: duckdb.DuckDBPyConnection) -> None:
-    rows = an.post_dates_by_year(con)
-    assert [row["year"] for row in rows] == sorted(row["year"] for row in rows)
-    for row in rows:
+def test_post_dates_and_the_posting_lag(con: duckdb.DuckDBPyConnection, world: World) -> None:
+    versions = [v for trial in world.trials for v in trial.versions]
+
+    def lags(rows: list[dict]) -> list[int]:
+        return [(v["effective_date"] - v["submitted_date"]).days for v in rows]
+
+    by_year = an.post_dates_by_year(con)
+    assert [row["year"] for row in by_year] == sorted({v["effective_date"].year for v in versions})
+    for row in by_year:
+        mine = [v for v in versions if v["effective_date"].year == row["year"]]
+        assert row["versions"] == len(mine)
         assert row["share_estimated"] == (1.0 if row["year"] < 2017 else 0.0)
         assert row["descriptive"] == (row["year"] >= 2018)
-        assert row["median_days_to_post"] == 2
-        assert row["p90_days_to_post"] == 2
-    assert rows[0]["year"] == MODELING_YEARS[0]
+        assert row["median_days_to_post"] == pytest.approx(np.median(lags(mine)))
+        assert row["p90_days_to_post"] == pytest.approx(np.percentile(lags(mine), 90))
+    assert any(row["median_days_to_post"] != row["p90_days_to_post"] for row in by_year)
 
-
-def _end(trial_year: int, history: str) -> dt.date:
-    """When a scripted trial leaves follow-up: its terminal version, or the data cutoff."""
-    if history == "covid":
-        return dt.date(2021, 6, 1)
-    month, status, _ = HISTORIES[history][-1]
-    terminal = status in ("TERMINATED", "WITHDRAWN", "COMPLETED")
-    return add_months(first_post(trial_year), month) if terminal else CUTOFF
+    table = an.posting_lag(con)
+    assert [(row["date_type"], row["is_first"]) for row in table] == [
+        ("ACTUAL", True), ("ACTUAL", False), ("ESTIMATED", True), ("ESTIMATED", False),
+    ]  # fmt: skip
+    for row in table:
+        mine = [
+            v
+            for v in versions
+            if v["effective_date"] < BEFORE
+            and v["effective_date_type"] == row["date_type"]
+            and (v["nct_version"] == 0) == row["is_first"]
+        ]
+        assert row["versions"] == len(mine) > 0
+        assert row["median_days"] == pytest.approx(np.median(lags(mine)))
+        assert row["p90_days"] == pytest.approx(np.percentile(lags(mine), 90))
+    first, later = table[0], table[1]
+    assert first["median_days"] == 2  # a first version is posted 2 days after submission here
+    assert later["median_days"] > first["median_days"]
 
 
 def test_covid_period_rates(con: duckdb.DuckDBPyConnection, world: World) -> None:
@@ -313,25 +477,36 @@ def test_covid_period_rates(con: duckdb.DuckDBPyConnection, world: World) -> Non
     assert months[-1] == dt.date(2021, 12, 1)
     at = {month: i for i, month in enumerate(months)}
 
+    def posted_in(month: dt.date, trial: Trial, status: str) -> int:
+        return sum(
+            v["overall_status"] == status and v["effective_date"].replace(day=1) == month
+            for v in trial.versions
+        )
+
+    for month, i in at.items():
+        under_follow_up = sum(t.first_post <= month < outcome(t)[0] for t in world.trials)
+        assert monthly["open_trials"][i] == under_follow_up, month
+        for key, status in (("terminated", "TERMINATED"), ("withdrawn", "WITHDRAWN")):
+            assert monthly[key][i] == sum(posted_in(month, t, status) for t in world.trials), month
+        # A suspension is a SUSPENDED version that follows a version with another status.
+        suspensions = sum(
+            now["overall_status"] == "SUSPENDED"
+            and previous["overall_status"] != "SUSPENDED"
+            and now["effective_date"].replace(day=1) == month
+            for t in world.trials
+            for previous, now in zip(t.versions, t.versions[1:], strict=False)
+        )
+        assert monthly["suspended"][i] == suspensions, month
+
     april = at[COVID_SUSPENDED.replace(day=1)]
     assert monthly["suspended"][april] == COVID_TRIALS
     assert monthly["suspended"][april + 1] == 0  # a second SUSPENDED version is no new suspension
-    for month, i in at.items():
-        under_follow_up = sum(
-            first_post(t.year) <= month < _end(t.year, t.history) for t in world.trials
-        )
-        assert monthly["open_trials"][i] == under_follow_up, month
+    assert monthly["suspended"][at[dt.date(2019, 6, 1)]] == 0  # registered while suspended
     assert monthly["suspended_per_1000"][april] == pytest.approx(
         1000 * COVID_TRIALS / monthly["open_trials"][april]
     )
-    # Trials first posted in March 2017 and terminated 40 months later: July 2020.
-    assert monthly["terminated"][at[dt.date(2020, 7, 1)]] == world.count(
-        "terminated_late", years=(2017,)
-    )
-    assert monthly["withdrawn"][at[dt.date(2017, 8, 1)]] == world.count(
-        "withdrawn_early", years=(2017,)
-    )
-    assert monthly["terminated"].sum() + monthly["withdrawn"].sum() > 0
+    assert monthly["terminated"].sum() > 0
+    assert monthly["withdrawn"].sum() > 0
 
     periods = [("spring", dt.date(2020, 3, 1), dt.date(2020, 5, 1))]
     (summary,) = an.covid_period_summary(monthly, periods)
@@ -341,3 +516,16 @@ def test_covid_period_rates(con: duckdb.DuckDBPyConnection, world: World) -> Non
         monthly["suspended_per_1000"][window].mean()
     )
     assert summary["open_trials"] == pytest.approx(monthly["open_trials"][window].mean())
+
+
+def test_the_state_twin_itself(world: World) -> None:
+    """The twin's two rules, on the edge cases they exist for."""
+    tied = world.named("shared_post_date")
+    shared = tied.versions[1]["effective_date"]
+    assert tied.versions[2]["effective_date"] == shared
+    assert state_at(tied, shared)["nct_version"] == 2
+    on_day = world.named("on_landmark_day")
+    landmark = on_day.versions[1]["effective_date"]
+    assert state_at(on_day, landmark)["overall_status"] == "SUSPENDED"
+    assert state_at(on_day, landmark - dt.timedelta(days=1))["overall_status"] == "RECRUITING"
+    assert HISTORIES["still_open"][-1][1] == "RECRUITING"

@@ -2,26 +2,31 @@
 
 The synthetic registry is not built to reproduce the real findings, so the tests that render
 text replace the findings with two fixed ones. The findings and their checks have their own
-tests in test_findings.py.
+tests in test_findings.py, and one test here runs the real findings on computed results to
+show that the two fit together.
 """
 
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from trialpulse.cli import REFUSED_EXIT_CODE, RefusedError, run
 from trialpulse.cohort.audit import MODELING_EDA_BEFORE
 from trialpulse.config import REPO_ROOT, load_project_config
+from trialpulse.eda import analysis as an
 from trialpulse.eda import document, report
-from trialpulse.eda.charts import FIGURES
-from trialpulse.eda.findings import Finding, StaleFindingError
-from trialpulse.eda.results import Results, compute
+from trialpulse.eda.document import pct
+from trialpulse.eda.findings import BUILDERS, Finding, StaleFindingError
+from trialpulse.eda.refs import FIGURES, TABLES, cite
+from trialpulse.eda.results import STATE_MONTHS, STATE_TABLE_MONTHS, Results, compute
 
-from .conftest import COVID_YEAR, World
+from .conftest import BEFORE, COVID_YEAR, World, cif, followed
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 CITES = re.compile(r"\((Figures? \d|Table \d)")
+MODELING_TAG = "*Modeling-relevant: nothing dated 2018-01-01 or later is read.*"
 STUB = [
     Finding("First finding", "Something measured (Figure 1, Table 1).", "Do this."),
     Finding("Second finding", "Something else (Table 2).", "Do that."),
@@ -49,6 +54,29 @@ def _section(text: str, heading: str) -> str:
     return text[start : end if end != -1 else len(text)]
 
 
+def _bullets(section: str) -> list[str]:
+    return [line for line in section.splitlines() if line.startswith("- ")]
+
+
+def _table(text: str, key: str) -> list[list[str]]:
+    """The cells of a table, by its name in refs: the header row, then the body rows."""
+    lines = text.splitlines()
+    caption = f"Table {TABLES.index(key) + 1}. "
+    start = next(i for i, line in enumerate(lines) if line.startswith(caption))
+    rows: list[list[str]] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("|"):
+            rows.append([cell.strip() for cell in line.strip("|").split("|")])
+        elif rows:
+            break
+    return [rows[0], *rows[2:]]
+
+
+def _row(table: list[list[str]], first_cell: str) -> dict[str, str]:
+    (row,) = [r for r in table[1:] if r[0] == first_cell]
+    return dict(zip(table[0], row, strict=True))
+
+
 def _args(world: World, out: Path) -> list[str]:
     sources = world.sources
     return [
@@ -68,6 +96,10 @@ def test_the_document_opens_with_the_disclaimer_and_its_sources(text: str) -> No
     assert "Data as of 2026-09-25" in head
     assert "CC-BY-NC-4.0" in head
     assert "dataset revision synthetic" in head  # the stamp of the warehouse it was built from
+    assert '"Elevated early-stop risk" is an operational statement about a trial record' in head
+    assert "never a statement about whether a treatment works" in head
+    assert "under the registry's UNKNOWN rule" in head  # both kinds of censoring are named
+    assert "an outcome on or after that date counts as not observed yet" in head
     assert "—" not in text
     assert text.endswith("\n")
     assert not text.endswith("\n\n")
@@ -77,53 +109,90 @@ def test_every_statement_cites_a_figure_or_a_table(text: str) -> None:
     """Step 5 acceptance: every claim in eda.md points to a figure or table. Claims are the
     bullets of the numbered sections and the findings."""
     body = text[text.index("\n## 1. ") : text.index("\n## Not in this report")]
-    bullets = [line for line in body.splitlines() if line.startswith("- ")]
-    assert len(bullets) >= 15
+    bullets = _bullets(body)
+    assert len(bullets) >= 20
     for bullet in bullets:
         assert CITES.search(bullet), bullet
     numbered = re.findall(r"^\d+\. \*\*.*$", _section(text, "8. Findings"), flags=re.MULTILINE)
     assert len(numbered) == len(STUB)
-    for finding in numbered:
-        assert CITES.search(finding), finding
     assert text.count("*Implication for modeling:*") == len(STUB)
 
 
+def test_the_numbers_of_a_statement_are_in_a_table_it_cites(text: str) -> None:
+    """Each percentage and each rate with two decimals in a bullet appears in a table the
+    bullet cites, so a bullet cannot cite the wrong table for its numbers."""
+    tables = {
+        n: " ".join(" ".join(row) for row in _table(text, key)) for n, key in enumerate(TABLES, 1)
+    }
+    body = text[text.index("\n## 1. ") : text.index("\n## 8. ")]
+    checked = 0
+    for bullet in _bullets(body):
+        cited = [int(n) for n in re.findall(r"Table (\d+)", bullet)]
+        if not cited:
+            continue
+        for number in re.findall(r"\d+\.\d%|\b\d+\.\d\d\b", bullet):
+            assert any(number in tables[n] for n in cited), (number, bullet)
+            checked += 1
+    assert checked >= 40
+
+
 def test_figures_and_tables_are_numbered_in_order_and_cited_ones_exist(text: str) -> None:
-    images = re.findall(r"!\[Figure (\d+): [^\]]+\]\(figures/([^)]+)\)", text)
-    assert [int(n) for n, _ in images] == sorted(FIGURES)
-    assert [name for _, name in images] == [FIGURES[n][0] for n in sorted(FIGURES)]
+    images = re.findall(r"!\[Figure (\d+): ([^\]]+)\]\(figures/([^)]+)\)", text)
+    assert [int(n) for n, _, _ in images] == list(range(1, len(FIGURES) + 1))
+    assert [(caption, name) for _, caption, name in images] == [
+        (caption, name) for name, caption in FIGURES.values()
+    ]
     tables = [int(n) for n in re.findall(r"^Table (\d+)\. ", text, flags=re.MULTILINE)]
-    assert tables == list(range(1, len(tables) + 1))
-    assert len(tables) == 11
+    assert tables == list(range(1, len(TABLES) + 1))
     for cited in re.findall(r"Table (\d+)", text):
         assert int(cited) in tables
     for cited in re.findall(r"Figures? (\d+)", text):
-        assert int(cited) in FIGURES
-    assert set(re.findall(r"Figures (\d+) and (\d+)", text)) <= {("4", "5")}
+        assert 1 <= int(cited) <= len(FIGURES)
     rules = [line for line in text.splitlines() if line.startswith("| --- |")]
     assert len(rules) == len(tables)  # one Markdown table under each table caption
 
 
-def test_modeling_sections_say_so_and_use_landmarks_before_2018_only(
+def test_citations_are_built_from_names() -> None:
+    assert cite("sponsor", "sponsor") == "(Figure 1, Table 1)"
+    assert cite(("states", "naive"), "states") == "(Figures 4 and 5, Table 6)"
+    assert cite(tables=("signals_outcome", "signals_cif")) == "(Tables 7 and 8)"
+    assert cite("covid") == "(Figure 9)"
+    with pytest.raises(ValueError, match="at least one"):
+        cite()
+    with pytest.raises(ValueError, match="not in tuple"):
+        cite(tables="no_such_table")
+
+
+def test_modeling_sections_say_so_and_read_nothing_from_2018_on(
     text: str, results: Results
 ) -> None:
-    tag = "*Modeling-relevant: landmarks before 2018-01-01 only.*"
     for heading in ("1. Early-stop risk", "3. Stopping competes", "4. Amendments"):
-        assert tag in _section(text, heading), heading
+        assert MODELING_TAG in _section(text, heading), heading
     assert int(results.reg.year.max()) < MODELING_EDA_BEFORE.year
     first = _section(text, "1. Early-stop risk")
-    assert str(COVID_YEAR) not in first  # the year registered after 2018 is in no modeling table
-    assert "first posted from 2014-01-01 to 2017-12-31" in first
+    assert (
+        "first posted from 2014-01-01 to 2017-12-31, with outcomes observed before 2018-01-01"
+        in first
+    )
+    years = [row[0] for row in _table(text, "year")[1:]]
+    assert years == ["2014", "2015", "2016", "2017", "All"]  # no later registration year
+    # A year is shown only where all of its trials could be followed for the whole horizon.
+    by_year = {row[0]: row for row in _table(text, "year")[1:]}
+    assert [by_year[y][3] == "n/a" for y in ("2015", "2016", "2017")] == [False, False, True]
+    assert [by_year[y][4] == "n/a" for y in ("2015", "2016", "2017")] == [False, True, True]
+    assert "Modeling-relevant: nothing dated 2018-01-01 or later is read." in _section(
+        text, "5. Registration lag"
+    )
 
 
 def test_phase_is_labeled_descriptive_only_not_used_for_modeling(text: str) -> None:
     section = _section(text, "2. Phase")
     assert section.startswith("\n## 2. Phase (descriptive only, not used for modeling)")
     assert "*Descriptive only, not used for modeling.*" in section
-    assert "Table 4. Descriptive only, not used for modeling:" in section
+    assert f"Table {TABLES.index('phase') + 1}. Descriptive only, not used for modeling:" in section
     assert "ADR 0006" in section
     assert "current-record phase" in section
-    for bullet in (line for line in section.splitlines() if line.startswith("- ")):
+    for bullet in _bullets(section):
         assert bullet.startswith("- Descriptive only: "), bullet
     assert "No current record" in section
 
@@ -132,22 +201,143 @@ def test_later_years_are_labeled_descriptive_only(text: str) -> None:
     covid = _section(text, "7. The COVID period")
     assert covid.startswith("\n## 7. The COVID period (descriptive only)")
     assert "*Descriptive only, not used for modeling.*" in covid
-    assert "Table 11. Descriptive only:" in covid
-    for bullet in (line for line in covid.splitlines() if line.startswith("- ")):
+    assert f"Table {TABLES.index('covid') + 1}. Descriptive only:" in covid
+    for bullet in _bullets(covid):
         assert bullet.startswith("- Descriptive only: "), bullet
-    for heading in ("5. Registration lag", "6. Estimated post dates"):
-        section = _section(text, heading)
-        rows = [line for line in section.splitlines() if line.startswith(f"| {COVID_YEAR} |")]
-        assert rows, heading
-        assert all("| descriptive only |" in row for row in rows)
-        assert "| 2016 | modeling |" in section
-        assert "| 2016 | descriptive only |" not in section
+    lag = _section(text, "5. Registration lag")
+    assert "*Years before 2018 are modeling-relevant; rows from 2018 on are descriptive only" in lag
+    assert "Rows from 2018 on are still marked descriptive only" in _section(text, "6. Estimated")
+    for key in ("timing_year", "post_dates"):
+        use = {row[0]: row[1] for row in _table(text, key)[1:]}
+        assert use["2016"] == use["2017"] == "modeling", key
+        assert use["2018"] == use[str(COVID_YEAR)] == "descriptive only", key
+    # The bullets of the two sections quote modeling years only.
+    for bullet in _bullets(lag) + _bullets(_section(text, "6. Estimated")):
+        assert not re.search(r"\b(2018|2019|202\d)\b", bullet), bullet
 
 
 def test_the_reasons_section_is_left_out_and_said_to_be(text: str) -> None:
     assert "## Not in this report" in text
     assert "waits for the final Step 6 labels" in text
     assert "why_stopped" not in text
+
+
+def test_table_cells_hold_the_known_answers(text: str, world: World) -> None:
+    """Parsed from the rendered Markdown and compared with the twins, column by column."""
+    rows = world.landmark_rows(0)
+    time, event, kind, _ = followed(rows)
+    sponsor = np.array([trial.sponsor for trial, _ in rows])
+    table = _table(text, "sponsor")
+    assert table[0][:4] == ["Sponsor class", "Trials", "Early stops observed", "CIF at 12 months"]
+    for name in ("INDUSTRY", "OTHER"):
+        mask = sponsor == name
+        row = _row(table, name)
+        assert row["Trials"] == f"{mask.sum():,}"
+        assert row["Early stops observed"] == f"{(event[mask] == 1).sum():,}"
+        assert row["CIF at 12 months"] == pct(cif(time[mask], event[mask], 12))
+        assert row["CIF at 24 months"] == pct(cif(time[mask], event[mask], 24))
+        assert row["Trials"] != row["Early stops observed"]
+
+    differ = False
+    for months in STATE_TABLE_MONTHS:
+        states = _row(_table(text, "states"), str(months))
+        terminated = pct(cif(time, kind, months, an.KIND_TERMINATED))
+        withdrawn = pct(cif(time, kind, months, an.KIND_WITHDRAWN))
+        assert states["Terminated"] == terminated, months
+        assert states["Withdrawn"] == withdrawn, months
+        assert states["Completed"] == pct(cif(time, kind, months, an.KIND_COMPLETED)), months
+        differ = differ or len({terminated, withdrawn, states["Completed"]}) == 3
+    assert differ  # at some month the three columns differ, so a swap would show
+
+    index_2 = world.landmark_rows(2)
+    time_2, event_2, _, _ = followed(index_2)
+    landmark = _row(_table(text, "landmark"), "12 (landmark index 2)")
+    assert landmark["Trials"] == f"{len(index_2):,}"
+    assert landmark["CIF within 12 months of the landmark"] == pct(cif(time_2, event_2, 12))
+
+    lapse = _row(_table(text, "lapse"), "OTHER")
+    assert lapse["Censored under the UNKNOWN rule before 2018-01-01"] == "1"
+    assert _row(_table(text, "lapse"), "INDUSTRY")["Incidence at 60 months"] == "0.0%"
+
+
+def test_each_sentence_gives_its_numbers_to_the_right_group(
+    text: str, results: Results, world: World
+) -> None:
+    rows = world.landmark_rows(0)
+    time, event, kind, _ = followed(rows)
+    sponsor = np.array([trial.sponsor for trial, _ in rows])
+
+    def at(name: str, months: int) -> str:
+        return pct(cif(time[sponsor == name], event[sponsor == name], months))
+
+    assert at("INDUSTRY", 12) != at("OTHER", 12)
+    assert (
+        f"- INDUSTRY trials are at {at('INDUSTRY', 12)} after 12 months and "
+        f"{at('INDUSTRY', 60)} after 60; OTHER trials are at {at('OTHER', 12)} and "
+        f"{at('OTHER', 60)} (Figure 1, Table 1)."
+    ) in text
+
+    def state(cause: int, months: int) -> str:
+        return pct(cif(time, kind, months, cause))
+
+    end = STATE_MONTHS
+    assert (
+        f"- By 12 months {state(an.KIND_WITHDRAWN, 12)} of trials are withdrawn and "
+        f"{state(an.KIND_TERMINATED, 12)} terminated; by {end} months, "
+        f"{state(an.KIND_WITHDRAWN, end)} and {state(an.KIND_TERMINATED, end)} (Table 6)."
+    ) in text
+
+    stopped, completed = results.amendments_outcome[0], results.amendments_outcome[1]
+    slip, waiting = "primary_completion_later", "not_yet_recruiting"
+    assert stopped[slip] != completed[slip]
+    assert stopped[waiting] != completed[waiting]
+    assert (
+        f"- {pct(stopped[slip])} of the trials that later stopped early had moved their primary "
+        f"completion date later by the landmark, and {pct(completed[slip])} of the trials that "
+        "later completed (Table 7)."
+    ) in text
+    assert (
+        f"- {pct(stopped[waiting])} of the trials that later stopped early were still not yet "
+        f"recruiting, against {pct(completed[waiting])} of those that later completed"
+    ) in text
+
+    phases = [r for r in results.phase if r["group"] in an.PHASE_ORDER]
+    low, high = min(phases, key=lambda r: r["cif_24m"]), max(phases, key=lambda r: r["cif_24m"])
+    assert low["cif_24m"] < high["cif_24m"]
+    assert (
+        f'runs from {pct(low["cif_24m"])} for "{low["group"]}" to {pct(high["cif_24m"])} for '
+        f'"{high["group"]}" (Figure 3, Table 5).'
+    ) in text
+
+    signal = {r["key"]: r for r in results.amendments_cif}
+    short = signal["enrollment_short"]
+    assert short["cif_with"] != short["cif_without"]
+    assert (
+        f"- The 24-month CIF is {pct(short['cif_with'])} where the number enrolled is 10% or "
+        f"more below the first target and {pct(short['cif_without'])} for the other trials "
+        "with an ACTUAL enrollment count (Figure 6, Table 8)."
+    ) in text
+    cells = _row(_table(text, "signals_cif"), "Enrolled 10% or more below the first target")
+    assert cells["CIF at 24 months with"] == pct(short["cif_with"])
+    assert cells["CIF at 24 months without"] == pct(short["cif_without"])
+    assert cells["Compared among"] == an.COUNT_ACTUAL
+
+
+def test_the_real_findings_fit_the_computed_results(results: Results) -> None:
+    """The synthetic registry need not support the real findings, but each one must run on
+    results that `compute` produced: it writes a finding or refuses, and never trips over a
+    missing key or an empty group."""
+    outcomes = set()
+    for build in BUILDERS:
+        try:
+            finding = build(results)
+        except StaleFindingError:
+            outcomes.add("refused")
+        else:
+            outcomes.add("written")
+            assert CITES.search(finding.evidence), finding.title
+    assert outcomes <= {"refused", "written"}
+    assert "refused" in outcomes  # this registry was not made to agree with the real one
 
 
 def test_a_stale_finding_stops_the_command_before_anything_is_written(
@@ -177,6 +367,10 @@ def test_a_missing_input_is_refused_with_the_command_that_creates_it(
     assert not (tmp_path / "eda.md").exists()
 
 
+def test_the_report_reads_nothing_after_2018_by_default() -> None:
+    assert MODELING_EDA_BEFORE == BEFORE  # the date the twins and the document tests assume
+
+
 @pytest.mark.slow
 def test_the_command_writes_the_report_and_every_figure_the_same_way_twice(
     world: World, tmp_path: Path, stub_findings: None, text: str
@@ -185,7 +379,7 @@ def test_the_command_writes_the_report_and_every_figure_the_same_way_twice(
     assert report.main(_args(world, out)) == 0
     assert out.read_text(encoding="utf-8") == text
     figures = sorted((out.parent / "figures").iterdir())
-    assert [p.name for p in figures] == [FIGURES[n][0] for n in sorted(FIGURES)]
+    assert [p.name for p in figures] == sorted(name for name, _ in FIGURES.values())
     first = {p.name: p.read_bytes() for p in figures}
     for name, content in first.items():
         assert content.startswith(PNG_SIGNATURE), name
@@ -199,7 +393,8 @@ def test_the_command_writes_the_report_and_every_figure_the_same_way_twice(
 @pytest.mark.slow
 def test_the_committed_report_is_what_the_code_and_the_data_produce(tmp_path: Path) -> None:
     """With the real data on disk (never in CI), regenerating gives exactly the committed
-    docs/eda.md and figures: nobody edited them by hand or forgot to regenerate."""
+    docs/eda.md and figures: nobody edited them by hand or forgot to regenerate. This is
+    also where the real findings meet the real results."""
     cohort = report.COHORT_DIR
     inputs = [report.WAREHOUSE_PATH, report.CURRENT_FIELDS_PATH]
     inputs += [cohort / "landmarks.parquet", cohort / "outcomes.parquet"]

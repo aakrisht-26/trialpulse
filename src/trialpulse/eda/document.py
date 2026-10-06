@@ -4,26 +4,29 @@ Rules the text follows:
 
 - A bullet in a numbered section states numbers and cites the figure or table that holds
   them. It states no direction; directions are left to the findings, which are checked.
-- A section says at its top whether it is modeling-relevant (landmarks before 2018-01-01
-  only, Section 10) or descriptive only.
+- A section says at its top whether it is modeling-relevant (nothing dated 2018-01-01 or
+  later is read, Section 10) or descriptive only.
+- Figures and tables are cited by name through `refs`, which numbers them.
 """
 
 from collections.abc import Callable, Sequence
 from typing import Any
 
 from trialpulse.eda import analysis as an
-from trialpulse.eda.charts import FIGURES
 from trialpulse.eda.findings import findings
+from trialpulse.eda.refs import FIGURES, cite, figure_number, table_number
 from trialpulse.eda.results import (
     AMENDMENT_LANDMARK_MONTHS,
     COVID_END,
     COVID_START,
     DESCRIPTIVE,
+    LAPSE_MONTHS,
     PHASE_LABEL,
     STATE_MONTHS,
     STATE_TABLE_MONTHS,
     TABLE_MONTHS,
     Results,
+    followed,
     groups,
     row,
 )
@@ -39,7 +42,7 @@ def pct(value: float | None, digits: int = 1) -> str:
 
 
 def num(value: Any) -> str:
-    return "n/a" if value is None else f"{int(value):,}"
+    return "n/a" if value is None else f"{round(value):,}"
 
 
 def dec(value: float | None, digits: int = 0) -> str:
@@ -50,9 +53,14 @@ def days(value: float) -> str:
     return f"{value:.0f} day" if round(value) == 1 else f"{value:.0f} days"
 
 
-def _figure(number: int) -> list[str]:
-    name, caption = FIGURES[number]
+def _figure(key: str) -> list[str]:
+    name, caption = FIGURES[key]
+    number = figure_number(key)
     return [f"![Figure {number}: {caption}](figures/{name})", "", f"*Figure {number}. {caption}.*"]
+
+
+def _table(key: str, caption: str) -> str:
+    return f"Table {table_number(key)}. {caption}"
 
 
 def _cif_table(
@@ -62,7 +70,7 @@ def _cif_table(
     label: Callable[[dict[str, Any]], str] = lambda r: str(r["group"]),
     cif: str = "CIF at {m} months",
 ) -> list[str]:
-    headers = [first, "Trials", "Early stops by the cutoff", *[cif.format(m=m) for m in months]]
+    headers = [first, "Trials", "Early stops observed", *[cif.format(m=m) for m in months]]
     body = [
         [label(r), num(r["trials"]), num(r["early_stops"]), *[pct(r[f"cif_{m}m"]) for m in months]]
         for r in rows
@@ -75,7 +83,7 @@ def _use(r: dict[str, Any]) -> str:
 
 
 def _modeling_tag(res: Results) -> str:
-    return f"*Modeling-relevant: landmarks before {res.before.isoformat()} only.*"
+    return f"*Modeling-relevant: nothing dated {res.before.isoformat()} or later is read.*"
 
 
 def _header(res: Results) -> list[str]:
@@ -101,70 +109,114 @@ def _header(res: Results) -> list[str]:
         '- **What is measured.** An "early stop" is a trial\'s first TERMINATED or WITHDRAWN '
         "version, and completion is the competing event (CLAUDE.md Section 6). Probabilities "
         "are cumulative incidence functions (CIF) from the Aalen-Johansen estimator: a trial "
-        "still open at the data cutoff counts for as long as it was followed, and a completed "
-        "trial can no longer stop early.",
-        f"- **Modeling-relevant** sections use landmarks before {before} only (Section 10), "
-        "because later landmarks belong to the locked test origins. Their outcomes are "
-        "followed to the data cutoff.",
+        "whose follow-up ends without an outcome counts for as long as it was followed, and a "
+        "completed trial can no longer stop early.",
+        f"- **Modeling-relevant** sections read nothing dated {before} or later (Section 10): "
+        f"they use landmarks before {before} only, and an outcome on or after that date counts "
+        "as not observed yet, exactly as for a model trained at the 2018 origin (Section 6). "
+        "The locked test years stay unseen.",
         f"- **{DESCRIPTIVE_ONLY}** sections and rows look at later dates, or at fields that "
         "are not point-in-time. They are labeled, and nothing in them is used to choose "
         "features or models.",
         "- **Phase** has no version history (ADR 0006), so the phase section uses the "
         "current-record phase and is descriptive only, not used for modeling.",
+        "- **Censoring.** Follow-up ends without an outcome in two ways: at the end of the "
+        f"observation window ({before} in modeling-relevant sections), or earlier under the "
+        "registry's UNKNOWN rule, when a record passed its completion date and went 2 years "
+        "without a status verification (ADR 0014). The estimator treats both as unrelated to "
+        f"the outcome; Table {table_number('lapse')} shows how common the second kind is.",
+        "- **Months and dates.** A horizon of m months is m times 365.25 / 12 days after the "
+        "landmark (the evaluation harness of Step 8 counts calendar months, which differs only "
+        "for an event that falls exactly on the horizon day). Dates are compared by calendar "
+        "month, because the registry gives them to the month through 2016 and mostly to the "
+        "day from 2017.",
         "- **Every statement cites the figure or table that holds its numbers.** The findings "
         "in the last section are checked against the numbers each time the report is "
         "regenerated, and the command refuses to write a finding the data no longer supports.",
-        '- This describes registry records. "Elevated early-stop risk" is an operational '
-        "statement about a trial record, never a statement about whether a treatment works.",
         "- **No confidence intervals.** This report describes. Each table shows the size of "
         "its groups, and comparisons with bootstrap intervals come with the models in Steps 9 "
         "to 11.",
+        '- This describes registry records. "Elevated early-stop risk" is an operational '
+        "statement about a trial record, never a statement about whether a treatment works.",
     ]
 
 
 def _risk_after_registration(res: Results) -> list[str]:
     short, long_, far = res.short, res.long, TABLE_MONTHS[-1]
-    cs, cl = f"cif_{short}m", f"cif_{long_}m"
+    cs, cl, lapse = f"cif_{short}m", f"cif_{long_}m", f"lapse_{LAPSE_MONTHS[-1]}m"
     everyone = row(res.sponsor, "group", an.ALL)
     industry, other = row(res.sponsor, "group", "INDUSTRY"), row(res.sponsor, "group", "OTHER")
+    industry_lapse, other_lapse = (row(res.lapse, "group", g) for g in ("INDUSTRY", "OTHER"))
     by_year = groups(res.year)
-    top = max(by_year, key=lambda r: r[cs])
+    short_years, long_years = followed(by_year, cs), followed(by_year, cl)
+    top = max(short_years, key=lambda r: r[cs])
     first, last = res.by_landmark[0], res.by_landmark[-1]
+    before = res.before.isoformat()
+    lapse_headers = ["Sponsor class", "Trials", f"Censored under the UNKNOWN rule before {before}",
+                     *[f"Incidence at {m} months" for m in LAPSE_MONTHS]]  # fmt: skip
+    lapse_body = [
+        [r["group"], num(r["trials"]), num(r["lapsed"]),
+         *[pct(r[f"lapse_{m}m"]) for m in LAPSE_MONTHS]]
+        for r in res.lapse
+    ]  # fmt: skip
     return [
         "## 1. Early-stop risk after registration",
         "",
         _modeling_tag(res),
         f"{num(everyone['trials'])} trials that were open at registration (landmark index 0), "
-        f"first posted from {res.first_year}-01-01 to {res.last_modeling_day.isoformat()} and "
-        f"followed to {res.cutoff.isoformat()}.",
+        f"first posted from {res.first_year}-01-01 to {res.last_modeling_day.isoformat()}, with "
+        f"outcomes observed before {before}.",
         "",
-        *_figure(1),
+        *_figure("sponsor"),
         "",
-        "Table 1. Early-stop CIF by lead sponsor class at registration. OTHER is the registry's "
-        "class for universities, hospitals and other organizations; the remaining classes "
-        "(FED, OTHER_GOV, NETWORK, INDIV, UNKNOWN and records without a class) are pooled.",
+        _table(
+            "sponsor",
+            "Early-stop CIF by lead sponsor class at registration. OTHER is the registry's class "
+            "for universities, hospitals and other organizations; the remaining classes (FED, "
+            "OTHER_GOV, NETWORK, INDIV, UNKNOWN and records without a class) are pooled.",
+        ),
         "",
         *_cif_table(res.sponsor, "Sponsor class", TABLE_MONTHS),
         "",
         f"- {pct(everyone[cs])} of trials stopped early within {short} months of registration "
-        f"and {pct(everyone[cl])} within {long_} months (Table 1).",
+        f"and {pct(everyone[cl])} within {long_} months {cite(tables='sponsor')}.",
         f"- INDUSTRY trials are at {pct(industry[cs])} after {short} months and "
         f"{pct(industry[f'cif_{far}m'])} after {far}; OTHER trials are at {pct(other[cs])} and "
-        f"{pct(other[f'cif_{far}m'])} (Figure 1, Table 1).",
+        f"{pct(other[f'cif_{far}m'])} {cite('sponsor', 'sponsor')}.",
         "",
-        *_figure(2),
+        _table(
+            "lapse",
+            "Censoring under the UNKNOWN rule by sponsor class: trials whose follow-up ended "
+            "that way, and its cumulative incidence with early stop and completion as "
+            "competing events.",
+        ),
         "",
-        "Table 2. Early-stop CIF by year of registration.",
+        *markdown_table(lapse_headers, lapse_body),
+        "",
+        f"- Within {LAPSE_MONTHS[-1]} months of registration {pct(industry_lapse[lapse])} of "
+        f"INDUSTRY trials and {pct(other_lapse[lapse])} of OTHER trials are censored under the "
+        f"UNKNOWN rule {cite(tables='lapse')}.",
+        "",
+        *_figure("year"),
+        "",
+        _table(
+            "year",
+            "Early-stop CIF by year of registration. A cell is shown only where every trial of "
+            f"the year could be followed for the whole horizon before {before}.",
+        ),
         "",
         *_cif_table(res.year, "Registration year", res.horizons),
         "",
-        f"- From {by_year[0]['group']} to {by_year[-1]['group']} the {long_}-month CIF lies "
-        f"between {pct(min(r[cl] for r in by_year))} and {pct(max(r[cl] for r in by_year))}; "
-        f"the highest {short}-month CIF is {pct(top[cs])}, for trials registered in "
-        f"{top['group']} (Figure 2, Table 2).",
+        f"- From {long_years[0]['group']} to {long_years[-1]['group']} the {long_}-month CIF "
+        f"lies between {pct(min(r[cl] for r in long_years))} and "
+        f"{pct(max(r[cl] for r in long_years))}; the highest {short}-month CIF is "
+        f"{pct(top[cs])}, for trials registered in {top['group']} {cite('year', 'year')}.",
         "",
-        "Table 3. Early-stop CIF over the months after each landmark, for trials still open at "
-        "that landmark.",
+        _table(
+            "landmark",
+            "Early-stop CIF over the months after each landmark, for trials still open at that "
+            "landmark.",
+        ),
         "",
         *_cif_table(
             res.by_landmark,
@@ -176,7 +228,7 @@ def _risk_after_registration(res: Results) -> list[str]:
         "",
         f"- A trial still open at a landmark has a {short}-month CIF of {pct(first[cs])} at "
         f"registration and {pct(last[cs])} {last['group'] * res.spacing_months} months later "
-        "(Table 3).",
+        f"{cite(tables='landmark')}.",
     ]
 
 
@@ -190,24 +242,24 @@ def _phase(res: Results) -> list[str]:
         f"*{PHASE_LABEL}.* Phase has no version history in the dataset (ADR 0006), so this "
         "section uses each trial's current-record phase from the API v2 snapshot of "
         f"{res.snapshot}. A phase edited after a trial's outcome was known would leak that "
-        "outcome, so these numbers are not used to choose features or models. The trials are "
-        "the same as in section 1.",
+        "outcome, so these numbers are not used to choose features or models. The trials and "
+        "their outcomes are the same as in section 1.",
         "",
-        *_figure(3),
+        *_figure("phase"),
         "",
-        f"Table 4. {PHASE_LABEL}: early-stop CIF by current-record phase group.",
+        _table("phase", f"{PHASE_LABEL}: early-stop CIF by current-record phase group."),
         "",
         *_cif_table(res.phase, "Phase group (current record)", res.horizons),
         "",
         f"- {DESCRIPTIVE_ONLY}: across phase groups the {res.long}-month CIF runs from "
         f'{pct(low[cl])} for "{low["group"]}" to {pct(high[cl])} for "{high["group"]}" '
-        "(Figure 3, Table 4).",
+        f"{cite('phase', 'phase')}.",
     ]
     missing = [r for r in res.phase if r["group"] == an.NO_CURRENT_RECORD]
     if missing:
         lines.append(
             f"- {DESCRIPTIVE_ONLY}: {num(missing[0]['trials'])} trials have no record in the "
-            "snapshot and form their own row (Table 4)."
+            f"snapshot and form their own row {cite(tables='phase')}."
         )
     return lines
 
@@ -216,33 +268,41 @@ def _competing(res: Results) -> list[str]:
     end, short, long_ = STATE_MONTHS, res.short, res.long
     columns = ("terminated", "withdrawn", "early_stop", "completed", "open", "naive_early_stop")
     headers = ["Months since registration", "Terminated", "Withdrawn", "Early stop (both)",
-               "Completed", "Still open", "Early stop, completion as censoring"]  # fmt: skip
-    body = [[m, *[pct(res.state(key, m)) for key in columns]] for m in STATE_TABLE_MONTHS]
+               "Withdrawn share of early stops", "Completed", "Still open",
+               "Early stop, completion as censoring"]  # fmt: skip
+    body = []
+    for m in STATE_TABLE_MONTHS:
+        cells = [pct(res.state(key, m)) for key in columns]
+        body.append([m, *cells[:3], pct(res.withdrawn_share(m)), *cells[3:]])
     return [
         "## 3. Stopping competes with completing",
         "",
-        _modeling_tag(res) + " The trials are the same as in section 1.",
+        _modeling_tag(res) + " The trials and their outcomes are the same as in section 1.",
         "",
-        *_figure(4),
+        *_figure("states"),
         "",
-        *_figure(5),
+        *_figure("naive"),
         "",
-        "Table 5. Share of trials in each state by months since registration (Aalen-Johansen), "
-        "and the early-stop estimate that treats a completion as censoring (1 minus "
-        "Kaplan-Meier).",
+        _table(
+            "states",
+            "Share of trials in each state by months since registration (Aalen-Johansen), and "
+            "the early-stop estimate that treats a completion as censoring (1 minus "
+            "Kaplan-Meier).",
+        ),
         "",
         *markdown_table(headers, body),
         "",
         f"- {end} months after registration {pct(res.state('completed', end))} of trials have "
         f"completed, {pct(res.state('early_stop', end))} have stopped early and "
-        f"{pct(res.state('open', end))} are still open (Figure 4, Table 5).",
+        f"{pct(res.state('open', end))} are still open {cite('states', 'states')}.",
         f"- By {short} months {pct(res.state('withdrawn', short))} of trials are withdrawn and "
         f"{pct(res.state('terminated', short))} terminated; by {end} months, "
-        f"{pct(res.state('withdrawn', end))} and {pct(res.state('terminated', end))} (Table 5).",
+        f"{pct(res.state('withdrawn', end))} and {pct(res.state('terminated', end))} "
+        f"{cite(tables='states')}.",
         f"- Treating completion as censoring gives {pct(res.state('naive_early_stop', long_))} "
         f"at {long_} months and {pct(res.state('naive_early_stop', end))} at {end} months, "
         f"against {pct(res.state('early_stop', long_))} and {pct(res.state('early_stop', end))} "
-        "from the competing-risks estimator (Figure 5, Table 5).",
+        f"from the competing-risks estimator {cite('naive', 'states')}.",
     ]
 
 
@@ -250,7 +310,7 @@ def _amendments(res: Results) -> list[str]:
     at, long_ = AMENDMENT_LANDMARK_MONTHS, res.long
     outcomes = res.amendments_outcome
     stopped, completed = outcomes[0], outcomes[1]
-    by_outcome = [[label, *[pct(r[key]) for r in outcomes]] for key, label in an.SIGNALS]
+    by_outcome = [[label, *[pct(r[key]) for r in outcomes]] for key, label, _ in an.SIGNALS]
     by_outcome.append(
         ["Median versions posted so far", *[dec(r["median_versions"]) for r in outcomes]]
     )
@@ -260,12 +320,12 @@ def _amendments(res: Results) -> list[str]:
             *[dec(r["median_slip_months"]) for r in outcomes],
         ]
     )
-    cif_headers = ["Signal at the landmark", "Trials with", "Trials without", "Not known",
-                   f"CIF at {long_} months with", f"CIF at {long_} months without",
-                   "Ratio"]  # fmt: skip
+    cif_headers = ["Signal at the landmark", "Compared among", "Trials with", "Trials without",
+                   "Outside the comparison or not known", f"CIF at {long_} months with",
+                   f"CIF at {long_} months without", "Ratio"]  # fmt: skip
     cif_body = [
-        [r["signal"], num(r["with"]), num(r["without"]), num(r["unknown"]), pct(r["cif_with"]),
-         pct(r["cif_without"]), dec(r["ratio"], 2)]
+        [r["signal"], r["among"], num(r["with"]), num(r["without"]), num(r["outside"]),
+         pct(r["cif_with"]), pct(r["cif_without"]), dec(r["ratio"], 2)]
         for r in res.amendments_cif
     ]  # fmt: skip
     lines = [
@@ -275,10 +335,16 @@ def _amendments(res: Results) -> list[str]:
         f"{num(res.amendment_rows)} trials still open {at} months after registration (landmark "
         f"index {at // res.spacing_months}). Each signal compares the record as it stood at the "
         "landmark, from versions posted on or before it, with the trial's first version. "
-        "Nothing posted after the landmark is read. Dates are compared by calendar month.",
+        "Nothing posted after the landmark is read. The enrollment count is a target while its "
+        "type is ESTIMATED and the number enrolled once it is ACTUAL, so the three enrollment "
+        "signals are compared among trials of one type.",
         "",
-        f"Table 6. Share of trials showing each signal at the {at}-month landmark, by what "
-        "happened to the trial afterwards.",
+        _table(
+            "signals_outcome",
+            f"Share of trials showing each signal at the {at}-month landmark, by what was "
+            f"observed afterwards (before {res.before.isoformat()}). Each share is taken among "
+            "the trials where the signal is defined and its inputs are known.",
+        ),
         "",
         *markdown_table(
             ["Signal at the landmark", *[f"{r['group']} ({num(r['trials'])})" for r in outcomes]],
@@ -288,17 +354,21 @@ def _amendments(res: Results) -> list[str]:
         f"- {pct(stopped['primary_completion_later'])} of the trials that later stopped early "
         "had moved their primary completion date later by the landmark, and "
         f"{pct(completed['primary_completion_later'])} of the trials that later completed "
-        "(Table 6).",
+        f"{cite(tables='signals_outcome')}.",
         f"- {pct(stopped['not_yet_recruiting'])} of the trials that later stopped early were "
         f"still not yet recruiting, against {pct(completed['not_yet_recruiting'])} of those "
         f"that later completed; {pct(stopped['ever_suspended'])} against "
-        f"{pct(completed['ever_suspended'])} had been suspended (Table 6).",
+        f"{pct(completed['ever_suspended'])} had been suspended "
+        f"{cite(tables='signals_outcome')}.",
         "",
-        *_figure(6),
+        *_figure("signals"),
         "",
-        f"Table 7. Early-stop CIF in the {long_} months after the {at}-month landmark, with and "
-        f"without each signal. Over all {num(res.amendment_rows)} trials it is "
-        f"{pct(res.amendment_overall)}. A signal is not known when one of its inputs is missing.",
+        _table(
+            "signals_cif",
+            f"Early-stop CIF in the {long_} months after the {at}-month landmark, with and "
+            f"without each signal, among the trials it is compared among. Over all "
+            f"{num(res.amendment_rows)} trials it is {pct(res.amendment_overall)}.",
+        ),
         "",
         *markdown_table(cif_headers, cif_body),
         "",
@@ -308,12 +378,16 @@ def _amendments(res: Results) -> list[str]:
         ("ever_suspended", "with a suspension on record"),
         ("not_yet_recruiting", "for trials still not yet recruiting"),
         ("primary_completion_later", "where the primary completion date moved later"),
-        ("enrollment_cut", "where the enrollment target was cut by 10% or more"),
+        ("target_cut", "where the enrollment target was cut by 10% or more"),
+        ("enrollment_closed", "where the enrollment count is ACTUAL"),
+        ("enrollment_short", "where the number enrolled is 10% or more below the first target"),
     ):
         if key in signal:
             lines.append(
                 f"- The {long_}-month CIF is {pct(signal[key]['cif_with'])} {text} and "
-                f"{pct(signal[key]['cif_without'])} otherwise (Figure 6, Table 7)."
+                f"{pct(signal[key]['cif_without'])} for the other "
+                f"{signal[key]['among'].removeprefix('all ')} "
+                f"{cite('signals', 'signals_cif')}."
             )
     return lines
 
@@ -321,47 +395,75 @@ def _amendments(res: Results) -> list[str]:
 def _registration_lag(res: Results) -> list[str]:
     cl = f"cif_{res.long}m"
     years = res.registration_years
-    first, last = years[0], [r for r in years if not r["descriptive"]][-1]
+    modeling = [r for r in years if not r["descriptive"]]
+    first, last = modeling[0], modeling[-1]
     timing = {r["group"]: r for r in res.timing}
-    headers = ["Registration year", "Use", "Trials", "Registered after the start",
-               "Median days late, among those", "More than 1 year late",
-               "Median days from submission to first posting"]  # fmt: skip
+    headers = ["Registration year", "Use", "Trials", "Start date given to the day",
+               "Registered after the start month", "Median days late, among those",
+               "More than 1 year late", "Median days from submission to first posting"]  # fmt: skip
     body = [
-        [r["year"], _use(r), num(r["trials"]), pct(r["share_after_start"]),
-         dec(r["median_days_late"]), pct(r["share_over_a_year_late"]),
-         dec(r["median_days_submit_to_post"])]
+        [r["year"], _use(r), num(r["trials"]), pct(r["share_day_precision"]),
+         pct(r["share_after_start"]), dec(r["median_days_late"]),
+         pct(r["share_over_a_year_late"]), dec(r["median_days_submit_to_post"])]
         for r in years
     ]  # fmt: skip
+    timing_headers = ["Registration timing", "Trials", "Early stops observed",
+                      *[f"CIF at {m} months" for m in TABLE_MONTHS],
+                      f"Withdrawn within {res.long} months",
+                      f"Terminated within {res.long} months"]  # fmt: skip
+    timing_body = [
+        [r["group"], num(r["trials"]), num(r["early_stops"]),
+         *[pct(r[f"cif_{m}m"]) for m in TABLE_MONTHS], pct(r["withdrawn"]), pct(r["terminated"])]
+        for r in res.timing
+    ]  # fmt: skip
+    on_time, within, over = (timing[k] for k in an.TIMING_ORDER[:3])
     return [
         "## 5. Registration lag",
         "",
         f"*Years before {res.before.year} are modeling-relevant; rows from {res.before.year} on "
         f"are {DESCRIPTIVE} and marked.* Trials open at registration (landmark index 0). A "
-        "trial is registered after its start when the whole period of its first version's "
-        "start date lies before the first-post date.",
+        "trial is registered after its start month when the calendar month of its first "
+        "version's start date ended before the first-post date. The comparison is by month for "
+        "every trial, whatever the precision of its start date.",
         "",
-        *_figure(7),
+        *_figure("timing"),
         "",
-        "Table 8. Registration timing by year of registration. The last year runs to "
-        f"{res.cutoff.isoformat()}.",
+        _table(
+            "timing_year",
+            f"Registration timing by year of registration. The last year runs to "
+            f"{res.cutoff.isoformat()}. The shares are taken among trials with a start date in "
+            "their first version, and the days late are counted from the end of the start "
+            "month.",
+        ),
         "",
         *markdown_table(headers, body),
         "",
         f"- {pct(first['share_after_start'])} of the trials registered in {first['year']} were "
-        f"registered after their start date, with a median delay of "
+        f"registered after their start month, with a median delay of "
         f"{dec(first['median_days_late'])} days; in {last['year']} it was "
-        f"{pct(last['share_after_start'])} and {dec(last['median_days_late'])} days (Figure 7, "
-        "Table 8).",
+        f"{pct(last['share_after_start'])} and {dec(last['median_days_late'])} days "
+        f"{cite('timing', 'timing_year')}.",
+        f"- The first version gives the start date to the day for "
+        f"{pct(first['share_day_precision'])} of the trials registered in {first['year']} and "
+        f"for {pct(last['share_day_precision'])} of those registered in {last['year']} "
+        f"{cite(tables='timing_year')}.",
         "",
-        "Table 9. Early-stop CIF by registration timing. Modeling-relevant: landmarks before "
-        f"{res.before.isoformat()} only.",
+        _table(
+            "timing_cif",
+            "Early-stop CIF by registration timing, and its two parts at "
+            f"{res.long} months. {_modeling_tag(res).strip('*')}",
+        ),
         "",
-        *_cif_table(res.timing, "Registration timing", TABLE_MONTHS),
+        *markdown_table(timing_headers, timing_body),
         "",
-        f"- The {res.long}-month CIF is {pct(timing[an.PROSPECTIVE][cl])} for trials registered "
-        f"on or before their start date, {pct(timing[an.LATE_WITHIN_YEAR][cl])} for trials "
-        f"registered up to 1 year after it and {pct(timing[an.LATE_OVER_YEAR][cl])} for trials "
-        "registered more than 1 year after it (Table 9).",
+        f"- The {res.long}-month CIF is {pct(on_time[cl])} for trials registered in or before "
+        f"their start month, {pct(within[cl])} for trials registered up to 1 year after it and "
+        f"{pct(over[cl])} for trials registered more than 1 year after it "
+        f"{cite(tables='timing_cif')}.",
+        f"- Within {res.long} months {pct(on_time['withdrawn'])} of the trials registered in or "
+        f"before their start month are withdrawn and {pct(on_time['terminated'])} terminated; "
+        f"for trials registered more than 1 year after it, {pct(over['withdrawn'])} and "
+        f"{pct(over['terminated'])} {cite(tables='timing_cif')}.",
     ]
 
 
@@ -374,37 +476,62 @@ def _post_dates(res: Results) -> list[str]:
          dec(r["median_days_to_post"]), dec(r["p90_days_to_post"])]
         for r in rows
     ]  # fmt: skip
+    lag_body = [
+        [r["date_type"], "First version" if r["is_first"] else "Later version",
+         num(r["versions"]), dec(r["median_days"]), dec(r["p90_days"])]
+        for r in res.posting_lag
+    ]  # fmt: skip
     lines = [
         "## 6. Estimated post dates",
         "",
-        f"*A property of the registry's records, not of outcomes; rows from {res.before.year} "
-        f"on are still marked {DESCRIPTIVE}.* The version clock is each version's post date "
+        f"*A property of the registry's records, not of outcomes. Rows from {res.before.year} "
+        f"on are still marked {DESCRIPTIVE}, and the second table reads only versions posted "
+        f"before {res.before.isoformat()}.* The version clock is each version's post date "
         "(Section 6). A post date marked ESTIMATED was derived by the registry and not "
         "recorded.",
         "",
-        *_figure(8),
+        *_figure("post_dates"),
         "",
-        "Table 10. Versions of cohort trials by year of posting: the share with an ESTIMATED "
-        "post date, and the days from submission to posting.",
+        _table(
+            "post_dates",
+            "Versions of cohort trials by year of posting: the share with an ESTIMATED post "
+            "date, and the days from submission to posting.",
+        ),
         "",
         *markdown_table(headers, body),
         "",
     ]
-    full = [r for r in rows if r["share_estimated"] >= 0.999]
-    partial = [r for r in rows if 0.001 < r["share_estimated"] < 0.999]
-    none = [r for r in rows if r["share_estimated"] <= 0.001]
-    if full and none:
-        between = "".join(f", {pct(r['share_estimated'])} in {r['year']}" for r in partial)
-        lines += [
-            f"- The ESTIMATED share is {pct(full[-1]['share_estimated'])} in every year through "
-            f"{full[-1]['year']}{between} and {pct(none[0]['share_estimated'])} from "
-            f"{none[0]['year']} on (Figure 8, Table 10).",
-            "- The median time from submission to posting is "
-            f"{days(full[-1]['median_days_to_post'])} in {full[-1]['year']} and "
-            f"{days(none[0]['median_days_to_post'])} in {none[0]['year']}; the 90th "
-            f"percentile is {dec(full[-1]['p90_days_to_post'])} and "
-            f"{dec(none[0]['p90_days_to_post'])} days (Table 10).",
-        ]
+    modeling = [r for r in rows if not r["descriptive"]]
+    full = [r for r in modeling if r["share_estimated"] == 1.0]
+    partial = [r for r in modeling if r["share_estimated"] < 1.0]
+    if full:
+        after = "".join(f", and {pct(r['share_estimated'])} in {r['year']}" for r in partial)
+        lines.append(
+            f"- The ESTIMATED share is {pct(full[-1]['share_estimated'])} in every year from "
+            f"{full[0]['year']} to {full[-1]['year']}{after} {cite('post_dates', 'post_dates')}."
+        )
+    lines += [
+        "",
+        _table(
+            "posting_lag",
+            f"Days from submission to posting for versions of cohort trials posted before "
+            f"{res.before.isoformat()}, by the type of the post date. First versions set time "
+            "zero and every landmark, so they are shown apart.",
+        ),
+        "",
+        *markdown_table(
+            ["Post date", "Version", "Versions", "Median days", "90th percentile"], lag_body
+        ),
+        "",
+    ]
+    for r in res.posting_lag:
+        if r["date_type"] == "ACTUAL":
+            which = "first versions" if r["is_first"] else "later versions"
+            lines.append(
+                f"- For the {num(r['versions'])} {which} with an actual post date, posting "
+                f"follows submission by a median of {days(r['median_days'])}, and by "
+                f"{days(r['p90_days'])} at the 90th percentile {cite(tables='posting_lag')}."
+            )
     return lines
 
 
@@ -427,19 +554,22 @@ def _covid(res: Results) -> list[str]:
         "per 1,000 cohort trials under follow-up at the start of that month. A suspension is a "
         "SUSPENDED version that follows a version with another status.",
         "",
-        *_figure(9),
+        *_figure("covid"),
         "",
-        f"Table 11. {DESCRIPTIVE_ONLY}: average monthly rates per 1,000 trials under follow-up.",
+        _table(
+            "covid", f"{DESCRIPTIVE_ONLY}: average monthly rates per 1,000 trials under follow-up."
+        ),
         "",
         *markdown_table(headers, body),
         "",
         f"- {DESCRIPTIVE_ONLY}: new suspensions averaged {dec(baseline['suspended_per_1000'], 2)} "
-        f"per 1,000 trials per month in {baseline['period']}, and the highest month is "
-        f"{peak_name} with {dec(peak_rate, 1)} (Figure 9, Table 11).",
+        f"per 1,000 trials per month in {baseline['period']} and "
+        f"{dec(shock['suspended_per_1000'], 2)} in {shock['period']} {cite(tables='covid')}; "
+        f"the highest month is {peak_name} with {dec(peak_rate, 1)} {cite('covid')}.",
         f"- {DESCRIPTIVE_ONLY}: terminations averaged {dec(baseline['terminated_per_1000'], 2)} "
         f"per 1,000 in {baseline['period']} and {dec(shock['terminated_per_1000'], 2)} in "
         f"{shock['period']}; withdrawals {dec(baseline['withdrawn_per_1000'], 2)} and "
-        f"{dec(shock['withdrawn_per_1000'], 2)} (Table 11).",
+        f"{dec(shock['withdrawn_per_1000'], 2)} {cite(tables='covid')}.",
     ]
 
 
