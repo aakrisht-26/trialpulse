@@ -6,7 +6,11 @@ tests in test_findings.py, and one test here runs the real findings on computed 
 show that the two fit together.
 """
 
+import ast
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +29,7 @@ from trialpulse.eda.results import STATE_MONTHS, STATE_TABLE_MONTHS, Results, co
 from .conftest import BEFORE, COVID_YEAR, World, cif, followed
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+LONG_AGO = 1_577_836_800_000_000_000  # 2020-01-01, in nanoseconds
 CITES = re.compile(r"\((Figures? \d|Table \d)")
 MODELING_TAG = "*Modeling-relevant: nothing dated 2018-01-01 or later is read.*"
 STUB = [
@@ -36,6 +41,12 @@ STUB = [
 @pytest.fixture
 def stub_findings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(document, "findings", lambda res: STUB)
+
+
+@pytest.fixture
+def no_figures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the drawing, for tests of the text that need the command but not the figures."""
+    monkeypatch.setattr(report, "draw", lambda res, out_dir: [])
 
 
 @pytest.fixture(scope="module")
@@ -371,13 +382,99 @@ def test_the_report_reads_nothing_after_2018_by_default() -> None:
     assert MODELING_EDA_BEFORE == BEFORE  # the date the twins and the document tests assume
 
 
+def _as_git_checks_it_out_on_windows(path: Path) -> bytes:
+    """Rewrite a text file with CRLF line endings, as git does on checkout with
+    core.autocrlf, give it an old modification time, and return its bytes."""
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    path.write_bytes(content)
+    os.utime(path, ns=(LONG_AGO, LONG_AGO))
+    return content
+
+
+def test_a_report_checked_out_with_crlf_is_reproduced_byte_for_byte(
+    world: World,
+    tmp_path: Path,
+    stub_findings: None,
+    no_figures: None,
+    text: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """What happened on Aakrisht's machine on 2026-10-07: git had checked docs/eda.md out
+    with CRLF, the generator rewrote it with LF, and `git status` showed it as modified
+    although no character of its content had changed. A regeneration must leave such a file
+    exactly as it is."""
+    out = tmp_path / "docs" / "eda.md"
+    assert report.main(_args(world, out)) == 0
+    assert out.read_bytes() == text.encode("utf-8")  # a new file is written with LF
+    assert "Wrote 1 of 10 files" in capsys.readouterr().out
+
+    checked_out = _as_git_checks_it_out_on_windows(out)
+    assert checked_out.count(b"\r\n") == text.count("\n")
+    assert report.main(_args(world, out)) == 0
+    assert out.read_bytes() == checked_out  # still CRLF: not one byte differs
+    assert out.stat().st_mtime_ns == LONG_AGO  # and the file was not even rewritten
+    assert "Up to date" in capsys.readouterr().out
+
+
+def test_the_report_does_not_depend_on_the_working_directory(
+    world: World,
+    tmp_path: Path,
+    stub_findings: None,
+    no_figures: None,
+    text: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elsewhere = tmp_path / "somewhere" / "else"
+    elsewhere.mkdir(parents=True)
+    monkeypatch.chdir(elsewhere)
+    out = tmp_path / "docs" / "eda.md"
+    assert report.main(_args(world, out)) == 0
+    assert out.read_bytes() == text.encode("utf-8")
+    assert str(tmp_path) not in text  # no path of this machine in the document
+
+
+def test_the_report_never_reads_the_clock_or_the_working_directory() -> None:
+    """Its content cannot depend on the run date: no module of the EDA asks for the time or
+    the current directory. The one exception is the duration the command prints."""
+    forbidden = {"today", "now", "utcnow", "time", "time_ns", "getcwd", "cwd", "localtime",
+                 "gmtime", "getmtime"}  # fmt: skip
+    package = Path(report.__file__).parent
+    for module in sorted(package.glob("*.py")):
+        calls = [
+            node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            for node in ast.walk(ast.parse(module.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Call)
+        ]
+        assert not forbidden & set(calls), module.name
+    assert "time.monotonic()" in (package / "report.py").read_text(encoding="utf-8")
+
+
+def test_git_checks_generated_files_out_as_the_generator_writes_them() -> None:
+    """.gitattributes pins LF for the report and marks the figures binary, so a checkout
+    has the generator's own bytes on every machine, whatever core.autocrlf says."""
+    figure = f"docs/figures/{next(iter(FIGURES.values()))[0]}"
+    try:
+        checked = subprocess.run(
+            ["git", "check-attr", "text", "eol", "binary", "--", "docs/eda.md", figure],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("git is not available here")
+    assert "docs/eda.md: text: set" in checked
+    assert "docs/eda.md: eol: lf" in checked
+    assert f"{figure}: binary: set" in checked
+
+
 @pytest.mark.slow
 def test_the_command_writes_the_report_and_every_figure_the_same_way_twice(
     world: World, tmp_path: Path, stub_findings: None, text: str
 ) -> None:
     out = tmp_path / "docs" / "eda.md"
     assert report.main(_args(world, out)) == 0
-    assert out.read_text(encoding="utf-8") == text
+    assert out.read_bytes() == text.encode("utf-8")
     figures = sorted((out.parent / "figures").iterdir())
     assert [p.name for p in figures] == sorted(name for name, _ in FIGURES.values())
     first = {p.name: p.read_bytes() for p in figures}
@@ -385,26 +482,43 @@ def test_the_command_writes_the_report_and_every_figure_the_same_way_twice(
         assert content.startswith(PNG_SIGNATURE), name
         assert len(content) > 10_000, name
         assert b"Software" not in content[:400], name  # no version stamp in the file
+
+    # Second run, on files as git checks them out on Windows: nothing is rewritten.
+    checked_out = _as_git_checks_it_out_on_windows(out)
+    for figure in figures:
+        os.utime(figure, ns=(LONG_AGO, LONG_AGO))
     assert report.main(_args(world, out)) == 0
-    assert out.read_text(encoding="utf-8") == text
+    assert out.read_bytes() == checked_out
     assert {p.name: p.read_bytes() for p in figures} == first
+    assert {p.stat().st_mtime_ns for p in (out, *figures)} == {LONG_AGO}
 
 
 @pytest.mark.slow
-def test_the_committed_report_is_what_the_code_and_the_data_produce(tmp_path: Path) -> None:
-    """With the real data on disk (never in CI), regenerating gives exactly the committed
-    docs/eda.md and figures: nobody edited them by hand or forgot to regenerate. This is
-    also where the real findings meet the real results."""
+@pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"], ids=["lf", "crlf"])
+def test_the_committed_report_is_reproduced_byte_for_byte(
+    tmp_path: Path, line_ending: bytes
+) -> None:
+    """With the real data on disk (never in CI): regenerating over a copy of the committed
+    docs/eda.md and figures changes no byte of them, whether git checked the report out with
+    LF or with CRLF. So nobody edited them by hand or forgot to regenerate, and `git status`
+    stays clean after the command. This is also where the real findings meet the real
+    results."""
     cohort = report.COHORT_DIR
     inputs = [report.WAREHOUSE_PATH, report.CURRENT_FIELDS_PATH]
     inputs += [cohort / "landmarks.parquet", cohort / "outcomes.parquet"]
     if not all(path.is_file() for path in inputs):
         pytest.skip("the warehouse, the cohort or the current-record snapshot is not on disk")
-    out = tmp_path / "eda.md"
-    assert report.main(["--out", str(out)]) == 0
     committed = REPO_ROOT / "docs"
-    assert out.read_text(encoding="utf-8") == (committed / "eda.md").read_text(encoding="utf-8")
-    for name, _ in FIGURES.values():
-        assert (tmp_path / "figures" / name).read_bytes() == (
-            committed / "figures" / name
-        ).read_bytes(), name
+    out = tmp_path / "eda.md"
+    as_committed = (committed / "eda.md").read_bytes().replace(b"\r\n", b"\n")
+    out.write_bytes(as_committed.replace(b"\n", line_ending))
+    shutil.copytree(committed / "figures", tmp_path / "figures")
+    files = [out, *[tmp_path / "figures" / name for name, _ in FIGURES.values()]]
+    before = {path: path.read_bytes() for path in files}
+    for path in files:
+        os.utime(path, ns=(LONG_AGO, LONG_AGO))
+
+    assert report.main(["--out", str(out)]) == 0
+    for path in files:
+        assert path.read_bytes() == before[path], path.name
+        assert path.stat().st_mtime_ns == LONG_AGO, path.name

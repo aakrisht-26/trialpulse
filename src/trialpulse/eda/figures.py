@@ -13,6 +13,7 @@ One visual language for every figure:
   bytes on every run.
 """
 
+import io
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -28,6 +29,8 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, PathPatch
 from matplotlib.path import Path as MplPath
 from matplotlib.ticker import FuncFormatter
+
+from trialpulse.reports import write_bytes_if_changed
 
 FloatArray = npt.NDArray[np.float64]
 Series = tuple[str, FloatArray, FloatArray, str]  # label, x, y, color
@@ -140,8 +143,10 @@ def _dot_handle(color: str) -> Line2D:
 
 
 def _save(fig: Figure, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=DPI, facecolor=SURFACE, metadata={"Software": None})
+    """Render to memory, then write only if the bytes differ from the file on disk."""
+    image = io.BytesIO()
+    fig.savefig(image, format="png", dpi=DPI, facecolor=SURFACE, metadata={"Software": None})
+    write_bytes_if_changed(path, image.getvalue())
 
 
 def spread(positions: Sequence[float], gap: float) -> list[float]:

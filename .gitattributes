@@ -1,0 +1,6 @@
+# Generated files that are committed must come back byte for byte when they are regenerated.
+# Their generators write LF line endings, so git must check them out with LF on every machine,
+# whatever core.autocrlf says. Without this, Git for Windows checks docs/eda.md out with CRLF,
+# and regenerating it shows the file as modified although its content is the same.
+docs/eda.md text eol=lf
+docs/figures/*.png binary
