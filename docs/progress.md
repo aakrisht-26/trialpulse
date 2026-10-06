@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 4, Cohort, outcomes and landmarks**, built, independently reviewed and waiting for Aakrisht's review (2026-10-06). Step 5 (EDA) is being built, unreviewed, on branch `provisional/step5-eda` under the extension of 2026-10-05; main holds nothing of it. **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Step 4, Cohort, outcomes and landmarks**, built, independently reviewed and waiting for Aakrisht's review (2026-10-06). **Step 5 (EDA)** is built and independently reviewed on branch `provisional/step5-eda` (draft PR aakrisht-26/trialpulse#2, not to be merged), under the extension of 2026-10-05, and also waits for review; main holds nothing of it. **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ Current step: **Step 4, Cohort, outcomes and landmarks**, built, independently r
 | 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
 | 4 | Cohort, outcomes and landmarks | Built and independently reviewed 2026-10-06, waiting for review (ADRs 0013 and 0014 accepted, ADR 0015 proposed, 3 open questions) |
-| 5 | Exploratory data analysis | Not started |
+| 5 | Exploratory data analysis | Provisional: built and independently reviewed 2026-10-06 on branch `provisional/step5-eda` (draft PR, not merged), waiting for review (15 decisions pending, 5 open questions) |
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
 | 7 | Point-in-time features | Not started |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23; M0 ran end to end on the development origins on the real cohort (Step 4), which closes its last criterion |
@@ -597,14 +597,138 @@ Then open `docs/data_audit.md` (part 2).
 
 ## Step 5 (provisional): Exploratory data analysis
 
-Date: 2026-10-06. Status: **in progress, unreviewed, on branch `provisional/step5-eda` only**. Built under the extension of 2026-10-05 while Aakrisht was away; main holds nothing of it, and the draft PR is not to be merged.
+Date: 2026-10-06. Status: **built and independently reviewed, not yet reviewed by Aakrisht, on branch `provisional/step5-eda` only**. Built under the extension of 2026-10-05 while Aakrisht was away. Main holds nothing of it, and the draft PR (aakrisht-26/trialpulse#2, "Provisional: Step 5 EDA (unreviewed)") is not to be merged. **Step 5 stops here: Step 7 and later are not started.**
 
 Checkpoints (one line per finished item):
 
 - 2026-10-06: branch created from main at `0ab1da2`; matplotlib added as a dependency (approved in the extension, for static PNG figures in `docs/figures/`).
 - 2026-10-06: draft PR opened (aakrisht-26/trialpulse#2, "Provisional: Step 5 EDA (unreviewed)").
-- 2026-10-06: the report generator is written (`src/trialpulse/eda/`); `docs/eda.md` and 9 figures regenerate from one command in about 15 seconds, identical on a second run. Tests, review and the step report are still to do.
-- 2026-10-06: tests added (`tests/eda/`, 56 tests on a synthetic registry with known answers; 3 of them slow). Default run 464 passed, in my shell. Review and the step report are still to do.
+- 2026-10-06: the report generator is written (`src/trialpulse/eda/`); `docs/eda.md` and 9 figures regenerate from one command in about 15 seconds, identical on a second run.
+- 2026-10-06: tests added (`tests/eda/`, on a synthetic registry with known answers).
+- 2026-10-06: independent review by two reviewers (28 findings); every finding verified, then fixed or logged below.
+- 2026-10-06: step report written here and in the draft PR description.
+
+### What was built
+
+- `uv run python -m trialpulse.eda.report` regenerates `docs/eda.md` and the nine figures `docs/figures/eda_*.png` from the Step 4 cohort files, the warehouse and the Step 2 current-record snapshot. It reads no name and no free text.
+- `src/trialpulse/eda/`:
+  - `analysis.py`: the numbers (DuckDB SQL and the Aalen-Johansen estimator of Step 8).
+  - `results.py`: everything computed once, so text, tables and figures share one source.
+  - `refs.py`: figures and tables by name, numbered in one place.
+  - `figures.py` and `charts.py`: matplotlib primitives and the nine figures.
+  - `document.py`: the Markdown text, one function per section.
+  - `findings.py`: the eight findings and the checks that refuse a finding the data no longer supports.
+  - `report.py`: the command.
+- `tests/eda/`: a synthetic registry of scripted trial histories and edge cases, run through the real cohort build, with Python twins of the EDA's rules.
+
+The report's sections: early-stop cumulative incidence by sponsor class, registration year and landmark index, with UNKNOWN-rule censoring by sponsor class; phase (descriptive only, not used for modeling); the stop-versus-complete view; amendment signals at the 12-month landmark; registration lag; estimated post dates; the COVID period (descriptive only); eight findings with their modeling implications. The reasons section is left out, as instructed, and the report says so.
+
+### Acceptance criteria
+
+| Criterion | Met | Evidence |
+| --- | --- | --- |
+| One command regenerates everything | Yes | `uv run python -m trialpulse.eda.report` writes `docs/eda.md` and 9 PNG files in about 15 seconds, in my shell. A second run gives identical bytes (SHA-256 compared), and both reviewers regenerated the report byte for byte. A slow test compares a fresh regeneration with the committed files wherever the real data is on disk |
+| Every claim in eda.md points to a figure or table | Yes | Every bullet of sections 1 to 7 and every finding cites one (tested). The numbers in a sentence are formatted from the results that fill the table it cites, a test checks that each percentage in a bullet appears in a table the bullet cites, and other tests check that sentences and table cells give each number to the right group |
+| Modeling-relevant analysis uses landmarks before 2018-01-01 only (Section 10) | Yes, and stricter | Modeling-relevant functions keep landmarks before 2018-01-01 and also censor outcomes there, so they read nothing dated 2018 or later (decision 1 below). Tested row by row against a twin, including a trial whose 12-month landmark falls on 2018-01-01 and a trial terminated in 2018 |
+| Phase uses the current-record phase, labeled "descriptive only, not used for modeling" | Yes | Section 2, its table caption, its bullets and Figure 3 carry the label (tested). The snapshot is read for nothing else |
+| Anything later than 2018 is labeled "descriptive only" | Yes | The COVID section, its table, bullets, finding 8 and Figure 9; the rows from 2018 on in Tables 9 and 11; the divider on Figure 8 (tested). Figure 7 shows modeling years only |
+| The reasons section is skipped | Yes | "Not in this report" says it waits for the final Step 6 labels |
+| Ends with 5 to 8 findings and what each implies for modeling | Yes | Eight findings, each with evidence, citations and an implication. Each direction a finding states is checked against the numbers before the report is written |
+| Lint, format, types and tests clean | Yes | In my shell: ruff, ruff format and mypy clean; default run and full run pass (numbers under Results). CI on the draft PR is green |
+
+### Results
+
+Numbers from `docs/eda.md` (landmarks before 2018-01-01, outcomes observed before 2018-01-01):
+
+- 133,402 trials open at registration; 11,540 early stops observed. Early-stop cumulative incidence 2.0% at 12 months and 5.1% at 24.
+- INDUSTRY 3.5% at 12 months against 1.3% for OTHER; 11.6% and 11.8% at 60 months. UNKNOWN-rule censoring within 60 months: 2.3% for INDUSTRY, 7.9% for OTHER.
+- By 96 months 74.0% of trials have completed and 14.3% have stopped early; treating completion as censoring would give 29.3%.
+- The 12-month incidence is 2.0% at registration and 3.9% to 4.0% from the 18-month landmark on.
+- At the 12-month landmark (96,411 trials): 23.9% early stops within 24 months with a suspension on record against 6.5% without; 13.0% against 5.9% for trials still not yet recruiting; 8.0% against 6.4% where the primary completion date moved later. Where enrollment has closed: 2.4% against 6.9%, but 7.7% for the 585 trials that enrolled 10% or more below their first target.
+- Registered in or before the start month: 5.9% at 24 months, against 4.1% and 3.0% for later registrants; the gap is in withdrawals.
+- Post dates are ESTIMATED for every version through 2016 and for 11.9% of those posted in 2017. Where recorded before 2018, they trail submission by a median of 2 to 3 days.
+- Descriptive only: new suspensions rose from 0.63 per 1,000 trials per month in 2017 to 2019 to 10.6 in April 2020, while terminations and withdrawals stayed near their earlier level.
+
+Tests, in my shell: ruff, ruff format and mypy clean; default run 510 passed (10 slow tests deselected) in about 40 seconds; full run 520 passed. 102 of them are EDA tests (3 slow).
+
+### Independent review (2026-10-06)
+
+Two independent reviewers, as for Step 4. One re-derived the numbers with its own SQL and checked the point-in-time and Section 10 rules; the other checked every claim, the findings, the figures and the tests, with mutation testing on a scratch copy. Every finding was verified before acting on it.
+
+**What they confirmed.** Every table re-derived from raw SQL matched the report (Tables 1 to 11 of the first version, including all ten amendment signals on 96,411 rows). On the real data, rewriting all 775,596 versions posted after the 12-month landmark changed no signal. No EDA query reads a name or a free text. Both regenerated the report byte for byte.
+
+**Findings and what was done** (28 findings: 3 high, 14 medium, 11 low; the main ones):
+
+| Finding | Verified | Action |
+| --- | --- | --- |
+| Finding 6 said the 2008 registration year differs "through registration timing"; the data say the opposite (2008 is higher inside every timing group). Found by me and by a reviewer | Yes: 12-month incidence 3.3% against 2.3% for prospective registrants, and higher in the other groups too | Rewritten: the report now says it does not explain 2008, and why timing cannot |
+| "Enrollment target cut" counted actual enrollment as a target for a third of its rows; the pooled 6.8% against 6.8% hid two opposite cases (both reviewers) | Yes: 596 of 1,863 rows had an ACTUAL count | Enrollment signals split by enrollment type; a new signal for enrollment closed short of the target; finding 4 rewritten |
+| Finding 7 drew a modeling rule from rows marked descriptive only, and Figure 8 had no label (both) | Yes | Its evidence now comes from versions posted before 2018 with an actual post date (new Table 12); Figure 8 carries the divider |
+| Modeling-relevant numbers followed outcomes into the locked years: 39.9% of the early stops were dated 2018 or later | Yes: 7,671 of 19,211 | Outcomes are now censored at 2018-01-01 (decision 1). The conclusions moved by at most 0.4 points, as the reviewer had computed |
+| UNKNOWN-rule censoring was never mentioned, and is three times as common for OTHER as for INDUSTRY | Yes | New Table 2 and a "Censoring" entry in "How to read"; finding 1 states the assumption. **Open question 1** |
+| Registration timing changed its basis in 2017: start dates are given to the month through 2016, mostly to the day after | Yes: 100% month precision through 2016, 39% in 2017 | Timing and overdue signals are computed by calendar month for every trial; Table 9 shows the precision; finding 5 adds the implication |
+| Finding 5 said a late registrant "can no longer be withdrawn"; 1,160 were | Yes | Reworded, with the withdrawn and terminated split added to Table 10 |
+| Finding 1 put sponsor class into M2 and M3, which Section 9 defines without it | Yes | Reworded: it enters with the sponsor family. **Open question 2** |
+| Finding 8 inferred that suspensions "carried less information" in 2020, which monthly rates cannot show, and proposed to pre-register it | Yes | The inference is removed; the report says it was not examined and that a Step 11 hypothesis must disclose these aggregates |
+| Directions stated in findings and figure titles without a check | Yes | Every direction now has a check, and a test proves that each check is refused by a case of its own |
+| Tests did not protect the boundaries of the EDA's own SQL (55 of 95 mutants survived): a version on the landmark day, a shared post date, the first locked day, month precision, missing inputs, thresholds, which number a sentence uses | Yes | The synthetic registry gained 24 edge cases, the SQL is compared row by row with Python twins, and tests read table cells, sentences and the arguments of each figure. 57 single mutations of the EDA code, the reviewer's survivors among them, are now all caught |
+| A finding crashed, instead of refusing, when a signal's risk ratio was 0 or undefined | Found by the new test that runs the real findings on computed results | Fixed |
+| Smaller ones: a suspension counted trials first registered as SUSPENDED; table denominators not stated; a truncated average; `SELECT *` naming the sponsor-name column; partial year labeled on Figure 7; shortened disclaimer on figures; the two month conventions | Yes | All fixed or stated in the report |
+
+### Decisions pending approval
+
+1. **Outcomes in modeling-relevant analysis are censored at 2018-01-01**, in addition to using landmarks before that date. It is the stricter reading of "anything later is descriptive only", and it matches how training rows are censored at an origin (Section 6). The alternative, following outcomes to the data cutoff as the Step 4 sanity table does, gives the same conclusions (cells move by at most 0.4 points) and keeps the 2016 and 2017 rows of the registration-year table and the 10-year horizon. If this is accepted, the Step 4 sanity table in `docs/data_audit.md` could follow the same rule; it is unchanged here.
+2. **The command refuses to write the report when a finding no longer holds.** The thresholds behind each direction are mine (`src/trialpulse/eda/findings.py`).
+3. **Package layout:** nine modules under `src/trialpulse/eda/`, where CLAUDE.md Section 16 lists `report.py`.
+4. **Analyses beyond the Step 5 list:** the landmark-index table, UNKNOWN-rule censoring by sponsor class, the early-stop incidence by registration timing with its withdrawn and terminated parts, the posting lag, suspensions in the COVID view.
+5. **Signal definitions at the 12-month landmark:** 10% thresholds for enrollment changes, a 6-month quiet rule, "start overdue" and "primary completion passed" by calendar month, and the enrollment signals split by enrollment type.
+6. **Dates are compared by calendar month** throughout the EDA, because the registry's precision changes in 2017.
+7. **Grouping:** five phase groups and a "No current record" row; the three large sponsor classes and the rest pooled.
+8. **Windows:** curves to 60 and 96 months; the COVID view from 2017 to 2023 in four periods; a suspension is a SUSPENDED version that follows a version with another status.
+9. **Figures:** PNG at 150 dpi, the font bundled with matplotlib, a palette checked for color-vision deficiency, light theme only, identical bytes on every run; committed to git (about 0.8 MB).
+10. **Later years** are shown and marked "descriptive only" in Tables 9 and 11 instead of being left out; Figure 7 shows modeling years only.
+11. **No confidence intervals** in the EDA; the report says so.
+12. **The disclaimer and the source line** are in `docs/eda.md` and on every figure (ADR 0008 names the README, the data card and the dashboard).
+13. **Shared code:** `markdown_table` was added to `src/trialpulse/reports.py` (the two audit modules still use their own copies), and the 2018-01-01 date is reused from `cohort/audit.py` instead of living in `config/project.yaml`.
+14. **Tests:** the document tests replace the findings with a stub, because the synthetic registry is not built to agree with the real one; one test runs the real findings on computed results; three tests are slow; the test that compares the committed report with a regeneration runs only where the real data is, so not in CI.
+15. **A horizon of m months is m times 365.25 / 12 days**, as in the Step 4 sanity table. The Step 8 harness counts calendar months; the two differ only for an event exactly on the horizon day (a reviewer counted 1 such event among 2,633 early stops within 12 months).
+
+### Open questions
+
+1. **Is one censoring curve enough for the IPCW metrics?** Section 6 specifies a single Kaplan-Meier estimate of the censoring distribution. Censoring under the UNKNOWN rule is 3.4 times as common for OTHER sponsors as for INDUSTRY (Table 2 of `docs/eda.md`), so censoring depends on a feature the models use. Options: (a) keep Section 6 as it is and report the UNKNOWN sensitivity analysis by sponsor class; (b) estimate the censoring curve by sponsor class, which changes a locked metric definition and the approved Step 8 harness, so it needs an ADR. **Recommended:** measure the effect of (b) on M0 at the development origins in Step 9, then decide with numbers.
+2. **Sponsor class in M2 and M3.** Section 9 defines M2 as design features only and M3 as M2 plus amendment signals. Finding 1 shows that sponsor class matters early and fades, which a logistic model can only use with an interaction. Nothing was changed; adding sponsor class or an interaction to M2 or M3 would be an ADR.
+3. **Enrollment type in the amendment family (Step 7).** Section 8 lists "enrollment target change ratio versus version 0". Finding 4 shows the ratio means different things before and after enrollment closes. **Recommended:** compute the target change only while the count is ESTIMATED and add "enrolled below the first target" once it is ACTUAL. A refinement of Section 8, so it needs approval.
+4. **Date precision in features (Step 7).** Start and completion dates are given to the month through 2016 and mostly to the day from 2017, just before the locked test years. **Recommended:** compute lag, overdue and planned-duration features by calendar month, or carry the precision as a feature guard.
+5. **The Step 11 pre-registration** should say that the COVID hypothesis was prompted by descriptive aggregates of the stress-test period (Table 13 of `docs/eda.md`).
+
+### Blocked, skipped or deferred
+
+- **The reasons section** waits for the final Step 6 labels, as instructed.
+- **No breakdown by therapeutic area** (ADR 0007).
+- **The README is not touched.** Linking the EDA from it belongs to Step 18.
+- **A shared "state at the landmark" helper.** The EDA has its own SQL for the state at a landmark, tested against a twin. A reviewer suggested one rule shared with the cohort module; Step 7 needs it for features anyway, so it is left for that step.
+- **The real findings are checked against the real data only where the data is** (the slow test and the command itself). CI runs them on hand-written and synthetic results.
+- The daily Step 6 sample labeling was not run (yours).
+
+### Files touched
+
+- New: `src/trialpulse/eda/{__init__,analysis,results,refs,figures,charts,document,findings,report}.py`, `tests/eda/{conftest,test_analysis,test_findings,test_report,test_charts,test_figures}.py`, `docs/eda.md`, `docs/figures/eda_01_cif_by_sponsor_class.png` to `eda_09_covid_period_descriptive.png`.
+- Changed: `pyproject.toml` and `uv.lock` (matplotlib), `src/trialpulse/reports.py` (`markdown_table`), `tests/test_reports.py`, `docs/progress.md`, `docs/interview_notes.md`.
+
+### Verify (PowerShell)
+
+On branch `provisional/step5-eda`. The report takes about 15 seconds and should leave `git status` clean, because the committed report is what the command produces.
+
+```powershell
+git switch provisional/step5-eda
+uv sync
+uv run python -m trialpulse.eda.report
+git status --short
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+```
+
+Then open `docs/eda.md`.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
