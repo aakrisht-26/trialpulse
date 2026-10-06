@@ -602,6 +602,8 @@ Date: 2026-10-06. Status: **in progress, unreviewed, on branch `provisional/step
 Checkpoints (one line per finished item):
 
 - 2026-10-06: branch created from main at `0ab1da2`; matplotlib added as a dependency (approved in the extension, for static PNG figures in `docs/figures/`).
+- 2026-10-06: draft PR opened (aakrisht-26/trialpulse#2, "Provisional: Step 5 EDA (unreviewed)").
+- 2026-10-06: the report generator is written (`src/trialpulse/eda/`); `docs/eda.md` and 9 figures regenerate from one command in about 15 seconds, identical on a second run. Tests, review and the step report are still to do.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 

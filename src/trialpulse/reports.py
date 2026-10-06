@@ -8,7 +8,9 @@ line starting with "# " inside a part (a comment in a code block, for example) i
 text.
 """
 
+from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 
 def _parts(text: str, family: str) -> list[str]:
@@ -43,3 +45,10 @@ def replace_section(path: Path, heading: str, body: str, family: str) -> None:
     if not replaced:
         out.append(block)
     path.write_text("\n".join(out), encoding="utf-8")
+
+
+def markdown_table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> list[str]:
+    """The lines of a Markdown table: a header row, a rule, and one line per row."""
+    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
+    lines += ["| " + " | ".join(str(cell) for cell in row) + " |" for row in rows]
+    return lines
