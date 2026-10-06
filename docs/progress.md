@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 4, Cohort, outcomes and landmarks**, built, independently reviewed and waiting for Aakrisht's review (2026-10-06). **Step 5 (EDA)** is built and independently reviewed on branch `provisional/step5-eda` (draft PR aakrisht-26/trialpulse#2, not to be merged), under the extension of 2026-10-05, and also waits for review; main holds nothing of it. **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved.
+Current step: **Steps 4 and 5 are approved** (2026-10-07). Step 5 (EDA) was built on branch `provisional/step5-eda` and merged through PR aakrisht-26/trialpulse#2. **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved. Step 7 starts after Aakrisht's next review.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ Current step: **Step 4, Cohort, outcomes and landmarks**, built, independently r
 | 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
 | 4 | Cohort, outcomes and landmarks | Built and independently reviewed 2026-10-06, waiting for review (ADRs 0013 and 0014 accepted, ADR 0015 proposed, 3 open questions) |
-| 5 | Exploratory data analysis | Provisional: built and independently reviewed 2026-10-06 on branch `provisional/step5-eda` (draft PR, not merged), waiting for review (15 decisions pending, 5 open questions) |
+| 5 | Exploratory data analysis | Approved 2026-10-07 after the reproducibility fix (line endings); merged from PR aakrisht-26/trialpulse#2 |
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
 | 7 | Point-in-time features | Not started |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23; M0 ran end to end on the development origins on the real cohort (Step 4), which closes its last criterion |
@@ -597,7 +597,7 @@ Then open `docs/data_audit.md` (part 2).
 
 ## Step 5 (provisional): Exploratory data analysis
 
-Date: 2026-10-06. Status: **built and independently reviewed, not yet reviewed by Aakrisht, on branch `provisional/step5-eda` only**. Built under the extension of 2026-10-05 while Aakrisht was away. Main holds nothing of it, and the draft PR (aakrisht-26/trialpulse#2, "Provisional: Step 5 EDA (unreviewed)") is not to be merged. **Step 5 stops here: Step 7 and later are not started.**
+Date: 2026-10-06 to 2026-10-07. Status: **approved by Aakrisht on 2026-10-07**, after the reproducibility fix described under "Review of 2026-10-07" below. Built on branch `provisional/step5-eda` under the extension of 2026-10-05, while Aakrisht was away, and merged into main through PR aakrisht-26/trialpulse#2 once its checks are green.
 
 Checkpoints (one line per finished item):
 
@@ -607,6 +607,7 @@ Checkpoints (one line per finished item):
 - 2026-10-06: tests added (`tests/eda/`, on a synthetic registry with known answers).
 - 2026-10-06: independent review by two reviewers (28 findings); every finding verified, then fixed or logged below.
 - 2026-10-06: step report written here and in the draft PR description.
+- 2026-10-07: Aakrisht's review found that regenerating changed `docs/eda.md`. Cause found (line endings), generator fixed, tests added, review recorded below.
 
 ### What was built
 
@@ -675,7 +676,7 @@ Two independent reviewers, as for Step 4. One re-derived the numbers with its ow
 | A finding crashed, instead of refusing, when a signal's risk ratio was 0 or undefined | Found by the new test that runs the real findings on computed results | Fixed |
 | Smaller ones: a suspension counted trials first registered as SUSPENDED; table denominators not stated; a truncated average; `SELECT *` naming the sponsor-name column; partial year labeled on Figure 7; shortened disclaimer on figures; the two month conventions | Yes | All fixed or stated in the report |
 
-### Decisions pending approval
+### Decisions (approved on 2026-10-07, with the flags in the review below)
 
 1. **Outcomes in modeling-relevant analysis are censored at 2018-01-01**, in addition to using landmarks before that date. It is the stricter reading of "anything later is descriptive only", and it matches how training rows are censored at an origin (Section 6). The alternative, following outcomes to the data cutoff as the Step 4 sanity table does, gives the same conclusions (cells move by at most 0.4 points) and keeps the 2016 and 2017 rows of the registration-year table and the 10-year horizon. If this is accepted, the Step 4 sanity table in `docs/data_audit.md` could follow the same rule; it is unchanged here.
 2. **The command refuses to write the report when a finding no longer holds.** The thresholds behind each direction are mine (`src/trialpulse/eda/findings.py`).
@@ -693,13 +694,53 @@ Two independent reviewers, as for Step 4. One re-derived the numbers with its ow
 14. **Tests:** the document tests replace the findings with a stub, because the synthetic registry is not built to agree with the real one; one test runs the real findings on computed results; three tests are slow; the test that compares the committed report with a regeneration runs only where the real data is, so not in CI.
 15. **A horizon of m months is m times 365.25 / 12 days**, as in the Step 4 sanity table. The Step 8 harness counts calendar months; the two differ only for an event exactly on the horizon day (a reviewer counted 1 such event among 2,633 early stops within 12 months).
 
-### Open questions
+### Open questions (answered on 2026-10-07, see the review below)
 
 1. **Is one censoring curve enough for the IPCW metrics?** Section 6 specifies a single Kaplan-Meier estimate of the censoring distribution. Censoring under the UNKNOWN rule is 3.4 times as common for OTHER sponsors as for INDUSTRY (Table 2 of `docs/eda.md`), so censoring depends on a feature the models use. Options: (a) keep Section 6 as it is and report the UNKNOWN sensitivity analysis by sponsor class; (b) estimate the censoring curve by sponsor class, which changes a locked metric definition and the approved Step 8 harness, so it needs an ADR. **Recommended:** measure the effect of (b) on M0 at the development origins in Step 9, then decide with numbers.
 2. **Sponsor class in M2 and M3.** Section 9 defines M2 as design features only and M3 as M2 plus amendment signals. Finding 1 shows that sponsor class matters early and fades, which a logistic model can only use with an interaction. Nothing was changed; adding sponsor class or an interaction to M2 or M3 would be an ADR.
 3. **Enrollment type in the amendment family (Step 7).** Section 8 lists "enrollment target change ratio versus version 0". Finding 4 shows the ratio means different things before and after enrollment closes. **Recommended:** compute the target change only while the count is ESTIMATED and add "enrolled below the first target" once it is ACTUAL. A refinement of Section 8, so it needs approval.
 4. **Date precision in features (Step 7).** Start and completion dates are given to the month through 2016 and mostly to the day from 2017, just before the locked test years. **Recommended:** compute lag, overdue and planned-duration features by calendar month, or carry the precision as a feature guard.
 5. **The Step 11 pre-registration** should say that the COVID hypothesis was prompted by descriptive aggregates of the stress-test period (Table 13 of `docs/eda.md`).
+
+### Review of 2026-10-07 (Aakrisht)
+
+Aakrisht ran the verify commands on his machine: all 510 tests passed and the nine figures stayed identical, but regenerating the report changed `docs/eda.md` (`git status` showed ` M docs/eda.md`).
+
+**What differed.** Line endings, and nothing else:
+
+| | Bytes | Line endings | `git status` | `git diff` |
+| --- | --- | --- | --- | --- |
+| After `git switch provisional/step5-eda` | 31,501 | CRLF | clean | empty |
+| After regenerating | 31,166 | LF | ` M docs/eda.md` | empty |
+
+- The 335 bytes are one carriage return on each of the file's 335 lines. The regenerated file has the same blob hash as the committed one (`196db83`).
+- Git for Windows on this machine has `core.autocrlf=true`, so it checks a text file out with CRLF. The generator always wrote LF.
+- `git status` then reports the file as modified because its size no longer matches the size recorded at checkout. In that case git does not compare content, which is why `git diff` is empty.
+- It did not show in my shell because my working copy was the generator's own output and never a fresh checkout. Reproduced on 2026-10-07 by checking the file out and regenerating.
+
+**The fix** (commit `6192cb4`):
+
+- `trialpulse.reports.write_text_if_changed` and `write_bytes_if_changed`: a generated file that already holds the same content is not touched, whatever its line endings, and a file that changes keeps the line endings it had. The report, its figures and `replace_section` (the data audit) use them. The command now says "Up to date" when nothing changed.
+- `.gitattributes` pins LF for `docs/eda.md` and marks the figures binary, so a checkout holds the generator's own bytes on every machine.
+- Run date and working directory: the report never depended on them, and tests now say so (no EDA module reads the clock or the current directory; running from another directory gives the same bytes).
+- Tests that would have caught it: a report rewritten with CRLF, as git checks it out on Windows, must come back byte for byte and not even be rewritten; the committed report is regenerated from both line-ending forms. Putting the old behavior back on a scratch copy fails the new test.
+- Replayed after the fix: switch to main and back, regenerate, and `git status` is empty.
+
+**Approved once fixed.** Decisions 1 to 5 of the PR description are approved, and so are the other ten, unless one changes a locked definition, adds a dependency or changes main outside the PR. None adds a dependency and none changes main outside the PR. Three are flagged:
+
+- **Decision 13, shared code.** The PR changes `src/trialpulse/reports.py`, which Steps 3 and 4 use: `markdown_table` is added, and since the fix `replace_section` writes through `write_text_if_changed`. The data audit is now left untouched when its content is unchanged and keeps its line endings; a new audit file gets LF where it used to get the platform's line endings. All inside the PR.
+- **Decision 13, the 2018-01-01 date.** It is a constant in `cohort/audit.py`, not a value in `config/project.yaml`. It changes no locked definition, but it repeats one: it is the first locked origin of Section 6. A test now fails if the constant and the configuration ever disagree.
+- **Decision 15, the length of a month.** The EDA and the Step 4 sanity table count a horizon of m months as m times 365.25 / 12 days, while the Step 8 harness, which computes every reported metric, counts calendar months as Section 6 says. No locked definition changes, and the two differ only for an event exactly on the horizon day. It stays as it is unless Aakrisht wants the EDA on calendar months.
+
+One note under decision 1: the Step 4 sanity table in `docs/data_audit.md` still follows outcomes to the data cutoff. Changing it would be a change on main outside this PR, so it is left as it is.
+
+**Answers to the open questions:**
+
+1. **IPCW censoring weights:** estimated separately by sponsor class as the primary method, with the single curve as the sensitivity check. Recorded as an ADR with the implementation on main; it replaces the note logged for Step 11 in the Step 8 review.
+2. **Sponsor class in M2 and M3:** yes, so that each rung contains the one before: M0 sponsor class, M2 plus design, M3 plus amendment signals, M4 plus everything else. To be recorded as an ADR in Step 10.
+3. **Enrollment type** joins the amendment family in Step 7.
+4. **Date precision:** every date-based feature is computed at calendar-month precision, so the 2017 change in date precision cannot become a signal.
+5. **Pre-registration:** it discloses that the COVID hypothesis came from descriptive aggregates.
 
 ### Blocked, skipped or deferred
 
@@ -712,15 +753,16 @@ Two independent reviewers, as for Step 4. One re-derived the numbers with its ow
 
 ### Files touched
 
-- New: `src/trialpulse/eda/{__init__,analysis,results,refs,figures,charts,document,findings,report}.py`, `tests/eda/{conftest,test_analysis,test_findings,test_report,test_charts,test_figures}.py`, `docs/eda.md`, `docs/figures/eda_01_cif_by_sponsor_class.png` to `eda_09_covid_period_descriptive.png`.
-- Changed: `pyproject.toml` and `uv.lock` (matplotlib), `src/trialpulse/reports.py` (`markdown_table`), `tests/test_reports.py`, `docs/progress.md`, `docs/interview_notes.md`.
+- New: `.gitattributes`, `src/trialpulse/eda/{__init__,analysis,results,refs,figures,charts,document,findings,report}.py`, `tests/eda/{conftest,test_analysis,test_findings,test_report,test_charts,test_figures}.py`, `docs/eda.md`, `docs/figures/eda_01_cif_by_sponsor_class.png` to `eda_09_covid_period_descriptive.png`.
+- Changed: `pyproject.toml` and `uv.lock` (matplotlib), `src/trialpulse/reports.py` (`markdown_table`, `write_text_if_changed`, `write_bytes_if_changed`), `tests/test_reports.py`, `docs/progress.md`, `docs/interview_notes.md`.
 
 ### Verify (PowerShell)
 
-On branch `provisional/step5-eda`. The report takes about 15 seconds and should leave `git status` clean, because the committed report is what the command produces.
+On main after the merge. The report takes about 15 seconds, should print "Up to date" and should leave `git status` clean, because the committed report is what the command produces.
 
 ```powershell
-git switch provisional/step5-eda
+git switch main
+git pull
 uv sync
 uv run python -m trialpulse.eda.report
 git status --short

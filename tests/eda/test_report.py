@@ -380,6 +380,10 @@ def test_a_missing_input_is_refused_with_the_command_that_creates_it(
 
 def test_the_report_reads_nothing_after_2018_by_default() -> None:
     assert MODELING_EDA_BEFORE == BEFORE  # the date the twins and the document tests assume
+    # The date is a constant in the code. It must stay the first locked origin of the
+    # configuration (Section 6), which is where the locked definitions live.
+    locked = [o.date for o in load_project_config().walk_forward.origins if o.role != "dev"]
+    assert min(locked) == MODELING_EDA_BEFORE
 
 
 def _as_git_checks_it_out_on_windows(path: Path) -> bytes:
