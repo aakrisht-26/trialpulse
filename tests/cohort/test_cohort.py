@@ -2,6 +2,7 @@
 0014). T0 is 2015-01-01; month(n) is T0 plus n calendar months."""
 
 import datetime as dt
+from dataclasses import replace
 from typing import Any
 
 import duckdb
@@ -311,3 +312,178 @@ def test_versions_posted_out_of_order_are_refused(rules: CohortRules) -> None:
         version("NCT00000202", 1, month(0), "RECRUITING"),
     ]
     assert len(landmarks(cohort(same_day, rules), "NCT00000202")) == 7
+
+
+# Cases added after the Step 4 review: each pins a rule that a mutated implementation
+# previously survived.
+
+
+def test_the_first_terminal_version_decides_when_more_follow(rules: CohortRules) -> None:
+    con = cohort(
+        [
+            version("NCT00000301", 0, month(0), "RECRUITING"),
+            version("NCT00000301", 1, month(8), "COMPLETED"),
+            version("NCT00000301", 2, month(14), "COMPLETED"),
+            version("NCT00000302", 0, month(0), "RECRUITING"),
+            version("NCT00000302", 1, month(10), "TERMINATED"),
+            version("NCT00000302", 2, month(13), "COMPLETED"),
+        ],
+        rules,
+    )
+    o = outcome(con, "NCT00000301")
+    assert (o["event"], o["event_date"], o["reversal"]) == (2, month(8), False)
+    o = outcome(con, "NCT00000302")
+    assert (o["event"], o["event_date"], o["reversal"]) == (1, month(10), False)
+    assert [r[0] for r in landmarks(con, "NCT00000302")] == [0, 1]
+
+
+def test_the_stratum_is_the_sponsor_class_at_the_landmark(rules: CohortRules) -> None:
+    con = cohort(
+        [
+            version("NCT00000303", 0, month(0), "RECRUITING", lead_sponsor_class="INDUSTRY"),
+            version("NCT00000303", 1, month(9), "RECRUITING", lead_sponsor_class="OTHER"),
+        ],
+        rules,
+    )
+    assert [r[4] for r in landmarks(con, "NCT00000303")] == ["INDUSTRY"] * 2 + ["OTHER"] * 5
+
+
+def test_versions_posted_the_same_day_the_higher_number_is_the_state(
+    rules: CohortRules,
+) -> None:
+    con = cohort(
+        [
+            version("NCT00000304", 0, month(0), "RECRUITING", study_type="OBSERVATIONAL",
+                    lead_sponsor_class="OTHER"),
+            version("NCT00000304", 1, month(0), "RECRUITING", lead_sponsor_class="INDUSTRY"),
+        ],
+        rules,
+    )  # fmt: skip
+    assert landmarks(con, "NCT00000304")[0] == (0, T0, 0, CUTOFF, "INDUSTRY")
+
+
+def test_outcomes_use_the_whole_history_after_a_relabel(rules: CohortRules) -> None:
+    """ADR 0013: interventional at L0 and L1, relabeled observational, then terminated."""
+    con = cohort(
+        [
+            version("NCT00000305", 0, month(0), "RECRUITING"),
+            version("NCT00000305", 1, month(10), "RECRUITING", study_type="OBSERVATIONAL"),
+            version("NCT00000305", 2, month(15), "TERMINATED", study_type="OBSERVATIONAL"),
+        ],
+        rules,
+    )
+    assert [(r[0], r[2], r[3]) for r in landmarks(con, "NCT00000305")] == [
+        (0, 1, month(15)),
+        (1, 1, month(15)),
+    ]
+    assert excluded(con, "NCT00000305")[2] == "not_interventional"
+
+
+def test_a_reversal_stays_a_reversal_when_the_trial_ends_again(rules: CohortRules) -> None:
+    con = cohort(
+        [
+            version("NCT00000306", 0, month(0), "RECRUITING"),
+            version("NCT00000306", 1, month(6), "COMPLETED"),
+            version("NCT00000306", 2, month(7), "RECRUITING"),
+            version("NCT00000306", 3, month(12), "COMPLETED"),
+        ],
+        rules,
+    )
+    assert outcome(con, "NCT00000306")["reversal"] is True
+    assert landmarks(con, "NCT00000306") == []
+
+
+def test_a_lapse_resolved_by_a_new_verification_censors_nothing(rules: CohortRules) -> None:
+    con = cohort(
+        [
+            version("NCT00000307", 0, month(0), "RECRUITING", completion_date=month(6)),
+            version("NCT00000307", 1, month(40), "RECRUITING"),  # verified again, far completion
+        ],
+        rules,
+    )
+    o = outcome(con, "NCT00000307")
+    assert (o["event"], o["event_date"], o["censor_reason"], o["lapse_date"]) == (
+        0, CUTOFF, "cutoff", None,
+    )  # fmt: skip
+    assert [r[0] for r in landmarks(con, "NCT00000307")] == [0, 1, 2, 3, 4]
+
+
+def test_a_landmark_on_the_first_lapse_day_is_lapsed(rules: CohortRules) -> None:
+    con = cohort(
+        [
+            # Verified December 2014: lapses from 2017-01-01, which is landmark 4.
+            version("NCT00000308", 0, month(0), "RECRUITING", status_verified_date=D(2014, 12, 1),
+                    completion_date=month(6)),
+            version("NCT00000308", 1, month(30), "COMPLETED"),
+        ],
+        rules,
+    )  # fmt: skip
+    reasons = excluded(con, "NCT00000308")
+    assert (reasons[3], reasons[4]) == (None, "lapsed")
+
+
+def test_censoring_falls_back_to_the_post_date_without_a_verification(
+    rules: CohortRules,
+) -> None:
+    con = cohort(
+        [
+            version("NCT00000309", 0, month(0), "RECRUITING", completion_date=month(6)),
+            version("NCT00000309", 1, month(8), "RECRUITING", completion_date=month(6),
+                    status_verified_date=None),
+        ],
+        rules,
+    )  # fmt: skip
+    o = outcome(con, "NCT00000309")
+    assert (o["event"], o["event_date"], o["censor_reason"], o["lapse_date"]) == (
+        0, month(8), "unknown", D(2017, 10, 1),
+    )  # fmt: skip
+
+
+def test_a_status_that_is_not_open_gives_no_landmark(rules: CohortRules) -> None:
+    con = cohort(
+        [
+            version("NCT00000310", 0, month(0), "RECRUITING"),
+            version("NCT00000310", 1, month(4), "WITHHELD"),
+            version("NCT00000310", 2, month(10), "RECRUITING"),
+        ],
+        rules,
+    )
+    reasons = excluded(con, "NCT00000310")
+    assert (reasons[0], reasons[1], reasons[2]) == (None, "not_open", None)
+
+
+def test_the_population_window_starts_on_its_first_day(rules: CohortRules) -> None:
+    first, before = D(2008, 1, 1), D(2007, 12, 31)
+    con = cohort(
+        [
+            version("NCT00000311", 0, first, "RECRUITING", study_first_post_date=first),
+            version("NCT00000312", 0, before, "RECRUITING", study_first_post_date=before),
+        ],
+        rules,
+    )
+    assert outcome(con, "NCT00000311")["in_window"] is True
+    assert len(landmarks(con, "NCT00000311")) == 7
+    assert outcome(con, "NCT00000312")["in_window"] is False
+
+
+def test_the_cutoff_bounds_what_the_build_can_see(rules: CohortRules) -> None:
+    rows = [
+        # Lapses from 2017-02-01 (verified January 2015, completion passed).
+        version("NCT00000313", 0, month(0), "RECRUITING", completion_date=month(6)),
+        # Terminated in September 2016.
+        version("NCT00000314", 0, month(0), "RECRUITING"),
+        version("NCT00000314", 1, month(20), "TERMINATED"),
+    ]
+    on_lapse_day = cohort(rows, replace(rules, cutoff=D(2017, 2, 1)))
+    assert outcome(on_lapse_day, "NCT00000313")["censor_reason"] == "unknown"
+    day_before = cohort(rows, replace(rules, cutoff=D(2017, 1, 31)))
+    assert outcome(day_before, "NCT00000313")["censor_reason"] == "cutoff"
+    # A version posted after the cutoff does not exist yet.
+    early = cohort(rows, replace(rules, cutoff=D(2016, 1, 1)))
+    o = outcome(early, "NCT00000314")
+    assert (o["event"], o["event_date"], o["censor_reason"]) == (0, D(2016, 1, 1), "cutoff")
+    assert [r[0] for r in landmarks(early, "NCT00000314")] == [0, 1]
+    # Neither does a later verification: the state at the cutoff is still the lapsed one.
+    reverified = [*rows, version("NCT00000313", 1, month(40), "RECRUITING")]
+    mid = cohort(reverified, replace(rules, cutoff=D(2017, 6, 1)))
+    assert outcome(mid, "NCT00000313")["censor_reason"] == "unknown"

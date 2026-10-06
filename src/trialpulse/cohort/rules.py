@@ -150,6 +150,19 @@ def period_end(day: dt.date | None, precision: str | None) -> dt.date | None:
     return day
 
 
+def completion_ref(
+    completion: dt.date | None,
+    completion_precision: str | None,
+    primary_completion: dt.date | None,
+    primary_completion_precision: str | None,
+) -> dt.date | None:
+    """The date the rule compares: the completion date, else the primary completion date,
+    each at the end of its precision period (twin of completion_ref_sql)."""
+    return period_end(completion, completion_precision) or period_end(
+        primary_completion, primary_completion_precision
+    )
+
+
 def submitted_status(rules: CohortRules, overall_status: str, last_known_status: str | None) -> str:
     if overall_status in rules.unknown_labels and last_known_status is not None:
         return last_known_status

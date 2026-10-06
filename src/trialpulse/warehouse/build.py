@@ -322,11 +322,13 @@ def _validate_texts(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int
 def build_maps(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
     """Temporary lookup tables: raw sponsor name and class -> stored sponsor fields (no name
     for an individual), and raw age text -> years."""
+    # Distinct on the join key itself, so a missing name and an empty one are one row.
     pairs = con.execute(
-        "SELECT DISTINCT raw_sponsor_name, raw_sponsor_class FROM row_keys"
+        """SELECT DISTINCT coalesce(raw_sponsor_name, ''), coalesce(raw_sponsor_class, '')
+        FROM row_keys"""
     ).fetchall()
     sponsors = pd.DataFrame(
-        [(n or "", c or "", *astuple(sponsor(n, c))) for n, c in pairs],
+        [(n, c, *astuple(sponsor(n or None, c or None))) for n, c in pairs],
         columns=["name_key", "class_key", "name", "key", "is_individual"],
     ).astype({"name": object, "key": object, "is_individual": bool})
     con.register("sponsor_frame", sponsors)
@@ -436,10 +438,19 @@ def _insert(con: duckdb.DuckDBPyConnection, table: str, rows: pa.Table) -> None:
     con.unregister("chunk")
 
 
+# Nullable pandas types straight from Arrow: a BIGINT column with a NULL would otherwise
+# pass through float64 and lose integers above 2^53.
+_NULLABLE = {
+    pa.int64(): pd.Int64Dtype(),
+    pa.bool_(): pd.BooleanDtype(),
+    pa.float64(): pd.Float64Dtype(),
+}
+
+
 def prepare_chunk(raw: pa.Table) -> tuple[pa.Table, pa.Table]:
     """Typed canonical rows with content hashes, split into valid and quarantined rows. Runs
     in a worker: Arrow in and out, so the main process never converts rows to pandas."""
-    frame = typed_frame(raw.to_pandas(date_as_object=False))
+    frame = typed_frame(raw.to_pandas(date_as_object=False, types_mapper=_NULLABLE.get))
     frame["content_hash"] = content_hashes(frame)
     valid, failing = split_valid(frame)
     return (

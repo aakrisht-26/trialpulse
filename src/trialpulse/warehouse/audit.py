@@ -35,7 +35,8 @@ from trialpulse.warehouse.build import (
 )
 
 AUDIT_PATH = REPO_ROOT / "docs" / "data_audit.md"
-PART_1_HEADING = "# Data audit, part 1"
+AUDIT_FAMILY = "# Data audit, part "  # the prefix of every part heading
+PART_1_HEADING = AUDIT_FAMILY + "1"
 PARITY_PATH = REPO_ROOT / "data" / "warehouse_parity.json"
 RAW_DATES: tuple[str, ...] = (
     "last_update_post_date",
@@ -538,7 +539,8 @@ def write_audit(
 ) -> None:
     with duckdb.connect(str(warehouse), read_only=True) as con:
         text = render_audit(con, glob, cfg or load_project_config())
-    replace_section(out_path, PART_1_HEADING, text)  # part 2 belongs to the cohort build
+    # Part 2 belongs to the cohort build and is left as it is.
+    replace_section(out_path, PART_1_HEADING, text, AUDIT_FAMILY)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

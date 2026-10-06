@@ -39,7 +39,7 @@ from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import load_project_config
 from trialpulse.eval.walkforward import LANDMARKS_PATH
 from trialpulse.reports import replace_section
-from trialpulse.warehouse.audit import AUDIT_PATH
+from trialpulse.warehouse.audit import AUDIT_FAMILY, AUDIT_PATH
 from trialpulse.warehouse.build import WAREHOUSE_PATH
 
 COHORT_DIR = LANDMARKS_PATH.parent
@@ -141,6 +141,19 @@ def attach_warehouse(con: duckdb.DuckDBPyConnection, warehouse: Path) -> None:
     con.execute("CREATE TEMP VIEW versions AS SELECT * FROM wh.versions")
 
 
+def warehouse_stamp(con: duckdb.DuckDBPyConnection) -> str:
+    """What the attached warehouse is: its dataset revision, schema version, and the row
+    count and checksum of its versions table."""
+    info = dict(con.execute("SELECT key, value FROM wh.build_info").fetchall())
+    rows, checksum = con.execute(
+        "SELECT count(*), coalesce(sum(hash(t)::HUGEINT), 0) FROM wh.versions t"
+    ).fetchone() or (0, 0)
+    return (
+        f"dataset revision {info.get('dataset.revision', 'not recorded')}, schema version "
+        f"{info.get('schema_version')}, {int(rows):,} versions with checksum {checksum}"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the cohort from the warehouse.")
     parser.add_argument("--warehouse", type=Path, default=WAREHOUSE_PATH)
@@ -161,7 +174,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         replace_section(
             args.audit,
             PART_2_HEADING,
-            render_part_2(con, rules, aj_rows, cfg.horizons_months, outputs),
+            render_part_2(con, rules, aj_rows, cfg.horizons_months, outputs, warehouse_stamp(con)),
+            AUDIT_FAMILY,
         )
     log_path = out_dir / BUILD_LOG_PATH.name
     tables = {name: {"rows": rows, "checksum": checksum} for name, rows, checksum in outputs}

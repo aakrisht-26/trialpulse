@@ -49,6 +49,14 @@ EXCLUSION_ORDER: tuple[str, ...] = (
 def candidate_landmarks(trial_id: np.ndarray, t0: np.ndarray, rules: CohortRules) -> pd.DataFrame:
     """Every trial at k = 0 to max_index: L_k = t0 + spacing * k calendar months."""
     t0_days = np.asarray(t0, dtype="datetime64[D]")
+    if len(t0_days) == 0:  # no eligible trial: an empty frame with the right types
+        return pd.DataFrame(
+            {
+                "trial_id": pd.Series(dtype=object),
+                "landmark_index": pd.Series(dtype=np.int64),
+                "landmark_date": pd.Series(dtype="datetime64[s]"),
+            }
+        )
     frames = []
     for k in range(rules.max_index + 1):
         frames.append(

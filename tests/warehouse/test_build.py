@@ -274,3 +274,111 @@ def test_audit_includes_the_parity_sample_with_causes(
     path.write_text(json.dumps(stale), encoding="utf-8")
     with duckdb.connect(str(warehouse), read_only=True) as con:
         assert "Source parity" not in render_audit(con, dataset, cfg, parity_path=path)
+
+
+def test_the_api_v2_path_matches_a_version_shown_as_unknown(warehouse: Path) -> None:
+    """NCT00000006: the registry's UNKNOWN over a submitted RECRUITING, from both sources."""
+    with duckdb.connect(str(warehouse), read_only=True) as con:
+        cursor = con.execute("SELECT * FROM versions WHERE nct_id = 'NCT00000006'")
+        names = [d[0] for d in cursor.description]
+        stored = dict(zip(names, cursor.fetchall()[0], strict=True))
+    study = {
+        "protocolSection": {
+            "identificationModule": {
+                "nctId": "NCT00000006",
+                "briefTitle": "A Study",
+                "officialTitle": "A Phase 3 Study",
+                "organization": {"class": "INDUSTRY"},
+            },
+            "statusModule": {
+                "overallStatus": "UNKNOWN",
+                "lastKnownStatus": "RECRUITING",
+                "statusVerifiedDate": "2016-02-02",
+                "startDateStruct": {"date": "2015-04", "type": "ACTUAL"},
+                "primaryCompletionDateStruct": {"date": "2017-06-30", "type": "ESTIMATED"},
+                "completionDateStruct": {"date": "2017-12-31", "type": "ESTIMATED"},
+                "studyFirstSubmitDate": "2015-02-27",
+                "studyFirstPostDateStruct": {"date": "2015-03-02", "type": "ACTUAL"},
+                "lastUpdateSubmitDate": "2016-02-02",
+                "lastUpdatePostDateStruct": {"date": "2016-02-02", "type": "ACTUAL"},
+            },
+            "sponsorCollaboratorsModule": {
+                "leadSponsor": {"name": "Acme Pharma & Co.", "class": "INDUSTRY"}
+            },
+            "descriptionModule": {"briefSummary": "Short summary."},
+            "designModule": {
+                "studyType": "INTERVENTIONAL",
+                "designInfo": {
+                    "allocation": "RANDOMIZED",
+                    "interventionModel": "PARALLEL",
+                    "primaryPurpose": "TREATMENT",
+                    "maskingInfo": {"masking": "DOUBLE"},
+                },
+                "enrollmentInfo": {"count": 100, "type": "ESTIMATED"},
+            },
+            "eligibilityModule": {
+                "eligibilityCriteria": (
+                    "Inclusion Criteria:\n\n* Age \\>= 18\n"
+                    "* Contact pi@hospital.org for details. Walk daily."
+                ),
+                "healthyVolunteers": False,
+                "sex": "ALL",
+                "minimumAge": "18 Years",
+            },
+        }
+    }
+    row, _ = canonical_from_api_v2(study)
+    assert (row["overall_status"], row["last_known_status"]) == ("UNKNOWN", "RECRUITING")
+    compared = [c for c in CANONICAL_COLUMNS if c not in ("nct_version", "source")]
+    assert {c: row[c] for c in compared} == {c: stored[c] for c in compared}
+
+
+@pytest.mark.slow  # builds a second warehouse
+def test_a_missing_and_an_empty_sponsor_name_do_not_duplicate_versions(
+    tmp_path: Path, cfg: ProjectConfig
+) -> None:
+    """Both normalize to no name: the sponsor lookup must hold one row for them, or the
+    join would stage each of these versions twice and quarantine them as duplicates."""
+    from .conftest import _version, write_dataset
+
+    rows = [
+        _version("NCT00000021", 0, "2016-01-01", lead_sponsor_name=None),
+        _version("NCT00000022", 0, "2016-01-01", lead_sponsor_name=""),
+        _version("NCT00000023", 0, "2016-01-01"),
+    ]
+    glob = write_dataset(tmp_path / "raw" / "core", rows)
+    path = tmp_path / "w.duckdb"
+    build(glob, cfg, path, workers=1, temp_dir=tmp_path / "tmp")
+    assert _query(path, "SELECT count(*) FROM versions") == [(3,)]
+    assert _query(path, "SELECT count(*) FROM versions_quarantine") == [(0,)]
+    assert _query(path, "SELECT count(*) FROM versions WHERE sponsor_key IS NULL") == [(2,)]
+
+
+def test_large_integers_survive_the_chunk_conversion() -> None:
+    """A BIGINT column with a NULL must not pass through float64 (exact only up to 2^53)."""
+    import pyarrow as pa
+
+    from trialpulse.warehouse.build import prepare_chunk
+
+    row, _ = canonical_from_api_v2(
+        {
+            "protocolSection": {
+                "identificationModule": {"nctId": "NCT00000031"},
+                "statusModule": {
+                    "overallStatus": "RECRUITING",
+                    "lastUpdatePostDateStruct": {"date": "2020-01-01"},
+                },
+            }
+        }
+    )
+    base = {**row, "source": "history", "nct_version": 0}
+    big = 2**53 + 1
+    table = pa.Table.from_pylist(
+        [
+            {**base, "enrollment_count": big},
+            {**base, "nct_id": "NCT00000032", "enrollment_count": None},
+        ]
+    )
+    valid, failing = prepare_chunk(table)
+    assert failing.num_rows == 0
+    assert valid.column("enrollment_count").to_pylist() == [big, None]
