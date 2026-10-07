@@ -10,12 +10,14 @@ Outputs, in data/cohort/:
   landmark);
 - outcomes.parquet: one row per trial: t0, the event or censoring, reversal, the UNKNOWN
   lapse date (for the Step 11 sensitivity analysis);
-- aj_sanity_by_sponsor_class.csv: the Aalen-Johansen sanity table, also printed;
-- training/origin_<date>/landmarks.parquet and person_period.parquet, one pair per
-  walk-forward origin: the cohort as it would have been built on the origin, from versions
-  posted before it only (ADR 0016). These are the training rows of the harness and of the
-  discrete-time models; landmarks.parquet and person_period.parquet above, with outcomes
-  through the data cutoff, are for evaluation and description;
+- aj_sanity_by_sponsor_class.csv: the Aalen-Johansen sanity table, also printed (a
+  sanity check only, not used for modeling: it follows outcomes to the data cutoff);
+- training/origin_<date>/landmarks.parquet, person_period.parquet and outcomes.parquet,
+  one set per walk-forward origin: the cohort as it would have been built on the origin,
+  from versions posted before it only (ADR 0016). These are the training rows of the
+  harness and of the discrete-time models, and the 2018-01-01 set is what the
+  modeling-relevant EDA reads; landmarks.parquet and person_period.parquet above, with
+  outcomes through the data cutoff, are for evaluation and description;
 - build.json: row counts, checksums and whether they match the previous build.
 
 It also writes part 2 of docs/data_audit.md. The build reads the warehouse read-only and
@@ -170,8 +172,9 @@ def build_training_cohorts(
     final_landmarks: Path,
 ) -> list[dict[str, Any]]:
     """For each walk-forward origin, build the cohort as of the origin (ADR 0016) and write
-    its landmark and person-period rows. The cohort_* tables in `con` are replaced each
-    time, so this needs a connection of its own. Returns one summary per origin."""
+    its landmark rows, person-period rows and outcomes. The cohort_* tables in `con` are
+    replaced each time, so this needs a connection of its own. Returns one summary per
+    origin."""
     summaries: list[dict[str, Any]] = []
     for origin in origins:
         build_cohort(con, rules.as_of(origin))
@@ -188,6 +191,8 @@ def build_training_cohorts(
             PERSON_PERIOD_COLUMNS,
             PERSON_PERIOD_ORDER,
         )
+        outcomes_path = landmarks_path.parent / OUTCOMES_PATH.name
+        outcomes = _write_table(con, "cohort_outcomes", outcomes_path, OUTCOME_COLUMNS, "trial_id")
         trials = con.execute("SELECT count(DISTINCT trial_id) FROM cohort_landmarks").fetchone()
         folder = landmarks_path.parent.name
         summaries.append(
@@ -197,6 +202,7 @@ def build_training_cohorts(
                 "files": {
                     f"{TRAINING_DIR_NAME}/{folder}/{landmarks_path.name}": landmarks,
                     f"{TRAINING_DIR_NAME}/{folder}/{person_period_path.name}": person_period,
+                    f"{TRAINING_DIR_NAME}/{folder}/{outcomes_path.name}": outcomes,
                 },
                 "landmark_rows": landmarks[0],
                 "person_period_rows": person_period[0],
@@ -293,8 +299,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tables": tables,
     }
     log_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    print("Aalen-Johansen sanity table: early-stop CIF from L0 by sponsor class "
-          "(L0 before 2018-01-01)")  # fmt: skip
+    print("Aalen-Johansen sanity table (sanity check only, not used for modeling): "
+          "early-stop CIF from L0 by sponsor class, L0 before 2018-01-01")  # fmt: skip
     months = cfg.horizons_months
     print(f"{'sponsor class':<14}{'trials':>10}" + "".join(f"{f'CIF {m}m':>10}" for m in months))
     for row in aj_rows:

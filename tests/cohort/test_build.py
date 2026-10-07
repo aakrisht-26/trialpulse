@@ -71,7 +71,7 @@ def test_outputs_audit_and_a_repeat_build(built: Path) -> None:
         "## Outcomes by first-post year (cohort trials)",
         "## UNKNOWN: the registry's label and the derived rule",
         "## Person-period rows",
-        "## Aalen-Johansen sanity table",
+        "## Aalen-Johansen sanity table (sanity check only, not used for modeling)",
     ):
         assert heading in audit
     assert "—" not in audit
@@ -135,6 +135,20 @@ def test_the_build_writes_the_training_rows_of_every_origin(built: Path) -> None
         assert intervals is not None
         assert intervals[0] == log["tables"][name.replace("landmarks", "person_period")]["rows"]
         assert intervals[1] <= origin
+        # The outcomes as of the origin: nothing ends after it, and an event is before it.
+        outcomes = path.with_name("outcomes.parquet").as_posix()
+        with duckdb.connect() as con:
+            known = con.execute(
+                f"""SELECT count(*), max(event_date),
+                  max(event_date) FILTER (WHERE event <> 0),
+                  count(*) FILTER (WHERE trial_id IN (SELECT trial_id FROM '{path.as_posix()}'))
+                FROM '{outcomes}'"""
+            ).fetchone()
+        assert known is not None
+        assert known[0] == log["tables"][name.replace("landmarks", "outcomes")]["rows"]
+        assert known[1] <= origin
+        assert known[2] < origin
+        assert known[3] == len(set(rows.trial_id.tolist()))  # every trial with a landmark row
     # The final landmarks are not training rows: they know what was posted later.
     final = load_landmark_rows(built / "cohort" / "landmarks.parquet")
     with pytest.raises(ValueError, match="ADR 0016"):

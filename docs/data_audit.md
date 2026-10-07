@@ -293,9 +293,9 @@ Each landmark row expands into up to 4 intervals of 6 months; the sequence ends 
 | 3 | 954,473 | 839,057 | 20,222 | 95,194 |
 | 4 | 791,368 | 691,210 | 17,993 | 82,165 |
 
-## Aalen-Johansen sanity table
+## Aalen-Johansen sanity table (sanity check only, not used for modeling)
 
-Early-stop CIF from the registration landmark (L0), by the lead sponsor class at L0 (M0's stratum; phase is not versioned, ADR 0006), over L0 landmarks before 2018-01-01 (Section 10). Outcomes are observed through the data cutoff; completion is a competing event.
+*Sanity check only, not used for modeling.* Early-stop CIF from the registration landmark (L0), by the lead sponsor class at L0 (M0's stratum; phase is not versioned, ADR 0006), over L0 landmarks before 2018-01-01. It reads the final cohort and follows outcomes through the data cutoff, which no model trained at an origin can do; completion is a competing event. Its purpose is to check that the cohort gives plausible rates. The modeling-relevant version, from the cohort as of 2018-01-01, is Table 1 of `docs/eda.md`.
 
 | Sponsor class at L0 | Trials | Early stops (any time) | Early-stop CIF at 12 months | Early-stop CIF at 24 months |
 | --- | --- | --- | --- | --- |
@@ -333,11 +333,16 @@ For each walk-forward origin T the training rows are built from the versions pos
 | --- | --- | --- |
 | `training/origin_2016-01-01/landmarks.parquet` | 399,905 | 3688205366419341642133807 |
 | `training/origin_2016-01-01/person_period.parquet` | 1,034,833 | 9545602956599184580415622 |
+| `training/origin_2016-01-01/outcomes.parquet` | 205,319 | 1892497864509929529009230 |
 | `training/origin_2017-01-01/landmarks.parquet` | 480,046 | 4427878002903659295880219 |
 | `training/origin_2017-01-01/person_period.parquet` | 1,272,628 | 11733624224633160210345425 |
+| `training/origin_2017-01-01/outcomes.parquet` | 233,104 | 2147083628358416672270096 |
 | `training/origin_2018-01-01/landmarks.parquet` | 567,423 | 5231486131499544622657844 |
 | `training/origin_2018-01-01/person_period.parquet` | 1,532,909 | 14138295506253516125841493 |
+| `training/origin_2018-01-01/outcomes.parquet` | 262,279 | 2419105459494511086833957 |
 | `training/origin_2019-01-01/landmarks.parquet` | 653,603 | 6031059900265745580008507 |
 | `training/origin_2019-01-01/person_period.parquet` | 1,794,016 | 16560909758746120487997514 |
+| `training/origin_2019-01-01/outcomes.parquet` | 293,223 | 2702097781819786307559732 |
 | `training/origin_2020-01-01/landmarks.parquet` | 748,038 | 6895706388545719906256527 |
 | `training/origin_2020-01-01/person_period.parquet` | 2,083,468 | 19223289834445061007609027 |
+| `training/origin_2020-01-01/outcomes.parquet` | 325,733 | 3004663405723056792628542 |

@@ -277,12 +277,15 @@ def render_part_2(
             [(j, *(_n(v) for v in r)) for j, *r in pp],
         ),
         "",
-        "## Aalen-Johansen sanity table",
+        "## Aalen-Johansen sanity table (sanity check only, not used for modeling)",
         "",
-        "Early-stop CIF from the registration landmark (L0), by the lead sponsor class at "
-        "L0 (M0's stratum; phase is not versioned, ADR 0006), over L0 landmarks before "
-        f"{MODELING_EDA_BEFORE} (Section 10). Outcomes are observed through the data "
-        "cutoff; completion is a competing event.",
+        "*Sanity check only, not used for modeling.* Early-stop CIF from the registration "
+        "landmark (L0), by the lead sponsor class at L0 (M0's stratum; phase is not "
+        f"versioned, ADR 0006), over L0 landmarks before {MODELING_EDA_BEFORE}. It reads the "
+        "final cohort and follows outcomes through the data cutoff, which no model trained at "
+        "an origin can do; completion is a competing event. Its purpose is to check that the "
+        "cohort gives plausible rates. The modeling-relevant version, from the cohort as of "
+        f"{MODELING_EDA_BEFORE}, is Table 1 of `docs/eda.md`.",
         "",
         *_table(aj_headers, aj_table),
         "",
