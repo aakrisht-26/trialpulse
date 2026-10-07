@@ -3,7 +3,9 @@ calibration (by risk decile against Aalen-Johansen, plus slope and intercept) an
 
 All functions take time (days since the landmark), event (0 censored, 1 early stop,
 2 completion), the predicted CIF of an early stop at the horizon, and the horizon (a
-scalar or one value per row, on the same time scale).
+scalar or one value per row, on the same time scale). The IPCW metrics also take `groups`,
+one label per row: the censoring distribution is then estimated within each group (ADR
+0017: by lead sponsor class in the primary metrics, one curve in the sensitivity check).
 """
 
 from typing import Any
@@ -13,6 +15,8 @@ import numpy.typing as npt
 
 from trialpulse.eval.ipcw import FloatArray, IntArray, horizon_labels_and_weights
 from trialpulse.models.aalen_johansen import aalen_johansen
+
+Groups = npt.NDArray[Any] | None
 
 
 def weighted_auc(y: npt.NDArray[np.int8], score: FloatArray, w: FloatArray) -> float:
@@ -35,19 +39,27 @@ def weighted_auc(y: npt.NDArray[np.int8], score: FloatArray, w: FloatArray) -> f
 
 
 def ipcw_auc(
-    time: FloatArray, event: IntArray, score: FloatArray, horizon: FloatArray | float
+    time: FloatArray,
+    event: IntArray,
+    score: FloatArray,
+    horizon: FloatArray | float,
+    groups: Groups = None,
 ) -> float:
     """Time-dependent AUC for an early stop by the horizon (cases vs controls, where
     controls include completions), with inverse probability of censoring weights."""
-    y, w = horizon_labels_and_weights(time, event, horizon)
+    y, w = horizon_labels_and_weights(time, event, horizon, groups)
     return weighted_auc(y, score, w)
 
 
 def ipcw_brier(
-    time: FloatArray, event: IntArray, score: FloatArray, horizon: FloatArray | float
+    time: FloatArray,
+    event: IntArray,
+    score: FloatArray,
+    horizon: FloatArray | float,
+    groups: Groups = None,
 ) -> float:
     """IPCW Brier score: sum of w_i * (y_i - p_i)^2 over all rows, divided by n."""
-    y, w = horizon_labels_and_weights(time, event, horizon)
+    y, w = horizon_labels_and_weights(time, event, horizon, groups)
     p = np.asarray(score, dtype=np.float64)
     return float(np.sum(w * (y - p) ** 2) / len(p)) if len(p) else float("nan")
 
@@ -58,10 +70,11 @@ def lift_at(
     score: FloatArray,
     horizon: FloatArray | float,
     top_fraction: float,
+    groups: Groups = None,
 ) -> float:
     """IPCW early-stop rate among the top_fraction of rows by predicted risk, divided by
     the IPCW rate among all rows. Ties are broken by row order, so the result is stable."""
-    y, w = horizon_labels_and_weights(time, event, horizon)
+    y, w = horizon_labels_and_weights(time, event, horizon, groups)
     n = len(y)
     if n == 0:
         return float("nan")
@@ -99,11 +112,15 @@ def _weighted_logistic(
 
 
 def calibration_slope_intercept(
-    time: FloatArray, event: IntArray, score: FloatArray, horizon: FloatArray | float
+    time: FloatArray,
+    event: IntArray,
+    score: FloatArray,
+    horizon: FloatArray | float,
+    groups: Groups = None,
 ) -> tuple[float, float]:
     """IPCW logistic recalibration. Slope: b in logit(P(y)) = a + b * logit(p); 1 is
     ideal. Intercept (calibration in the large): a with b fixed at 1; 0 is ideal."""
-    y, w = horizon_labels_and_weights(time, event, horizon)
+    y, w = horizon_labels_and_weights(time, event, horizon, groups)
     keep = w > 0
     p = np.clip(np.asarray(score, dtype=np.float64)[keep], 1e-6, 1 - 1e-6)
     x = np.log(p / (1 - p))

@@ -155,6 +155,9 @@ class EvaluationConfig(_Section):
     confidence_level: float = Field(gt=0, lt=1)
     calibration_bins: PositiveInt
     lift_top_fraction: float = Field(gt=0, le=1)
+    # ADR 0017: one censoring curve per lead sponsor class; a class with fewer rows than
+    # this in the rows being scored shares one pooled curve with the other small classes.
+    censoring_min_rows: PositiveInt
 
 
 class SeedConfig(_Section):

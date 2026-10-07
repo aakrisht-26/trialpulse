@@ -12,6 +12,12 @@ scored against outcomes observed through the data cutoff. Metrics are reported p
 horizon, pooled over landmark indices and per landmark index, with cluster-bootstrap
 intervals that resample trials.
 
+The IPCW metrics weight each row by a censoring curve estimated within its lead sponsor
+class at the landmark (ADR 0017), because censoring under the UNKNOWN rule depends on the
+sponsor class and so does the outcome. Classes with too few rows in the slice being scored
+share one pooled curve. The same metrics with one curve for all rows are reported beside
+them as the sensitivity check ("single_censoring_curve"), as point estimates.
+
 Locked origins (2018, 2019 and the 2020 stress test) need the test lock (ADR 0004). The
 lock is checked before any data is loaded or any model is fitted.
 
@@ -20,6 +26,8 @@ Input contract (written by the Step 4 cohort build; approved 2026-09-23): one ro
 stop, 2 completion) and event_date, plus any feature columns the model needs (M0 uses
 "stratum"). event_date holds the date of the event when event is 1 or 2, and the censoring
 date when event is 0 (the data cutoff, or the UNKNOWN censoring date of Section 6).
+Evaluation rows must carry "stratum", the lead sponsor class at the landmark: the censoring
+weights are estimated within it (ADR 0017).
 """
 
 import argparse
@@ -39,7 +47,7 @@ from trialpulse.config import REPO_ROOT, Origin, ProjectConfig, load_project_con
 from trialpulse.dates import DateArray, add_months, days_between
 from trialpulse.eval import EVENT_CENSORED
 from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap
-from trialpulse.eval.ipcw import FloatArray, IntArray
+from trialpulse.eval.ipcw import FloatArray, IntArray, censoring_groups
 from trialpulse.eval.lock import TestLockError, require_unlock
 from trialpulse.eval.metrics import (
     calibration_slope_intercept,
@@ -54,6 +62,7 @@ LANDMARKS_PATH = REPO_ROOT / "data" / "cohort" / "landmarks.parquet"
 TRAINING_DIR = LANDMARKS_PATH.parent / "training"
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "walkforward"
 REQUIRED_COLUMNS = ("trial_id", "landmark_index", "landmark_date", "event", "event_date")
+CENSORING_COLUMN = "stratum"  # the lead sponsor class at the landmark (ADR 0017)
 
 
 @dataclass(frozen=True)
@@ -172,18 +181,27 @@ def evaluate_predictions(
     score: FloatArray,
     horizon: FloatArray,
     clusters: npt.NDArray[Any],
+    sponsor_class: npt.NDArray[Any],
     cfg: ProjectConfig,
     n_resamples: int,
     context: str = "",
 ) -> dict[str, Any]:
+    """The metrics of one slice. The primary values weight each row by the censoring curve
+    of its sponsor class (ADR 0017): the groups are fixed here, on the whole slice, and each
+    bootstrap resample fits its own curves within them. "single_censoring_curve" holds the
+    same metrics with one curve for all rows, the sensitivity check, without intervals."""
     ev = cfg.evaluation
     seed = cfg.seeds.default
+    groups = censoring_groups(sponsor_class, ev.censoring_min_rows)
+
+    def lift(t: FloatArray, e: IntArray, s: FloatArray, h: FloatArray, g: Any) -> float:
+        return lift_at(t, e, s, h, ev.lift_top_fraction, g)
 
     def boot(name: str, metric: Callable[..., float]) -> dict[str, float | int]:
         try:
             return cluster_bootstrap(
                 clusters,
-                lambda idx: metric(time[idx], event[idx], score[idx], horizon[idx]),
+                lambda idx: metric(time[idx], event[idx], score[idx], horizon[idx], groups[idx]),
                 n_resamples,
                 seed,
                 ev.confidence_level,
@@ -191,18 +209,28 @@ def evaluate_predictions(
         except BootstrapError as exc:  # name the slice and metric that failed
             raise BootstrapError(f"{context}, metric {name}: {exc}") from exc
 
-    slope, intercept = calibration_slope_intercept(time, event, score, horizon)
+    slope, intercept = calibration_slope_intercept(time, event, score, horizon, groups)
+    single_slope, single_intercept = calibration_slope_intercept(time, event, score, horizon)
+    names, counts = np.unique(groups, return_counts=True)
     return {
         "n_rows": len(time),
         "n_trials": len(np.unique(clusters)),
+        "censoring_groups": {str(n): int(c) for n, c in zip(names, counts, strict=True)},
         "auc": boot("auc", ipcw_auc),
         "brier": boot("brier", ipcw_brier),
-        "lift": boot("lift", lambda t, e, s, h: lift_at(t, e, s, h, ev.lift_top_fraction)),
+        "lift": boot("lift", lift),
         "calibration_slope": slope,
         "calibration_intercept": intercept,
         "calibration_table": calibration_table(
             time, event, score, float(np.median(horizon)), ev.calibration_bins
         ),
+        "single_censoring_curve": {
+            "auc": ipcw_auc(time, event, score, horizon),
+            "brier": ipcw_brier(time, event, score, horizon),
+            "lift": lift(time, event, score, horizon, None),
+            "calibration_slope": single_slope,
+            "calibration_intercept": single_intercept,
+        },
     }
 
 
@@ -226,6 +254,10 @@ def run(
         "bootstrap_resamples": resamples,
         "dataset_revision": cfg.dataset.revision,
         "training_labels": "as of each origin (ADR 0016)",
+        "censoring_weights": (
+            f"by lead sponsor class at the landmark, classes under "
+            f"{cfg.evaluation.censoring_min_rows} rows pooled (ADR 0017)"
+        ),
         "unlock": {**asdict(unlock), "registered": unlock.registered.isoformat()}
         if unlock
         else None,
@@ -235,6 +267,12 @@ def run(
         t = np.datetime64(origin.date, "D")
         train, train_time, train_event = training_rows(load_training(origin.date), t)
         ev, ev_time, ev_event = evaluation_rows(rows, t, cfg.walk_forward.eval_window_months)
+        if CENSORING_COLUMN not in ev.features:
+            raise ValueError(
+                f'the evaluation rows have no "{CENSORING_COLUMN}" column; the censoring weights '
+                "are estimated within the lead sponsor class at the landmark (ADR 0017)"
+            )
+        sponsor_class = ev.features[CENSORING_COLUMN]
         model = MODELS[model_name]().fit(train_time, train_event, train.features)
         horizons: dict[str, Any] = {}
         for months in cfg.horizons_months:
@@ -242,14 +280,15 @@ def run(
             score = model.predict_cif(h, ev.features)
             where = f"origin {origin.date.isoformat()}, horizon {months} months"
             pooled = evaluate_predictions(
-                ev_time, ev_event, score, h, ev.trial_id, cfg, resamples, f"{where}, pooled"
-            )
+                ev_time, ev_event, score, h, ev.trial_id, sponsor_class, cfg, resamples,
+                f"{where}, pooled",
+            )  # fmt: skip
             by_index = {}
             for k in np.unique(ev.landmark_index):
                 m = ev.landmark_index == k
                 by_index[str(int(k))] = evaluate_predictions(
-                    ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], cfg, resamples,
-                    f"{where}, landmark index {int(k)}",
+                    ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], sponsor_class[m],
+                    cfg, resamples, f"{where}, landmark index {int(k)}",
                 )  # fmt: skip
             horizons[str(months)] = {"pooled": pooled, "by_landmark_index": by_index}
         results["origins"].append(
