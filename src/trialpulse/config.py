@@ -156,7 +156,8 @@ class EvaluationConfig(_Section):
     calibration_bins: PositiveInt
     lift_top_fraction: float = Field(gt=0, le=1)
     # ADR 0017: one censoring curve per lead sponsor class; a class with fewer rows than
-    # this in the rows being scored shares one pooled curve with the other small classes.
+    # this among the evaluation rows of an origin shares one pooled curve with the other
+    # small classes, at every landmark index.
     censoring_min_rows: PositiveInt
 
 

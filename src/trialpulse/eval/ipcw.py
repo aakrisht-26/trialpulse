@@ -11,14 +11,20 @@ censoring distribution, so the known outcomes stand in for the unknown ones:
 
 Without censoring G is 1 everywhere and every weight is 1.
 
+**Ties: events first.** Times are whole days, so a stop or a completion often shares its
+day with another row's censoring. A row that ended on day t was observed through day t, so
+it is not at risk of being censored on day t: the risk set of a censoring on day t leaves
+out the rows that ended that day. With this convention the weights of the rows scored at
+one horizon add up to the number of rows.
+
 **One censoring curve per sponsor class (ADR 0017).** The weights are right only if
 censoring is unrelated to the outcome among the rows that share a curve. Censoring under
 the UNKNOWN rule is several times as common for some sponsor classes as for others, and
 sponsor class also predicts the outcome, so one curve for all rows gives the rows of a
 heavily censored class too little weight. With `groups`, G is estimated separately within
 each group and every row is weighted by its own group's curve. The primary metrics use the
-lead sponsor class at the landmark as the group (`censoring_groups`); one curve for all
-rows is kept as the sensitivity check.
+lead sponsor class at the landmark as the group (`censoring_groups`, decided once on all
+the evaluation rows of an origin); one curve for all rows is kept as the sensitivity check.
 """
 
 from dataclasses import dataclass
@@ -57,22 +63,33 @@ class StepFunction:
         return np.where(idx == 0, 1.0, self.values[np.maximum(idx - 1, 0)])
 
 
-def kaplan_meier(time: FloatArray, is_event: npt.NDArray[np.bool_]) -> StepFunction:
-    """Kaplan-Meier survival for the event flagged by is_event; other rows are censored."""
+def kaplan_meier(
+    time: FloatArray, is_event: npt.NDArray[np.bool_], others_first: bool = False
+) -> StepFunction:
+    """Kaplan-Meier survival for the event flagged by is_event; other rows are censored.
+
+    At a tied time the flagged rows come first by default: a row that leaves unflagged at t
+    is still at risk of the event at t. With `others_first` the unflagged rows of time t
+    leave before the flagged ones, so they are not at risk at t."""
     time = np.asarray(time, dtype=np.float64)
     order = np.argsort(time, kind="stable")
     t_sorted, e_sorted = time[order], np.asarray(is_event, dtype=bool)[order]
     uniq, first = np.unique(t_sorted, return_index=True)
-    events = np.add.reduceat(e_sorted.astype(np.float64), first) if len(uniq) else np.array([])
-    at_risk = len(t_sorted) - first
-    factors = 1.0 - events / at_risk
+    if not len(uniq):
+        return StepFunction(uniq, uniq)
+    events = np.add.reduceat(e_sorted.astype(np.float64), first)
+    at_risk = (len(t_sorted) - first).astype(np.float64)
+    if others_first:
+        at_risk -= np.add.reduceat((~e_sorted).astype(np.float64), first)
     keep = events > 0
+    factors = 1.0 - np.divide(events, at_risk, out=np.zeros_like(events), where=keep)
     return StepFunction(uniq[keep], np.cumprod(factors)[keep])
 
 
 def censoring_survival(time: FloatArray, event: IntArray) -> StepFunction:
-    """G(t): the Kaplan-Meier estimate of staying uncensored, with censoring as the event."""
-    return kaplan_meier(time, np.asarray(event) == EVENT_CENSORED)
+    """G(t): the Kaplan-Meier estimate of staying uncensored, with censoring as the event.
+    A row that stopped or completed on day t is not at risk of a censoring on day t."""
+    return kaplan_meier(time, np.asarray(event) == EVENT_CENSORED, others_first=True)
 
 
 def _safe_inverse(g: FloatArray) -> FloatArray:
@@ -81,8 +98,9 @@ def _safe_inverse(g: FloatArray) -> FloatArray:
 
 def censoring_groups(classes: npt.NDArray[Any], min_rows: int) -> npt.NDArray[Any]:
     """The group whose censoring curve each row uses: its sponsor class when the class has
-    at least `min_rows` rows here, and one pooled group for the smaller classes together. A
-    curve fitted on a few dozen rows would add more noise than the bias it removes."""
+    at least `min_rows` rows here, and one pooled group for the smaller classes together.
+    The harness calls this once per origin, on all its evaluation rows, and uses the same
+    groups at every landmark index, so a class never changes scheme between slices."""
     classes = np.asarray(classes).astype(str)
     names, counts = np.unique(classes, return_counts=True)
     small = names[counts < min_rows]

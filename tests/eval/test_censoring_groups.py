@@ -15,7 +15,12 @@ import pytest
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.dates import add_months
 from trialpulse.eval.bootstrap import cluster_bootstrap
-from trialpulse.eval.ipcw import POOLED_GROUP, censoring_groups, horizon_labels_and_weights
+from trialpulse.eval.ipcw import (
+    POOLED_GROUP,
+    censoring_groups,
+    censoring_survival,
+    horizon_labels_and_weights,
+)
 from trialpulse.eval.metrics import (
     calibration_slope_intercept,
     ipcw_auc,
@@ -51,11 +56,14 @@ def test_each_row_is_weighted_by_the_curve_of_its_own_group() -> None:
     y, w = horizon_labels_and_weights(TIME, EVENT, H, GROUPS)
     assert y.tolist() == [1, 0, 0, 0, 0, 1, 0, 0, 0, 0]
     assert w == pytest.approx([1.0, 0.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0])
-    # One curve for all ten rows: the censoring at 3 is 1 of the 6 rows still at risk, so
-    # G is 5/6 from day 3 to the horizon, and the rows of both groups that pass the horizon
-    # share the weight 6/5. The completion at 3 in group b is weighted by G just before 3.
+    # One curve for all ten rows: six rows reach day 3, and the completion on day 3 in group
+    # b comes before the censoring on day 3 (events first), so the censoring is 1 of the 5
+    # rows still at risk. G is 4/5 from day 3 to the horizon, and the rows of both groups
+    # that pass the horizon share the weight 5/4. The completion is weighted by G just
+    # before day 3. The ten weights add up to the ten rows.
     _, single = horizon_labels_and_weights(TIME, EVENT, H)
-    assert single == pytest.approx([1, 0, 1, 1.2, 1.2, 1, 1, 1, 1.2, 1.2])
+    assert single == pytest.approx([1, 0, 1, 1.25, 1.25, 1, 1, 1, 1.25, 1.25])
+    assert single.sum() == pytest.approx(len(TIME))
 
 
 def test_the_order_of_the_rows_does_not_matter() -> None:
@@ -156,7 +164,8 @@ def _slice(cfg: ProjectConfig, min_rows: int) -> tuple[ProjectConfig, dict]:
     trials = np.arange(len(time))
     evaluation = cfg.evaluation.model_copy(update={"censoring_min_rows": min_rows})
     chosen = cfg.model_copy(update={"evaluation": evaluation})
-    result = evaluate_predictions(time, event, score, horizon, trials, classes, chosen, 40, "slice")
+    groups = censoring_groups(classes, min_rows)
+    result = evaluate_predictions(time, event, score, horizon, trials, groups, chosen, 40, "slice")
     result["_inputs"] = (time, event, score, horizon, classes)
     return chosen, result
 
@@ -194,7 +203,7 @@ def test_the_harness_reports_by_class_weights_first_and_the_single_curve_beside(
     assert result["auc"]["valid_resamples"] == 40
 
 
-def test_classes_too_small_for_a_curve_are_pooled_in_the_harness(cfg: ProjectConfig) -> None:
+def test_classes_too_small_for_a_curve_share_the_pooled_one(cfg: ProjectConfig) -> None:
     _, result = _slice(cfg, min_rows=5_000)
     assert result["censoring_groups"] == {POOLED_GROUP: 3000}
     single = result["single_censoring_curve"]
@@ -238,9 +247,9 @@ def test_group_labels_are_read_as_text_and_must_match_the_rows() -> None:
 def test_the_groups_are_fixed_before_the_bootstrap_and_each_resample_refits_its_curves(
     cfg: ProjectConfig,
 ) -> None:
-    """A class just above the minimum on the whole slice keeps its own curve in every
-    resample, even when a resample draws fewer of its rows. The interval must be the one
-    `cluster_bootstrap` gives with the groups decided once, on the whole slice."""
+    """A class just above the minimum keeps its own curve in every resample, even when a
+    resample draws fewer of its rows. The interval must be the one `cluster_bootstrap` gives
+    with the groups decided once, before resampling."""
     rng = np.random.default_rng(8)
     # C is just above the minimum of 200 and heavily censored; D is below it and never censored.
     sizes = {"A": 1200, "B": 1200, "C": 208, "D": 152}
@@ -255,9 +264,9 @@ def test_the_groups_are_fixed_before_the_bootstrap_and_each_resample_refits_its_
     trials = np.repeat(np.arange(n // 2), 2)
     rng.shuffle(trials)  # a trial's two rows may sit in different classes
 
-    result = evaluate_predictions(time, event, score, horizon, trials, classes, cfg, 60, "slice")
-    assert result["censoring_groups"] == {"A": 1200, "B": 1200, "C": 208, POOLED_GROUP: 152}
     groups = censoring_groups(classes, cfg.evaluation.censoring_min_rows)
+    result = evaluate_predictions(time, event, score, horizon, trials, groups, cfg, 60, "slice")
+    assert result["censoring_groups"] == {"A": 1200, "B": 1200, "C": 208, POOLED_GROUP: 152}
     expected = cluster_bootstrap(
         trials,
         lambda idx: ipcw_auc(time[idx], event[idx], score[idx], horizon[idx], groups[idx]),
@@ -324,12 +333,13 @@ def _walk_forward_rows(n_trials: int = 4_000, seed: int = 12) -> LandmarkRows:
     )
 
 
-def test_the_walk_forward_run_scores_every_slice_with_the_classes_of_its_own_rows(
+def test_the_walk_forward_run_decides_the_groups_once_per_origin(
     cfg: ProjectConfig,
 ) -> None:
     """The values a run writes, pooled and per landmark index, are the by-class metrics of
-    exactly the rows of that slice, with the classes of those rows and the groups decided on
-    that slice (ADR 0017, decision 2)."""
+    exactly the rows of that slice, with the groups decided once on all the evaluation rows
+    of the origin (ADR 0017, decision 2): a class keeps the same scheme at every landmark
+    index, and the curves are fitted on the rows of the slice."""
     rows = _walk_forward_rows()
     origin = dt.date(2016, 1, 1)
     t = np.datetime64(origin, "D")
@@ -363,7 +373,7 @@ def test_the_walk_forward_run_scores_every_slice_with_the_classes_of_its_own_row
         slices |= {str(k): ev.landmark_index == k for k in (0, 1)}
         for name, mask in slices.items():
             mine = written["pooled"] if name == "pooled" else written["by_landmark_index"][name]
-            groups = censoring_groups(stratum[mask], min_rows)
+            groups = censoring_groups(stratum, min_rows)[mask]
             names, counts = np.unique(groups, return_counts=True)
             assert mine["censoring_groups"] == dict(
                 zip(names.tolist(), counts.tolist(), strict=True)
@@ -378,16 +388,59 @@ def test_the_walk_forward_run_scores_every_slice_with_the_classes_of_its_own_row
     written = result["horizons"]["12"]
     by_index = written["by_landmark_index"]
     assert by_index["0"]["censoring_groups"] != by_index["1"]["censoring_groups"]
-    # Each rare stratum has its own curve on all the rows and shares one at a landmark index.
-    assert set(written["pooled"]["censoring_groups"]) == {"fast", "slow", "rare_fast", "rare_slow"}
+    # Each rare stratum reaches the minimum on all the rows of the origin (111 and 112 rows)
+    # and not at one landmark index (67 and 55, 44 and 57). It keeps its own curve at each
+    # index all the same; deciding the groups again on the slice would pool the two.
+    own = {"fast", "slow", "rare_fast", "rare_slow"}
+    assert set(written["pooled"]["censoring_groups"]) == own
+    assert result["censoring_groups"] == written["pooled"]["censoring_groups"]
     for k in ("0", "1"):
-        assert set(by_index[k]["censoring_groups"]) == {"fast", "slow", POOLED_GROUP}
+        assert set(by_index[k]["censoring_groups"]) == own
+        assert (
+            max(by_index[k]["censoring_groups"][s] for s in ("rare_fast", "rare_slow")) < min_rows
+        )
         mask = ev.landmark_index == int(k)
         horizon = horizon_days(ev.landmark_date, 12)
         score = model.predict_cif(horizon, ev.features)
-        decided_on_all_rows = censoring_groups(stratum, min_rows)[mask]
-        other = ipcw_auc(time[mask], event[mask], score[mask], horizon[mask], decided_on_all_rows)
+        decided_on_the_slice = censoring_groups(stratum[mask], min_rows)
+        assert set(decided_on_the_slice.tolist()) == {"fast", "slow", POOLED_GROUP}
+        other = ipcw_auc(time[mask], event[mask], score[mask], horizon[mask], decided_on_the_slice)
         assert by_index[k]["auc"]["estimate"] != pytest.approx(other, abs=1e-6)
+
+
+def test_at_a_tied_time_events_come_before_censorings() -> None:
+    """A stop and a censoring on day 2, a completion on day 4, a stop on day 6, horizon 5.
+    The row that stopped on day 2 was observed through day 2, so it is not at risk of the
+    censoring on day 2: that censoring is 1 of 3 rows, G = 2/3, and the two rows known at
+    the horizon after day 2 get the weight 3/2. Had the stopped row counted as at risk, G
+    would be 3/4 and the weights 4/3: 3.67 rows of weight for 4 rows."""
+    time, event = np.array([2.0, 2.0, 4.0, 6.0]), np.array([1, 0, 2, 1])
+    assert censoring_survival(time, event).at(np.array([1.0, 2.0, 5.0])) == pytest.approx(
+        [1.0, 2 / 3, 2 / 3]
+    )
+    _, w = horizon_labels_and_weights(time, event, 5.0)
+    assert w == pytest.approx([1.0, 0.0, 1.5, 1.5])
+    assert w.sum() == pytest.approx(4.0)
+    # A day on which every row that reaches it ends with an event has no censoring risk.
+    done = censoring_survival(np.array([1.0, 3.0, 3.0]), np.array([0, 1, 2]))
+    assert done.at(np.array([1.0, 3.0, 9.0])) == pytest.approx([2 / 3, 2 / 3, 2 / 3])
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_the_weights_at_one_horizon_add_up_to_the_rows(seed: int) -> None:
+    """With whole-day times and many ties, in one group and in several."""
+    rng = np.random.default_rng(seed)
+    n = 5_000
+    stop, complete = rng.exponential(300, n), rng.exponential(400, n)
+    censor = rng.exponential(250, n)
+    time = np.ceil(np.minimum.reduce([stop, complete, censor]) / 7)  # weeks: heavy ties
+    event = np.select([censor < np.minimum(stop, complete), stop < complete], [0, 1], default=2)
+    groups = rng.choice(["a", "b", "c"], n)
+    assert (np.unique(time[event == 0])[:, None] == np.unique(time[event != 0])).any()
+    for horizon in (10.0, 26.0, 52.0):
+        for labels in (None, groups):
+            _, w = horizon_labels_and_weights(time, event, horizon, labels)
+            assert w.sum() == pytest.approx(n, rel=1e-12), (horizon, labels is None)
 
 
 def test_the_min_rows_of_the_configuration_is_what_adr_0017_says(cfg: ProjectConfig) -> None:

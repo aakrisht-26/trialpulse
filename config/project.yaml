@@ -59,8 +59,8 @@ evaluation:
   calibration_bins: 10        # risk deciles
   lift_top_fraction: 0.10     # lift at 10%
   # IPCW censoring weights (ADR 0017): one Kaplan-Meier censoring curve per lead sponsor
-  # class at the landmark. A class with fewer rows than this among the rows being scored
-  # shares one pooled curve with the other small classes.
+  # class at the landmark. A class with fewer rows than this among the evaluation rows of an
+  # origin shares one pooled curve with the other small classes, at every landmark index.
   censoring_min_rows: 200
 
 seeds:

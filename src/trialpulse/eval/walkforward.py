@@ -14,9 +14,10 @@ intervals that resample trials.
 
 The IPCW metrics weight each row by a censoring curve estimated within its lead sponsor
 class at the landmark (ADR 0017), because censoring under the UNKNOWN rule depends on the
-sponsor class and so does the outcome. Classes with too few rows in the slice being scored
-share one pooled curve. The same metrics with one curve for all rows are reported beside
-them as the sensitivity check ("single_censoring_curve"), as point estimates.
+sponsor class and so does the outcome. Classes with too few rows among the evaluation rows
+of an origin share one pooled curve; the groups are decided once per origin and are the
+same at every landmark index. The same metrics with one curve for all rows are reported
+beside them as the sensitivity check ("single_censoring_curve"), as point estimates.
 
 Locked origins (2018, 2019 and the 2020 stress test) need the test lock (ADR 0004). The
 lock is checked before any data is loaded or any model is fitted.
@@ -181,18 +182,19 @@ def evaluate_predictions(
     score: FloatArray,
     horizon: FloatArray,
     clusters: npt.NDArray[Any],
-    sponsor_class: npt.NDArray[Any],
+    groups: npt.NDArray[Any],
     cfg: ProjectConfig,
     n_resamples: int,
     context: str = "",
 ) -> dict[str, Any]:
     """The metrics of one slice. The primary values weight each row by the censoring curve
-    of its sponsor class (ADR 0017): the groups are fixed here, on the whole slice, and each
-    bootstrap resample fits its own curves within them. "single_censoring_curve" holds the
-    same metrics with one curve for all rows, the sensitivity check, without intervals."""
+    of its group (ADR 0017). `groups` holds the group of each row, decided beforehand on all
+    the evaluation rows of the origin (`censoring_groups`); the curves are fitted on the rows
+    of the slice, and each bootstrap resample fits its own. "single_censoring_curve" holds
+    the same metrics with one curve for all rows, the sensitivity check, without intervals."""
     ev = cfg.evaluation
     seed = cfg.seeds.default
-    groups = censoring_groups(sponsor_class, ev.censoring_min_rows)
+    groups = np.asarray(groups).astype(str)
 
     def lift(t: FloatArray, e: IntArray, s: FloatArray, h: FloatArray, g: Any) -> float:
         return lift_at(t, e, s, h, ev.lift_top_fraction, g)
@@ -255,8 +257,9 @@ def run(
         "dataset_revision": cfg.dataset.revision,
         "training_labels": "as of each origin (ADR 0016)",
         "censoring_weights": (
-            f"by lead sponsor class at the landmark, classes under "
-            f"{cfg.evaluation.censoring_min_rows} rows pooled (ADR 0017)"
+            "by lead sponsor class at the landmark; classes under "
+            f"{cfg.evaluation.censoring_min_rows} rows among the evaluation rows of an origin "
+            "share one pooled curve, at every landmark index (ADR 0017)"
         ),
         "unlock": {**asdict(unlock), "registered": unlock.registered.isoformat()}
         if unlock
@@ -272,7 +275,9 @@ def run(
                 f'the evaluation rows have no "{CENSORING_COLUMN}" column; the censoring weights '
                 "are estimated within the lead sponsor class at the landmark (ADR 0017)"
             )
-        sponsor_class = ev.features[CENSORING_COLUMN]
+        groups = censoring_groups(
+            ev.features[CENSORING_COLUMN], cfg.evaluation.censoring_min_rows
+        )  # once per origin, the same at every landmark index
         model = MODELS[model_name]().fit(train_time, train_event, train.features)
         horizons: dict[str, Any] = {}
         for months in cfg.horizons_months:
@@ -280,14 +285,14 @@ def run(
             score = model.predict_cif(h, ev.features)
             where = f"origin {origin.date.isoformat()}, horizon {months} months"
             pooled = evaluate_predictions(
-                ev_time, ev_event, score, h, ev.trial_id, sponsor_class, cfg, resamples,
+                ev_time, ev_event, score, h, ev.trial_id, groups, cfg, resamples,
                 f"{where}, pooled",
             )  # fmt: skip
             by_index = {}
             for k in np.unique(ev.landmark_index):
                 m = ev.landmark_index == k
                 by_index[str(int(k))] = evaluate_predictions(
-                    ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], sponsor_class[m],
+                    ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], groups[m],
                     cfg, resamples, f"{where}, landmark index {int(k)}",
                 )  # fmt: skip
             horizons[str(months)] = {"pooled": pooled, "by_landmark_index": by_index}
@@ -297,6 +302,10 @@ def run(
                 "role": origin.role,
                 "n_train_rows": len(train),
                 "n_eval_rows": len(ev),
+                "censoring_groups": {
+                    str(name): int(count)
+                    for name, count in zip(*np.unique(groups, return_counts=True), strict=True)
+                },
                 "horizons": horizons,
             }
         )

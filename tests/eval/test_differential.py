@@ -3,7 +3,8 @@ data with censoring and competing events.
 
 lifelines breaks tied times by adding jitter in its Aalen-Johansen fitter, so that
 comparison uses continuous times. Kaplan-Meier is also compared on integer times with ties,
-which lifelines handles exactly.
+which lifelines handles exactly. The censoring curve takes events first at a tied time, so
+it is compared with lifelines on times where each censoring is moved half a day later.
 """
 
 import numpy as np
@@ -42,9 +43,17 @@ def test_kaplan_meier_matches_lifelines(integer_times: bool) -> None:
         theirs = KaplanMeierFitter().fit(time, event_observed=flag).predict(grid).to_numpy()
         np.testing.assert_allclose(ours, theirs, rtol=0, atol=1e-12)
 
-    g = censoring_survival(time, event).at(grid)
-    theirs_g = KaplanMeierFitter().fit(time, event_observed=event == 0).predict(grid).to_numpy()
-    np.testing.assert_allclose(g, theirs_g, rtol=0, atol=1e-12)
+    days = np.unique(time)
+    later = np.where(event == 0, time + 0.5, time) if integer_times else time
+    theirs = KaplanMeierFitter().fit(later, event_observed=event == 0)
+    after = days + 0.5 if integer_times else days
+    g = censoring_survival(time, event)
+    np.testing.assert_allclose(g.at(days), theirs.predict(after).to_numpy(), rtol=0, atol=1e-12)
+    if integer_times:  # G just before a day is G at the end of the day before
+        before = theirs.predict(days - 0.25).to_numpy()
+        np.testing.assert_allclose(g.before(days), before, rtol=0, atol=1e-12)
+        naive = KaplanMeierFitter().fit(time, event_observed=event == 0).predict(days)
+        assert np.abs(g.at(days) - naive.to_numpy()).max() > 1e-4  # the convention matters
 
 
 @pytest.mark.parametrize("cause", [1, 2])
