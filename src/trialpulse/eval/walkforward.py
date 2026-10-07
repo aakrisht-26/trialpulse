@@ -3,7 +3,11 @@
     uv run python -m trialpulse.eval.walkforward --model m0 --origins dev
 
 For origin T, training rows are landmarks with L before T, with every outcome
-administratively censored at T. Evaluation rows are landmarks with T <= L < T + 12 months,
+administratively censored at T. They come from the cohort as it would have been built on T
+(ADR 0016): a training row's outcome, its censoring, whether a lapse was resolved and
+whether its trial is excluded for a reversal use only versions posted before T. The cohort
+build writes one such file per origin, and `training_rows` refuses a file that holds
+anything dated after its origin. Evaluation rows are landmarks with T <= L < T + 12 months,
 scored against outcomes observed through the data cutoff. Metrics are reported per
 horizon, pooled over landmark indices and per landmark index, with cluster-bootstrap
 intervals that resample trials.
@@ -19,6 +23,7 @@ date when event is 0 (the data cutoff, or the UNKNOWN censoring date of Section 
 """
 
 import argparse
+import datetime as dt
 import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -46,6 +51,7 @@ from trialpulse.eval.metrics import (
 from trialpulse.models.aalen_johansen import AalenJohansenModel
 
 LANDMARKS_PATH = REPO_ROOT / "data" / "cohort" / "landmarks.parquet"
+TRAINING_DIR = LANDMARKS_PATH.parent / "training"
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "walkforward"
 REQUIRED_COLUMNS = ("trial_id", "landmark_index", "landmark_date", "event", "event_date")
 
@@ -88,6 +94,11 @@ class CIFModel(Protocol):
 MODELS: dict[str, Callable[[], CIFModel]] = {"m0": AalenJohansenModel}
 
 
+def training_path(training_dir: Path, origin: dt.date) -> Path:
+    """Where the cohort build puts the training landmark rows of an origin (ADR 0016)."""
+    return training_dir / f"origin_{origin.isoformat()}" / LANDMARKS_PATH.name
+
+
 def load_landmark_rows(path: Path) -> LandmarkRows:
     if not path.is_file():
         raise FileNotFoundError(f"{path} not found: run the Step 4 cohort build first")
@@ -123,13 +134,22 @@ def select_origins(cfg: ProjectConfig, spec: str) -> list[Origin]:
 def training_rows(
     rows: LandmarkRows, origin: np.datetime64
 ) -> tuple[LandmarkRows, FloatArray, IntArray]:
-    """Landmarks before the origin, with outcomes administratively censored at the origin:
-    anything dated on or after T was not known at T."""
-    train = rows.subset(rows.landmark_date < origin)
-    late = train.event_date >= origin
-    event = np.where(late, EVENT_CENSORED, train.event).astype(np.int64)
-    end = np.where(late, origin, train.event_date).astype("datetime64[D]")
-    return train, days_between(train.landmark_date, end), event
+    """The training rows of an origin, with their follow-up time and event. `rows` must be
+    the landmark rows of the cohort built as of the origin (ADR 0016): every landmark is
+    before T, no event is dated T or later, and nothing is censored after T. Rows that
+    break this were not built as of T, and are refused instead of being truncated."""
+    after = (
+        (rows.landmark_date >= origin)
+        | (rows.event_date > origin)
+        | ((rows.event != EVENT_CENSORED) & (rows.event_date >= origin))
+    )
+    if after.any():
+        raise ValueError(
+            f"{int(after.sum())} training rows for origin {origin} hold a landmark, an event "
+            "or a censoring dated after it; training rows must come from the cohort built as "
+            "of the origin (ADR 0016): run the cohort build"
+        )
+    return rows, days_between(rows.landmark_date, rows.event_date), rows.event.astype(np.int64)
 
 
 def evaluation_rows(
@@ -191,6 +211,7 @@ def run(
     model_name: str,
     origins_spec: str,
     load_rows: Callable[[], LandmarkRows],
+    load_training: Callable[[dt.date], LandmarkRows],
     unlock_flag: bool = False,
     repo: Path = REPO_ROOT,
     n_resamples: int | None = None,
@@ -204,6 +225,7 @@ def run(
         "origins_spec": origins_spec,
         "bootstrap_resamples": resamples,
         "dataset_revision": cfg.dataset.revision,
+        "training_labels": "as of each origin (ADR 0016)",
         "unlock": {**asdict(unlock), "registered": unlock.registered.isoformat()}
         if unlock
         else None,
@@ -211,7 +233,7 @@ def run(
     }
     for origin in origins:
         t = np.datetime64(origin.date, "D")
-        train, train_time, train_event = training_rows(rows, t)
+        train, train_time, train_event = training_rows(load_training(origin.date), t)
         ev, ev_time, ev_event = evaluation_rows(rows, t, cfg.walk_forward.eval_window_months)
         model = MODELS[model_name]().fit(train_time, train_event, train.features)
         horizons: dict[str, Any] = {}
@@ -248,6 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--origins", default="dev", help="dev, test, stress, all, or years")
     parser.add_argument("--unlock-test", action="store_true", help="see ADR 0004")
     parser.add_argument("--input", type=Path, default=LANDMARKS_PATH)
+    parser.add_argument("--training-dir", type=Path, default=TRAINING_DIR)
     parser.add_argument("--resamples", type=int, default=None)
     args = parser.parse_args(argv)
     cfg = load_project_config()
@@ -257,10 +280,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.model,
             args.origins,
             lambda: load_landmark_rows(args.input),
+            lambda origin: load_landmark_rows(training_path(args.training_dir, origin)),
             unlock_flag=args.unlock_test,
             n_resamples=args.resamples,
         )
-    except (TestLockError, FileNotFoundError) as exc:
+    except (TestLockError, FileNotFoundError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
     except BootstrapError as exc:

@@ -1,11 +1,11 @@
-"""Person-period expansion and administrative censoring at an origin."""
+"""Person-period expansion, at the data cutoff and as of a walk-forward origin."""
 
 import datetime as dt
 from dataclasses import replace
 
 import numpy as np
 
-from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand, training_rows
+from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.dates import add_months, days_between
 from trialpulse.models.aalen_johansen import aalen_johansen
@@ -82,29 +82,31 @@ def test_an_interval_ending_after_the_cutoff_is_dropped_whatever_happened(
     assert _pairs(out, "D") == [(1, 2)]
 
 
-def test_training_rows_censor_administratively_at_the_origin(rules: CohortRules) -> None:
+def test_rows_as_of_an_origin_end_on_the_origin(rules: CohortRules) -> None:
+    """For training at origin T the landmark rows come from the cohort built as of T (ADR
+    0016): an event posted on or after T is not in them, and their trials are censored on T.
+    Expanding them with T as the end of observation keeps only intervals that ended by T."""
+    origin = dt.date(2016, 1, 1)
     out = expand(
         _landmarks(
             [
-                ("A", "2015-01-01", 1, "2016-03-01"),  # stop in j3, after the origin
+                ("A", "2015-01-01", 0, "2016-01-01"),  # stops in March 2016: open on T
                 ("B", "2015-01-01", 1, "2015-10-01"),  # stop in j2, before the origin
-                ("C", "2015-01-01", 2, "2016-01-01"),  # completion on the origin, end of j2
-                ("D", "2016-02-01", 0, "2030-01-01"),  # landmark after the origin
+                ("C", "2015-01-01", 0, "2016-01-01"),  # completes on the origin: not known
                 ("E", "2015-09-01", 2, "2015-11-01"),  # completion before T, in j1 ending after T
-                ("F", "2015-09-01", 0, "2030-01-01"),  # still open: the same unfinished j1
+                ("F", "2015-09-01", 0, "2016-01-01"),  # still open: the same unfinished j1
             ]
         ),
-        rules,
+        rules.as_of(origin),
     )
-    train = training_rows(out, np.datetime64("2016-01-01"))
-    assert _pairs(train, "A") == [(1, 0), (2, 0)]  # j3 ends after T
-    assert _pairs(train, "B") == [(1, 0), (2, 1)]
-    assert _pairs(train, "C") == [(1, 0), (2, 0)]  # an event dated T is not known at T
-    assert _pairs(train, "D") == []
+    assert _pairs(out, "A") == [(1, 0), (2, 0)]  # j2 ends on T and is a continuation
+    assert _pairs(out, "B") == [(1, 0), (2, 1)]
+    assert _pairs(out, "C") == [(1, 0), (2, 0)]
     # j1 of E and F ends after T: neither the event row nor the continuation is kept.
-    assert _pairs(train, "E") == []
-    assert _pairs(train, "F") == []
-    assert set(train) == set(PERSON_PERIOD_COLUMNS)
+    assert _pairs(out, "E") == []
+    assert _pairs(out, "F") == []
+    assert set(out) == set(PERSON_PERIOD_COLUMNS)
+    assert out["interval_end"].max() <= np.datetime64(origin)
 
 
 def _discrete_cif(rows: dict[str, np.ndarray], intervals: int) -> float:

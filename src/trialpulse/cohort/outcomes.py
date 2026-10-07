@@ -47,7 +47,8 @@ def check_version_order(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> N
           SELECT nct_id, effective_date < max(effective_date) OVER (
             PARTITION BY nct_id ORDER BY nct_version
             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS earlier
-          FROM versions WHERE effective_date <= {sql_date(rules.cutoff)}) WHERE earlier"""
+          FROM versions WHERE effective_date <= {sql_date(rules.last_post_date)})
+          WHERE earlier"""
     ).fetchone()
     if row and row[0]:
         raise RefusedError(
@@ -57,7 +58,6 @@ def check_version_order(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> N
 
 
 def build_states(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
-    cutoff = sql_date(rules.cutoff)
     con.execute(
         f"""CREATE OR REPLACE TEMP TABLE cohort_states AS
         WITH s AS (
@@ -67,7 +67,7 @@ def build_states(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
             {verified_sql()} AS verified,
             {completion_ref_sql()} AS completion_ref
           FROM versions v
-          WHERE v.effective_date <= {cutoff}
+          WHERE v.effective_date <= {sql_date(rules.last_post_date)}
           QUALIFY row_number() OVER (
             PARTITION BY v.nct_id, v.effective_date ORDER BY v.nct_version DESC) = 1
         )
@@ -89,7 +89,7 @@ def build_outcomes(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
         WITH v AS (
           SELECT v.nct_id, v.nct_version, v.effective_date, v.overall_status,
             {submitted_status_sql(rules)} AS status, v.study_type, v.study_first_post_date
-          FROM versions v WHERE v.effective_date <= {cutoff}
+          FROM versions v WHERE v.effective_date <= {sql_date(rules.last_post_date)}
         ),
         trial AS (
           SELECT nct_id,

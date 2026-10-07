@@ -316,3 +316,28 @@ Early-stop CIF from the registration landmark (L0), by the lead sponsor class at
 | `landmarks.parquet` | 1,448,969 | 13363748676479592802426287 |
 | `person_period.parquet` | 4,245,278 | 39151893681432990860539309 |
 | `outcomes.parquet` | 604,583 | 5576551981762047731620437 |
+
+## Training cohorts as of each origin (ADR 0016)
+
+For each walk-forward origin T the training rows are built from the versions posted before T only, with observation ending on T: a row's outcome, its censoring, whether a lapse was resolved and whether its trial is excluded for a reversal are decided as they would have been on T. The last five columns compare these landmark rows with the final cohort's landmarks before T, truncated at T, which know what was posted later. A row exists only as of T when hindsight removes it (the trial was later excluded for a reversal, or later censored under the UNKNOWN rule at a date before that landmark). A row exists only with hindsight when its trial looked lapsed on T and reported again later.
+
+| Origin T | Trials | Landmark rows as of T | Person-period rows as of T | Final cohort, truncated at T | Only as of T | Only with hindsight | Same row, other label | Same label, other end date |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2016-01-01 | 100,325 | 399,905 | 1,034,833 | 405,251 | 13,968 | 19,314 | 0 | 13,960 |
+| 2017-01-01 | 118,324 | 480,046 | 1,272,628 | 481,985 | 16,232 | 18,171 | 0 | 17,097 |
+| 2018-01-01 | 136,893 | 567,423 | 1,532,909 | 564,612 | 20,051 | 17,240 | 0 | 19,554 |
+| 2019-01-01 | 155,768 | 653,603 | 1,794,016 | 651,168 | 22,429 | 19,994 | 0 | 23,593 |
+| 2020-01-01 | 175,554 | 748,038 | 2,083,468 | 742,153 | 25,461 | 19,576 | 0 | 26,639 |
+
+| File | Rows | Checksum |
+| --- | --- | --- |
+| `training/origin_2016-01-01/landmarks.parquet` | 399,905 | 3688205366419341642133807 |
+| `training/origin_2016-01-01/person_period.parquet` | 1,034,833 | 9545602956599184580415622 |
+| `training/origin_2017-01-01/landmarks.parquet` | 480,046 | 4427878002903659295880219 |
+| `training/origin_2017-01-01/person_period.parquet` | 1,272,628 | 11733624224633160210345425 |
+| `training/origin_2018-01-01/landmarks.parquet` | 567,423 | 5231486131499544622657844 |
+| `training/origin_2018-01-01/person_period.parquet` | 1,532,909 | 14138295506253516125841493 |
+| `training/origin_2019-01-01/landmarks.parquet` | 653,603 | 6031059900265745580008507 |
+| `training/origin_2019-01-01/person_period.parquet` | 1,794,016 | 16560909758746120487997514 |
+| `training/origin_2020-01-01/landmarks.parquet` | 748,038 | 6895706388545719906256527 |
+| `training/origin_2020-01-01/person_period.parquet` | 2,083,468 | 19223289834445061007609027 |

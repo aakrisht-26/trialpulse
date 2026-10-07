@@ -15,6 +15,11 @@
   pinned dataset; a live record could carry one) has no submitted status to judge. The
   registry itself says the trial is lapsed, so the state is lapsed from the day it is posted.
 
+- **As of an origin (ADR 0016).** Walk-forward training rows for origin T come from the
+  cohort as it would have been built on T: only versions posted before T are known, and
+  observation ends on T. `CohortRules.as_of(T)` gives the rules for that build, so a
+  training label never depends on anything posted on or after its origin.
+
 Every rule has a SQL form (used by the build over millions of rows) and a Python twin (used
 by tests, and later by live scoring); a test checks that they agree.
 """
@@ -22,7 +27,7 @@ by tests, and later by live scoring); a test checks that they agree.
 import calendar
 import datetime as dt
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from trialpulse.config import ProjectConfig
 
@@ -39,11 +44,14 @@ class CohortRules:
     lapse_months: int
     study_type: str
     min_first_post_date: dt.date
-    cutoff: dt.date
+    cutoff: dt.date  # the end of observation: open trials are censored here
     spacing_months: int
     max_index: int
     interval_months: int
     n_intervals: int
+    # When set, only versions posted before this date are known (a build as of an origin,
+    # ADR 0016). Otherwise every version posted through the cutoff is known.
+    versions_before: dt.date | None = None
 
     @classmethod
     def from_config(cls, cfg: ProjectConfig, cutoff: dt.date | None = None) -> "CohortRules":
@@ -69,6 +77,18 @@ class CohortRules:
     @property
     def terminal(self) -> tuple[str, ...]:
         return (*self.early_stop, *self.competing)
+
+    @property
+    def last_post_date(self) -> dt.date:
+        """The latest post date a known version can have."""
+        if self.versions_before is None:
+            return self.cutoff
+        return self.versions_before - dt.timedelta(days=1)
+
+    def as_of(self, origin: dt.date) -> "CohortRules":
+        """The rules for the cohort as it would have been built on a walk-forward origin:
+        versions posted before the origin, and observation ending on the origin."""
+        return replace(self, cutoff=origin, versions_before=origin)
 
 
 def sql_list(values: Iterable[str]) -> str:

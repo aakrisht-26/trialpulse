@@ -12,8 +12,14 @@ from trialpulse.cli import RefusedError
 from trialpulse.cohort import build
 from trialpulse.cohort.audit import aj_sanity_table
 from trialpulse.cohort.landmarks import LANDMARK_COLUMNS
+from trialpulse.config import load_project_config
 from trialpulse.dates import days_between
-from trialpulse.eval.walkforward import REQUIRED_COLUMNS, load_landmark_rows
+from trialpulse.eval.walkforward import (
+    REQUIRED_COLUMNS,
+    load_landmark_rows,
+    training_path,
+    training_rows,
+)
 from trialpulse.models.aalen_johansen import aalen_johansen
 
 from .conftest import load_versions
@@ -105,6 +111,37 @@ def test_the_aj_sanity_table_matches_the_estimator(built: Path) -> None:
     with (built / "cohort" / "aj_sanity_by_sponsor_class.csv").open(encoding="utf-8") as handle:
         saved = list(csv.DictReader(handle))
     assert [r["stratum"] for r in saved] == [r["stratum"] for r in rows]
+
+
+def test_the_build_writes_the_training_rows_of_every_origin(built: Path) -> None:
+    """ADR 0016: one landmark file and one person-period file per walk-forward origin, built
+    as of the origin, which the harness accepts as training rows."""
+    cfg = load_project_config()
+    log = json.loads((built / "cohort" / "build.json").read_text(encoding="utf-8"))
+    for origin in (o.date for o in cfg.walk_forward.origins):
+        path = training_path(built / "cohort" / "training", origin)
+        rows = load_landmark_rows(path)
+        train, time, event = training_rows(rows, np.datetime64(origin, "D"))
+        assert len(train) > 0
+        assert np.all(time > 0)
+        assert set(event.tolist()) <= {0, 1, 2}
+        name = f"training/origin_{origin.isoformat()}/landmarks.parquet"
+        assert log["tables"][name]["rows"] == len(rows)
+        person_period = path.with_name("person_period.parquet").as_posix()
+        with duckdb.connect() as con:
+            intervals = con.execute(
+                f"SELECT count(*), max(interval_end) FROM '{person_period}'"
+            ).fetchone()
+        assert intervals is not None
+        assert intervals[0] == log["tables"][name.replace("landmarks", "person_period")]["rows"]
+        assert intervals[1] <= origin
+    # The final landmarks are not training rows: they know what was posted later.
+    final = load_landmark_rows(built / "cohort" / "landmarks.parquet")
+    with pytest.raises(ValueError, match="ADR 0016"):
+        training_rows(final, np.datetime64("2016-01-01"))
+    audit = (built / "data_audit.md").read_text(encoding="utf-8")
+    assert "## Training cohorts as of each origin (ADR 0016)" in audit
+    assert "| 2016-01-01 |" in audit
 
 
 def test_an_old_warehouse_is_refused(tmp_path: Path) -> None:

@@ -18,14 +18,13 @@ does. Per interval the outcome is 0 (continue), 1 (early stop) or 2 (completion)
   0.0332, against Aalen-Johansen's 0.0318.
 
 The table feeds the models without reshaping: the features are the landmark's (frozen at
-L) plus `interval`; the target is `outcome`. For walk-forward training at origin T,
-`training_rows` applies Section 6's administrative censoring at T to these rows with a
-filter and a recode.
+L) plus `interval`; the target is `outcome`.
 
-What `training_rows` does not do: it does not re-derive the cohort as it would have been
-built at T. The labels are the final ones (reversals excluded and the UNKNOWN censoring of
-ADR 0014 decided at the data cutoff), truncated at T, exactly as the harness's
-`training_rows` treats landmark rows. docs/progress.md lists this as an open question.
+For walk-forward training at origin T, the cohort build expands the landmark rows of the
+cohort built as of T (ADR 0016), with T as the end of observation. Those rows hold only
+what was known before T: there is no step that truncates the final table at T, because the
+final table knows things the origin did not (a lapse resolved later, a reversal posted
+later, an UNKNOWN censoring that had not happened yet).
 """
 
 from collections.abc import Mapping
@@ -58,7 +57,8 @@ Columns = dict[str, npt.NDArray[Any]]
 def expand(landmarks: Mapping[str, npt.NDArray[Any]], rules: CohortRules) -> Columns:
     """Person-period columns from landmark columns (trial_id, landmark_index,
     landmark_date, event, event_date, stratum), ordered by landmark then interval. Only
-    intervals that end on or before the data cutoff exist."""
+    intervals that end on or before the end of observation (`rules.cutoff`: the data cutoff,
+    or the origin for a cohort built as of an origin) exist."""
     landmark_date = np.asarray(landmarks["landmark_date"], dtype="datetime64[D]")
     event = np.asarray(landmarks["event"], dtype=np.int64)
     event_date = np.asarray(landmarks["event_date"], dtype="datetime64[D]")
@@ -94,22 +94,4 @@ def expand(landmarks: Mapping[str, npt.NDArray[Any]], rules: CohortRules) -> Col
     )
     out["event_date"] = event_date[source]
     out["stratum"] = np.asarray(landmarks["stratum"])[source]
-    return out
-
-
-def training_rows(rows: Mapping[str, npt.NDArray[Any]], origin: np.datetime64) -> Columns:
-    """The rows for training at origin T: landmarks before T, with every outcome
-    administratively censored at T (Section 6), as the harness's training_rows does for
-    landmark rows. Only intervals that end on or before T are kept, whatever their outcome,
-    and an event dated T itself is not yet known (its interval, ending on T, is a
-    continuation)."""
-    origin = np.datetime64(origin, "D")
-    landmark_date = np.asarray(rows["landmark_date"], dtype="datetime64[D]")
-    outcome = np.asarray(rows["outcome"], dtype=np.int64)
-    event_date = np.asarray(rows["event_date"], dtype="datetime64[D]")
-    interval_end = np.asarray(rows["interval_end"], dtype="datetime64[D]")
-    keep = (landmark_date < origin) & (interval_end <= origin)
-    known_event = (outcome != OUTCOME_CONTINUE) & (event_date < origin)
-    out = {k: np.asarray(v)[keep] for k, v in rows.items()}
-    out["outcome"] = np.where(known_event, outcome, OUTCOME_CONTINUE)[keep].astype(np.int64)
     return out

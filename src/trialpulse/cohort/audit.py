@@ -88,6 +88,7 @@ def render_part_2(
     horizons_months: Sequence[int],
     outputs: Sequence[tuple[str, int, str]],
     source: str = "",
+    training: Sequence[dict[str, Any]] = (),
 ) -> str:
     """`source` identifies the warehouse the cohort was built from (revision, schema
     version, versions checksum), so a part 2 older than part 1 can be told apart."""
@@ -293,4 +294,61 @@ def render_part_2(
         ),
         "",
     ]
+    if training:
+        lines += _training_section(training)
     return "\n".join(lines)
+
+
+def _training_section(training: Sequence[dict[str, Any]]) -> list[str]:
+    """The cohorts built as of each walk-forward origin (ADR 0016), and how their landmark
+    rows differ from the final cohort truncated at the origin."""
+    rows = [
+        (
+            t["origin"],
+            _n(t["trials"]),
+            _n(t["landmark_rows"]),
+            _n(t["person_period_rows"]),
+            _n(t["hindsight_rows"]),
+            _n(t["only_as_of"]),
+            _n(t["only_hindsight"]),
+            _n(t["other_label"]),
+            _n(t["other_end_date"]),
+        )
+        for t in training
+    ]
+    files = [
+        (f"`{name}`", _n(count), checksum)
+        for t in training
+        for name, (count, checksum) in t["files"].items()
+    ]
+    return [
+        "## Training cohorts as of each origin (ADR 0016)",
+        "",
+        "For each walk-forward origin T the training rows are built from the versions posted "
+        "before T only, with observation ending on T: a row's outcome, its censoring, whether "
+        "a lapse was resolved and whether its trial is excluded for a reversal are decided "
+        "as they would have been on T. The last five columns compare these landmark rows "
+        "with the final cohort's landmarks before T, truncated at T, which know what was "
+        "posted later. A row exists only as of T when hindsight removes it (the trial was "
+        "later excluded for a reversal, or later censored under the UNKNOWN rule at a date "
+        "before that landmark). A row exists only with hindsight when its trial looked lapsed "
+        "on T and reported again later.",
+        "",
+        *_table(
+            [
+                "Origin T",
+                "Trials",
+                "Landmark rows as of T",
+                "Person-period rows as of T",
+                "Final cohort, truncated at T",
+                "Only as of T",
+                "Only with hindsight",
+                "Same row, other label",
+                "Same label, other end date",
+            ],
+            rows,
+        ),
+        "",
+        *_table(["File", "Rows", "Checksum"], files),
+        "",
+    ]
