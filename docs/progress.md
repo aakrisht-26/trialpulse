@@ -1007,13 +1007,14 @@ What was done, before Step 7 (commits `4fc1b86`, `7389eb9`, `bc4f6f2`):
 | 1 | OTHER trials censored under the UNKNOWN rule within 60 months | 7.9% (3.4 times INDUSTRY) | 7.2% (3.2 times) |
 | 2 | Completed, and stopped early, by 96 months | 74.0% and 14.3% | 76.3% and 14.7% |
 | 2 | Early stop with completion treated as censoring, at 96 months | 29.3% | 32.3% |
-| 3 | 24-month CIF at the later landmarks | 3.9% to 4.0% | 4.0% to 4.1% |
+| 3 | 12-month CIF from the 18-month landmark on | 3.9% to 4.0% | 4.0% to 4.1% |
 | 4 | 24-month CIF with a suspension on record, and without | 23.9% and 6.5% | 23.8% and 6.7% |
 | 4 | 24-month CIF while still not yet recruiting | 13.0% | 13.7% |
-| 6 | Registered after the start month, last modeling year | 30.0% | 31.8% |
-| 7 | 24-month CIF by registration year, range | 4.8% to 5.3% | 4.9% to 5.4% |
+| 5 | Registered after the start month, trials registered in 2017 | 30.0% | 31.8% |
+| 6 | 24-month CIF by registration year, 2009 to 2015 | 4.8% to 5.3% | 4.9% to 5.4% |
+| 7 | Versions with an actual post date before 2018: later versions, first versions | 125,365 and 15,708 | 127,622 and 17,595 |
 
-  Every other number in the findings moved by 0.2 points or less. The UNKNOWN censoring is lower as of 2018-01-01 because a record that lapsed after that date was still an open trial on it; the final cohort censors it at its last verification, years earlier. That also explains the higher completion share: those trials are followed to 2018-01-01 instead of leaving early.
+  Every other number in the findings moved by 0.2 points or less (the two counts of finding 7 changed because the cohort as of 2018-01-01 holds some other trials than the final cohort). The UNKNOWN censoring is lower as of 2018-01-01 because a record that lapsed after that date was still an open trial on it; the final cohort censors it at its last verification, years earlier. That also explains the higher completion share: those trials are followed to 2018-01-01 instead of leaving early.
 - **The sanity table** of `docs/data_audit.md` is headed "sanity check only, not used for modeling" and points to Table 1 of `docs/eda.md`.
 - **Checks, in my shell:** ruff, ruff format and mypy clean; 563 passed and 11 deselected by default; 574 passed with the slow tests; the cohort build prints "Identical to the previous build: yes" on its second run; the EDA report prints "Up to date".
 
