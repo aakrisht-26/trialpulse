@@ -104,8 +104,8 @@ def _sponsor_class(res: Results) -> Finding:
         "assumes that censoring under the UNKNOWN rule is unrelated to the outcome, and that "
         f"censoring is {other_lapse / industry_lapse:.1f} times as common for OTHER sponsors. "
         "The Section 6 sensitivity analysis (UNKNOWN as an early stop) therefore matters most "
-        "for that class, and whether one censoring curve for all trials is enough for the "
-        "IPCW metrics is a question to settle before Step 9.",
+        "for that class, and the IPCW metrics estimate the censoring curve within each sponsor "
+        "class instead of once for all trials (ADR 0017).",
     )
 
 

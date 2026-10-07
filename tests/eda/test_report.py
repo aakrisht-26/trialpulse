@@ -92,7 +92,7 @@ def _args(world: World, out: Path) -> list[str]:
     sources = world.sources
     return [
         "--warehouse", str(sources.warehouse),
-        "--cohort-dir", str(sources.landmarks.parent),
+        "--cohort-dir", str(sources.final_landmarks.parent),
         "--current-fields", str(sources.current_fields),
         "--out", str(out),
     ]  # fmt: skip
@@ -110,7 +110,10 @@ def test_the_document_opens_with_the_disclaimer_and_its_sources(text: str) -> No
     assert '"Elevated early-stop risk" is an operational statement about a trial record' in head
     assert "never a statement about whether a treatment works" in head
     assert "under the registry's UNKNOWN rule" in head  # both kinds of censoring are named
-    assert "an outcome on or after that date counts as not observed yet" in head
+    assert "the cohort as it would have been built on 2018-01-01 (ADR 0016)" in head
+    assert "only versions posted before that date are known" in head
+    assert "**Cohort as of 2018-01-01:**" in head
+    assert "**Final cohort:**" in head
     assert "—" not in text
     assert text.endswith("\n")
     assert not text.endswith("\n\n")
@@ -216,7 +219,10 @@ def test_later_years_are_labeled_descriptive_only(text: str) -> None:
     for bullet in _bullets(covid):
         assert bullet.startswith("- Descriptive only: "), bullet
     lag = _section(text, "5. Registration lag")
-    assert "*Years before 2018 are modeling-relevant; rows from 2018 on are descriptive only" in lag
+    assert (
+        "*Years before 2018 are modeling-relevant and come from the cohort as of 2018-01-01; "
+        "rows from 2018 on are descriptive only, marked, and come from the final cohort.*"
+    ) in lag
     assert "Rows from 2018 on are still marked descriptive only" in _section(text, "6. Estimated")
     for key in ("timing_year", "post_dates"):
         use = {row[0]: row[1] for row in _table(text, key)[1:]}
@@ -509,7 +515,9 @@ def test_the_committed_report_is_reproduced_byte_for_byte(
     results."""
     cohort = report.COHORT_DIR
     inputs = [report.WAREHOUSE_PATH, report.CURRENT_FIELDS_PATH]
+    as_of = cohort / "training" / "origin_2018-01-01"
     inputs += [cohort / "landmarks.parquet", cohort / "outcomes.parquet"]
+    inputs += [as_of / "landmarks.parquet", as_of / "outcomes.parquet"]
     if not all(path.is_file() for path in inputs):
         pytest.skip("the warehouse, the cohort or the current-record snapshot is not on disk")
     committed = REPO_ROOT / "docs"

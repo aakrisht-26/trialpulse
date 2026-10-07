@@ -101,8 +101,12 @@ def _header(res: Results) -> list[str]:
         f"- **Data as of {cutoff}**, the latest post date in the pinned dataset revision. "
         "TrialPulse normalizes the records and derives the cohort, the outcomes and every "
         "statistic shown here.",
-        f"- **Cohort:** {num(res.landmark_rows)} landmark rows of {num(res.landmark_trials)} "
-        "trials (`data/cohort/landmarks.parquet`, built in Step 4).",
+        f"- **Cohort as of {before}:** {num(res.landmark_rows)} landmark rows of "
+        f"{num(res.landmark_trials)} trials (`data/cohort/training/origin_{before}/`). The "
+        "modeling-relevant sections read this cohort.",
+        f"- **Final cohort:** {num(res.final_landmark_rows)} landmark rows of "
+        f"{num(res.final_landmark_trials)} trials (`data/cohort/landmarks.parquet`), with "
+        "outcomes through the data cutoff. Only the descriptive rows and sections read it.",
         "",
         "## How to read this report",
         "",
@@ -111,10 +115,12 @@ def _header(res: Results) -> list[str]:
         "are cumulative incidence functions (CIF) from the Aalen-Johansen estimator: a trial "
         "whose follow-up ends without an outcome counts for as long as it was followed, and a "
         "completed trial can no longer stop early.",
-        f"- **Modeling-relevant** sections read nothing dated {before} or later (Section 10): "
-        f"they use landmarks before {before} only, and an outcome on or after that date counts "
-        "as not observed yet, exactly as for a model trained at the 2018 origin (Section 6). "
-        "The locked test years stay unseen.",
+        f"- **Modeling-relevant** sections read nothing dated {before} or later (Section 10). "
+        f"They use the cohort as it would have been built on {before} (ADR 0016): only "
+        "versions posted before that date are known, and observation ends there. A trial's "
+        "outcome, its censoring under the UNKNOWN rule and its place in the cohort are what "
+        "was known on that date, exactly as for a model trained at the 2018 origin "
+        "(Section 6). The locked test years stay unseen.",
         f"- **{DESCRIPTIVE_ONLY}** sections and rows look at later dates, or at fields that "
         "are not point-in-time. They are labeled, and nothing in them is used to choose "
         "features or models.",
@@ -420,8 +426,9 @@ def _registration_lag(res: Results) -> list[str]:
     return [
         "## 5. Registration lag",
         "",
-        f"*Years before {res.before.year} are modeling-relevant; rows from {res.before.year} on "
-        f"are {DESCRIPTIVE} and marked.* Trials open at registration (landmark index 0). A "
+        f"*Years before {res.before.year} are modeling-relevant and come from the cohort as of "
+        f"{res.before.isoformat()}; rows from {res.before.year} on are {DESCRIPTIVE}, marked, "
+        "and come from the final cohort.* Trials open at registration (landmark index 0). A "
         "trial is registered after its start month when the calendar month of its first "
         "version's start date ended before the first-post date. The comparison is by month for "
         "every trial, whatever the precision of its start date.",
@@ -485,8 +492,10 @@ def _post_dates(res: Results) -> list[str]:
         "## 6. Estimated post dates",
         "",
         f"*A property of the registry's records, not of outcomes. Rows from {res.before.year} "
-        f"on are still marked {DESCRIPTIVE}, and the second table reads only versions posted "
-        f"before {res.before.isoformat()}.* The version clock is each version's post date "
+        f"on are still marked {DESCRIPTIVE} and count the versions of the final cohort's "
+        f"trials; earlier rows, and the second table, read only versions posted before "
+        f"{res.before.isoformat()}, of the trials in the cohort as of that date.* The version "
+        "clock is each version's post date "
         "(Section 6). A post date marked ESTIMATED was derived by the registry and not "
         "recorded.",
         "",

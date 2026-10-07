@@ -15,6 +15,7 @@ import duckdb
 import numpy as np
 import pytest
 
+from trialpulse.cli import RefusedError
 from trialpulse.cohort.audit import DAYS_PER_MONTH
 from trialpulse.eda import analysis as an
 from trialpulse.eval import EVENT_CENSORED, EVENT_COMPLETE, EVENT_STOP
@@ -47,6 +48,13 @@ AT_12_MONTHS = 2  # landmark index
 @pytest.fixture(scope="module")
 def con(world: World) -> Iterator[duckdb.DuckDBPyConnection]:
     with an.connect(world.sources) as connection:
+        yield connection
+
+
+@pytest.fixture(scope="module")
+def final_con(world: World) -> Iterator[duckdb.DuckDBPyConnection]:
+    """The analysis pointed at the final cohort, with outcomes through the data cutoff."""
+    with an.connect(world.final_sources) as connection:
         yield connection
 
 
@@ -87,22 +95,46 @@ def test_a_hand_worked_cif_with_a_censored_trial() -> None:
 
 
 def test_registrations_keep_only_landmarks_before_2018(
-    con: duckdb.DuckDBPyConnection, reg: an.Registrations, world: World, registered: list[Trial]
+    con: duckdb.DuckDBPyConnection,
+    final_con: duckdb.DuckDBPyConnection,
+    reg: an.Registrations,
+    world: World,
+    registered: list[Trial],
 ) -> None:
     assert len(reg.time) == len(registered)
     assert set(reg.year.tolist()) == set(MODELING_YEARS)
     assert world.named("landmark_on_2018_01_01") in registered  # first posted 2017-01-01
     assert world.named("registered_2018_01_01") not in registered  # 2018-01-01 is locked
-    everything = an.registrations(con, before=dt.date(2100, 1, 1))
-    assert {COVID_YEAR, 2018} <= set(everything.year.tolist())  # only the date kept them out
+    # The cohort as of 2018-01-01 holds no later registration at all, whatever the date asked.
+    assert set(an.registrations(con, before=dt.date(2100, 1, 1)).year.tolist()) == set(
+        MODELING_YEARS
+    )
+    # On the final cohort the date alone keeps the later registrations out.
+    everything = an.registrations(final_con, before=dt.date(2100, 1, 1))
+    assert {COVID_YEAR, 2018} <= set(everything.year.tolist())
     assert len(everything.time) == len(world.trials)
+    assert set(an.registrations(final_con).year.tolist()) == set(MODELING_YEARS)
 
 
-def test_outcomes_are_censored_at_2018_01_01(
-    con: duckdb.DuckDBPyConnection, reg: an.Registrations, world: World, registered: list[Trial]
+def test_tables_that_were_not_built_as_of_the_date_are_refused(
+    con: duckdb.DuckDBPyConnection, final_con: duckdb.DuckDBPyConnection
 ) -> None:
-    """Section 10: an event on or after 2018-01-01 is not observed yet. Row by row against
-    the twin, then one trial by name, then the same trials followed to the data cutoff."""
+    an.check_as_of(con, BEFORE)
+    with pytest.raises(RefusedError, match=r"dated on or after 2018-01-01.*ADR 0016"):
+        an.check_as_of(final_con, BEFORE)
+    with pytest.raises(RefusedError, match="dated on or after 2017-06-01"):
+        an.check_as_of(con, dt.date(2017, 6, 1))
+
+
+def test_outcomes_are_what_2018_01_01_knew(
+    final_con: duckdb.DuckDBPyConnection,
+    reg: an.Registrations,
+    world: World,
+    registered: list[Trial],
+) -> None:
+    """Section 10 and ADR 0016: an event posted on or after 2018-01-01 is not observed yet.
+    Row by row against the twin, then one trial by name, then the final cohort, which
+    follows the same trials to the data cutoff."""
     rows = world.landmark_rows(0)
     time, event, kind, lapsed = _followed(rows)
     assert np.array_equal(reg.time, time)
@@ -118,13 +150,39 @@ def test_outcomes_are_censored_at_2018_01_01(
         outcome(trial)[1] in (an.KIND_TERMINATED, an.KIND_WITHDRAWN) for trial in registered
     )
 
-    to_cutoff = an.registrations(con, before=dt.date(2100, 1, 1))
-    everyone = world.landmark_rows(0, dt.date(2100, 1, 1))
-    _, _, kind_to_cutoff, lapsed_to_cutoff = _followed(everyone, dt.date(2100, 1, 1))
+    to_cutoff = an.registrations(final_con, before=dt.date(2100, 1, 1))
+    everyone = world.landmark_rows(0, None)
+    _, _, kind_to_cutoff, lapsed_to_cutoff = _followed(everyone, None)
     assert np.array_equal(to_cutoff.kind, kind_to_cutoff)
     # A trial still open at the data cutoff is censored too, but not by the UNKNOWN rule.
     assert np.array_equal(to_cutoff.lapsed, lapsed_to_cutoff)
-    assert (to_cutoff.event == EVENT_CENSORED).sum() > to_cutoff.lapsed.sum() == 1
+    assert (to_cutoff.event == EVENT_CENSORED).sum() > to_cutoff.lapsed.sum() == 2
+
+
+def test_a_lapse_after_2018_is_not_known_to_the_modeling_tables(
+    final_con: duckdb.DuckDBPyConnection,
+    reg: an.Registrations,
+    world: World,
+    registered: list[Trial],
+) -> None:
+    """ADR 0016. The record of "lapses_in_2018" was last verified in April 2016, so the
+    UNKNOWN rule applies to it from 2018-05-01. On 2018-01-01 it is an open trial, followed
+    to that day, with a row at every landmark before it. The final cohort censors it at its
+    last verification, and cutting the final cohort at 2018-01-01 keeps that hindsight."""
+    trial = world.named("lapses_in_2018")
+    at = registered.index(trial)
+    assert reg.event[at] == EVENT_CENSORED
+    assert not reg.lapsed[at]
+    assert reg.time[at] == (BEFORE - trial.first_post).days
+    assert [sum(t is trial for t, _ in world.landmark_rows(k)) for k in range(7)] == [1] * 6 + [0]
+
+    cut = an.registrations(final_con)  # the final cohort cut at 2018-01-01: the earlier report
+    in_final = [t for t, day in world.landmark_rows(0, None) if day < BEFORE]
+    there = in_final.index(trial)
+    assert cut.lapsed[there]
+    assert cut.time[there] == (outcome(trial)[0] - trial.first_post).days < reg.time[at]
+    rows_in_final = [sum(t is trial for t, _ in world.landmark_rows(k, None)) for k in range(7)]
+    assert rows_in_final == [1, 1, 0, 0, 0, 0, 0]
 
 
 def test_the_unknown_rule_censoring_is_told_apart(
@@ -413,7 +471,9 @@ def test_registration_by_year_is_by_month_and_marks_later_years(
     assert sorted(rows) == [*MODELING_YEARS, 2018, COVID_YEAR]
     assert [rows[y]["descriptive"] for y in sorted(rows)] == [False] * 4 + [True, True]
     for year in (2015, 2018):
-        mine = [t for t, _ in world.landmark_rows(0, dt.date(2100, 1, 1)) if t.year == year]
+        # Years before 2018 come from the cohort as of 2018-01-01, later years from the final.
+        cohort = world.landmark_rows(0) if year < BEFORE.year else world.landmark_rows(0, None)
+        mine = [t for t, _ in cohort if t.year == year]
         starts = [(t, month_end(t.versions[0]["start_date"])) for t in mine]
         dated = [(t, end) for t, end in starts if end is not None]
         late = [(t.first_post - end).days for t, end in dated if end < t.first_post]

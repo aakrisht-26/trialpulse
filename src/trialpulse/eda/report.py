@@ -2,8 +2,10 @@
 
     uv run python -m trialpulse.eda.report
 
-One command, from the cohort files of Step 4, the warehouse of Step 3 and the
-current-record snapshot of Step 2; it takes about 15 seconds. Running it again reproduces
+One command, from the cohort files of Step 4 (the cohort as of 2018-01-01 for the
+modeling-relevant sections, the final cohort for the descriptive ones), the warehouse of
+Step 3 and the current-record snapshot of Step 2; it takes about 15 seconds. Running it
+again reproduces
 the committed files byte for byte: nothing in them depends on the run date or the working
 directory, and a file that already says the same thing is left untouched, whatever line
 endings git checked it out with (see `trialpulse.reports`).
@@ -14,7 +16,8 @@ How the report keeps its promises:
   same results that fill that table (`results.py`), so text and table cannot disagree.
 - **A finding is checked before it is written** (`findings.py`). If the numbers no longer
   support its wording, the command refuses and writes nothing.
-- **Modeling-relevant numbers come from landmarks before 2018-01-01 only** (Section 10).
+- **Modeling-relevant numbers come from the cohort as it would have been built on
+  2018-01-01** (Section 10, ADR 0016): nothing posted on or after that date shapes them.
   Everything else is labeled descriptive only, and phase (ADR 0006) is labeled
   "descriptive only, not used for modeling".
 """
@@ -26,14 +29,14 @@ from pathlib import Path
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.audit import MODELING_EDA_BEFORE
-from trialpulse.cohort.build import COHORT_DIR, OUTCOMES_PATH
+from trialpulse.cohort.build import COHORT_DIR, OUTCOMES_PATH, TRAINING_DIR_NAME
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.eda.analysis import Sources
 from trialpulse.eda.charts import draw
 from trialpulse.eda.document import render
 from trialpulse.eda.refs import FIGURES
 from trialpulse.eda.results import compute
-from trialpulse.eval.walkforward import LANDMARKS_PATH
+from trialpulse.eval.walkforward import LANDMARKS_PATH, training_path
 from trialpulse.reports import write_text_if_changed
 from trialpulse.warehouse.build import WAREHOUSE_PATH
 
@@ -56,6 +59,8 @@ def generate(sources: Sources, out: Path, figures_dir: Path, cfg: ProjectConfig)
         sources.warehouse: "uv run python -m trialpulse.warehouse.build",
         sources.landmarks: "uv run python -m trialpulse.cohort.build",
         sources.outcomes: "uv run python -m trialpulse.cohort.build",
+        sources.final_landmarks: "uv run python -m trialpulse.cohort.build",
+        sources.final_outcomes: "uv run python -m trialpulse.cohort.build",
         sources.current_fields: "uv run python -m trialpulse.feasibility.spike --part g",
     }
     for path, command in needed.items():
@@ -72,6 +77,20 @@ def generate(sources: Sources, out: Path, figures_dir: Path, cfg: ProjectConfig)
     return changed
 
 
+def cohort_sources(cohort_dir: Path, warehouse: Path, current_fields: Path) -> Sources:
+    """The files the report reads from a cohort build: the cohort as of the modeling date,
+    and the final cohort."""
+    as_of = training_path(cohort_dir / TRAINING_DIR_NAME, MODELING_EDA_BEFORE)
+    return Sources(
+        landmarks=as_of,
+        outcomes=as_of.parent / OUTCOMES_PATH.name,
+        final_landmarks=cohort_dir / LANDMARKS_PATH.name,
+        final_outcomes=cohort_dir / OUTCOMES_PATH.name,
+        warehouse=warehouse,
+        current_fields=current_fields,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Regenerate docs/eda.md and its figures.")
     parser.add_argument("--warehouse", type=Path, default=WAREHOUSE_PATH)
@@ -82,12 +101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = time.monotonic()
     cohort_dir: Path = args.cohort_dir
     out: Path = args.out
-    sources = Sources(
-        landmarks=cohort_dir / LANDMARKS_PATH.name,
-        outcomes=cohort_dir / OUTCOMES_PATH.name,
-        warehouse=args.warehouse,
-        current_fields=args.current_fields,
-    )
+    sources = cohort_sources(cohort_dir, args.warehouse, args.current_fields)
     figures_dir = out.parent / FIGURES_DIR_NAME
     changed = generate(sources, out, figures_dir, load_project_config())
     if changed:

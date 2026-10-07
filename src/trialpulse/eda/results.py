@@ -51,8 +51,10 @@ class Results:
     before: dt.date  # modeling-relevant analysis reads nothing dated on or after this
     stamp: str  # what the warehouse is: revision, schema version, checksum
     snapshot: str  # the date of the current-record snapshot used for phase
-    landmark_rows: int
+    landmark_rows: int  # of the cohort as of `before`
     landmark_trials: int
+    final_landmark_rows: int  # of the final cohort, which the descriptive sections read
+    final_landmark_trials: int
     horizons: tuple[int, ...]
     spacing_months: int
     reg: an.Registrations
@@ -154,7 +156,11 @@ def compute(sources: an.Sources, cfg: ProjectConfig, before: dt.date) -> Results
     spacing = cfg.landmarks.spacing_months
     phase_order = (*an.PHASE_ORDER, an.OTHER_PHASE, an.NO_CURRENT_RECORD)
     with an.connect(sources) as con:
+        an.check_as_of(con, before)
         counts = con.execute("SELECT count(*), count(DISTINCT trial_id) FROM landmarks").fetchone()
+        final = con.execute(
+            "SELECT count(*), count(DISTINCT trial_id) FROM final_landmarks"
+        ).fetchone()
         reg = an.registrations(con, before)
         if len(reg.time) == 0:
             raise RefusedError(f"no landmark rows before {before.isoformat()} to analyze.")
@@ -172,6 +178,8 @@ def compute(sources: an.Sources, cfg: ProjectConfig, before: dt.date) -> Results
             snapshot=snapshot_date(sources.current_fields),
             landmark_rows=int(counts[0]) if counts else 0,
             landmark_trials=int(counts[1]) if counts else 0,
+            final_landmark_rows=int(final[0]) if final else 0,
+            final_landmark_trials=int(final[1]) if final else 0,
             horizons=horizons,
             spacing_months=spacing,
             reg=reg,

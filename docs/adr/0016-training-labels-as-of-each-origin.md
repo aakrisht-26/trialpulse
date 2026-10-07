@@ -56,3 +56,4 @@ Landmark rows as of each origin, against the final cohort's landmarks before T t
 - Features are not affected: a feature at landmark L already uses only versions posted on or before L (Section 8). Step 7 joins its features to the training rows of each origin and to the evaluation rows.
 - The discrete-time models (Step 10) train on the person-period file of their origin. `person_period.training_rows`, which truncated the final table, is removed.
 - Tuning with early stopping "on the last training year" (Section 9) uses rows of the same as-of file.
+- **The EDA reads the cohort as of 2018-01-01** (Aakrisht, 2026-10-07): its modeling-relevant sections use `training/origin_2018-01-01/`, for which the build also writes the outcomes table of each origin. Before, they read the final cohort cut at that date, which kept the same hindsight. Its descriptive sections keep the final cohort.

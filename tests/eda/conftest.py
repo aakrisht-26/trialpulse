@@ -7,12 +7,12 @@ current-record snapshot.
 
 The twins (`outcome`, `state_at`, `signals_at`, `timing_of`) restate the EDA's rules in
 plain Python from the scripted versions: which version is in effect on a day, what a
-record shows against its first version, what is known of an outcome before a date. The
-tests compare the SQL with them row by row. No real data.
+record shows against its first version, what the cohort built as of a date knows of an
+outcome (ADR 0016). The tests compare the SQL with them row by row. No real data.
 """
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from trialpulse.cohort.audit import DAYS_PER_MONTH
 from trialpulse.cohort.rules import add_months
 from trialpulse.eda import analysis as an
 from trialpulse.eda.analysis import Sources
+from trialpulse.eda.report import cohort_sources
 from trialpulse.eval import EVENT_CENSORED, EVENT_COMPLETE, EVENT_STOP
 from trialpulse.models.aalen_johansen import aalen_johansen
 
@@ -189,8 +190,15 @@ EDGE_CASES: list[tuple[str, dt.date, str, tuple[int, str] | None, list[Step]]] =
     ("primary_moved_earlier", MID_2015, "OTHER", (-1, "day"),
      [(0, "RECRUITING", {}), (8, "RECRUITING", {"primary_completion": 18}),
       (17, "COMPLETED", {"primary_completion": 18})]),
-    # Censored under the UNKNOWN rule: the completion date passes and nobody verifies.
+    # Censored under the UNKNOWN rule: the completion date passes and nobody verifies. The
+    # last version still carries the verification of October 2015, so the record lapses on
+    # 2017-11-01: 2018-01-01 already knows it.
     ("lapsed", MID_2015, "OTHER", (-1, "day"),
+     [(0, "RECRUITING", {"completion": 12}),
+      (10, "RECRUITING", {"completion": 12, "verified": 4})]),
+    # The same record verified in April 2016 lapses on 2018-05-01. On 2018-01-01 it is an open
+    # trial; only the final cohort censors it at its last verification (ADR 0016).
+    ("lapses_in_2018", MID_2015, "OTHER", (-1, "day"),
      [(0, "RECRUITING", {"completion": 12}), (10, "RECRUITING", {"completion": 12})]),
     # First posted on 2017-01-01: its 12-month landmark is 2018-01-01, the first locked day.
     ("landmark_on_2018_01_01", dt.date(2017, 1, 1), "INDUSTRY", (-1, "day"),
@@ -202,7 +210,13 @@ EDGE_CASES: list[tuple[str, dt.date, str, tuple[int, str] | None, list[Step]]] =
     ("registered_suspended", dt.date(2019, 6, 1), "OTHER", (-1, "day"),
      [(0, "SUSPENDED", {}), (4, "RECRUITING", {}), (24, "COMPLETED", {})]),
 ]  # fmt: skip
-LAPSE_DATES = {"lapsed": add_months(MID_2015, 10)}  # censored at the last status verification
+# Trials the UNKNOWN rule censors: (the last status verification, where follow-up ends; the
+# first day the record counts as lapsed, which is the day after the month 24 months after
+# the verification month).
+LAPSES = {
+    "lapsed": (add_months(MID_2015, 4), dt.date(2017, 11, 1)),
+    "lapses_in_2018": (add_months(MID_2015, 10), dt.date(2018, 5, 1)),
+}
 
 
 @dataclass(frozen=True)
@@ -234,14 +248,29 @@ class World:
     def count(self, *names: str, years: tuple[int, ...] = MODELING_YEARS) -> int:
         return sum(t.name in names and t.year in years for t in self.trials)
 
-    def landmark_rows(self, index: int, before: dt.date = BEFORE) -> list[tuple[Trial, dt.date]]:
-        """The landmark rows the cohort build made at one index, before a date, by trial id."""
+    @property
+    def final_sources(self) -> Sources:
+        """The same files with the final cohort in the place of the cohort as of 2018-01-01:
+        what the analysis functions see when they are pointed at outcomes to the cutoff."""
+        return replace(
+            self.sources,
+            landmarks=self.sources.final_landmarks,
+            outcomes=self.sources.final_outcomes,
+        )
+
+    def landmark_rows(
+        self, index: int, before: dt.date | None = BEFORE
+    ) -> list[tuple[Trial, dt.date]]:
+        """The landmark rows the cohort build made at one index, by trial id: those of the
+        cohort as of `before`, or those of the final cohort when `before` is None."""
+        assert before in (BEFORE, None), "the build wrote the cohort as of 2018-01-01 only"
+        path = self.sources.final_landmarks if before is None else self.sources.landmarks
         by_id = {t.nct_id: t for t in self.trials}
         with duckdb.connect() as con:
             rows = con.execute(
-                f"""SELECT trial_id, landmark_date FROM '{self.sources.landmarks.as_posix()}'
-                WHERE landmark_index = ? AND landmark_date < ? ORDER BY trial_id""",
-                [index, before],
+                f"""SELECT trial_id, landmark_date FROM '{path.as_posix()}'
+                WHERE landmark_index = ? ORDER BY trial_id""",
+                [index],
             ).fetchall()
         return [(by_id[trial_id], day) for trial_id, day in rows]
 
@@ -280,7 +309,7 @@ def _versions(
                 "study_type": "INTERVENTIONAL",
                 "study_first_post_date": t0,
                 "study_first_submit_date": t0 - dt.timedelta(days=5),
-                "status_verified_date": posted,
+                "status_verified_date": _when(t0, fields.get("verified")) or posted,
                 "start_date": None if started is None else add_months(t0, started[0]),
                 "start_date_precision": None if started is None else started[1],
                 "primary_completion_date": primary,
@@ -329,21 +358,17 @@ def _trials() -> list[Trial]:
 
 def outcome(trial: Trial, before: dt.date | None = None) -> tuple[dt.date, int, bool]:
     """When follow-up ends, the event kind (0 censored), and whether the censoring is the
-    UNKNOWN rule's. With `before`, what was known before that date."""
-    terminal = [v for v in trial.versions if v["overall_status"] in TERMINAL]
+    UNKNOWN rule's. With `before`, what the cohort built as of that date knows (ADR 0016):
+    a terminal version counts only if it was posted before that date, a record is lapsed
+    only if the UNKNOWN rule applied to it on that date, and observation ends there."""
+    window_end = CUTOFF if before is None else before
+    known = [v for v in trial.versions if before is None or v["effective_date"] < before]
+    terminal = [v for v in known if v["overall_status"] in TERMINAL]
     if terminal:
-        end, kind, lapsed = (
-            terminal[0]["effective_date"],
-            TERMINAL[terminal[0]["overall_status"]],
-            False,
-        )
-    elif trial.name in LAPSE_DATES:
-        end, kind, lapsed = LAPSE_DATES[trial.name], 0, True
-    else:
-        end, kind, lapsed = CUTOFF, 0, False
-    if before is not None and end >= before:
-        return before, 0, False
-    return end, kind, lapsed
+        return terminal[0]["effective_date"], TERMINAL[terminal[0]["overall_status"]], False
+    if trial.name in LAPSES and LAPSES[trial.name][1] <= window_end:
+        return LAPSES[trial.name][0], 0, True
+    return window_end, 0, False
 
 
 def state_at(trial: Trial, day: dt.date) -> dict[str, Any]:
@@ -416,9 +441,9 @@ EVENT_OF_KIND = {0: EVENT_CENSORED, an.KIND_TERMINATED: EVENT_STOP,
                  an.KIND_WITHDRAWN: EVENT_STOP, an.KIND_COMPLETED: EVENT_COMPLETE}  # fmt: skip
 
 
-def followed(rows: list[tuple[Trial, dt.date]], before: dt.date = BEFORE) -> tuple[Any, ...]:
+def followed(rows: list[tuple[Trial, dt.date]], before: dt.date | None = BEFORE) -> tuple[Any, ...]:
     """Days of follow-up, event, kind and UNKNOWN-rule flag of each landmark row, from the
-    twin: (time, event, kind, lapsed)."""
+    twin: (time, event, kind, lapsed). `before` None follows every trial to the data cutoff."""
     ends = [outcome(trial, before) for trial, _ in rows]
     time = np.array([(end - day).days for (_, day), (end, _, _) in zip(rows, ends, strict=True)])
     kind = np.array([kind for _, kind, _ in ends])
@@ -480,10 +505,4 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> World:
     current_fields = root / "spike" / "current_fields.parquet"
     current_fields.parent.mkdir()
     write_current_fields(current_fields, trials)
-    sources = Sources(
-        landmarks=cohort_dir / "landmarks.parquet",
-        outcomes=cohort_dir / "outcomes.parquet",
-        warehouse=warehouse,
-        current_fields=current_fields,
-    )
-    return World(sources, tuple(trials))
+    return World(cohort_sources(cohort_dir, warehouse, current_fields), tuple(trials))

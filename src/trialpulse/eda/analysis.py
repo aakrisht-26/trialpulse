@@ -5,12 +5,17 @@ tables and `charts.py` into figures.
 
 Two rules decide what may inform modeling (CLAUDE.md Section 10):
 
-- **Modeling-relevant analysis reads nothing dated on or after 2018-01-01.** Every function
-  that takes `before` keeps only landmarks before that date, and censors each outcome
-  there: an event on or after it counts as "not observed yet", exactly as for a model
-  trained at the 2018 origin (Section 6). The locked test years stay unseen.
-- **Anything later is descriptive only.** `covid_period_monthly` is descriptive by purpose,
-  and `registration_by_year` and `post_dates_by_year` flag each later year.
+- **Modeling-relevant analysis reads nothing dated on or after 2018-01-01.** Its tables
+  (`landmarks` and `outcomes`) are the cohort as it would have been built on that date
+  (ADR 0016): only versions posted before it are known, and observation ends there. So an
+  outcome, a censoring under the UNKNOWN rule and a trial's place in the cohort are what
+  was known on that date, exactly as for a model trained at the 2018 origin (Section 6).
+  `check_as_of` refuses tables that hold anything later. Every function that takes
+  `before` also keeps only landmarks before that date and censors each outcome there,
+  which changes nothing on those tables. The locked test years stay unseen.
+- **Anything later is descriptive only,** and reads the final cohort (`final_landmarks`,
+  `final_outcomes`): `covid_period_monthly` by purpose, and the rows of
+  `registration_by_year` and `post_dates_by_year` for the later years, which are flagged.
 
 Phase is not versioned (ADR 0006), so the phase breakdown uses each trial's current-record
 phase and is descriptive only: a phase edited after the outcome could leak it.
@@ -32,6 +37,7 @@ import duckdb
 import numpy as np
 import numpy.typing as npt
 
+from trialpulse.cli import RefusedError
 from trialpulse.cohort.audit import DAYS_PER_MONTH, MODELING_EDA_BEFORE
 from trialpulse.dates import days_between
 from trialpulse.eval import EVENT_CENSORED, EVENT_COMPLETE, EVENT_STOP
@@ -89,8 +95,10 @@ ALL = "All"
 
 @dataclass(frozen=True)
 class Sources:
-    landmarks: Path
+    landmarks: Path  # the cohort as of the modeling date (ADR 0016): modeling-relevant
     outcomes: Path
+    final_landmarks: Path  # the final cohort, outcomes through the data cutoff: descriptive
+    final_outcomes: Path
     warehouse: Path
     current_fields: Path
 
@@ -102,10 +110,34 @@ def connect(sources: Sources) -> duckdb.DuckDBPyConnection:
     for name, path in (
         ("landmarks", sources.landmarks),
         ("outcomes", sources.outcomes),
+        ("final_landmarks", sources.final_landmarks),
+        ("final_outcomes", sources.final_outcomes),
         ("current_fields", sources.current_fields),
     ):
         con.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{path.as_posix()}')")
     return con
+
+
+def check_as_of(con: duckdb.DuckDBPyConnection, before: dt.date) -> None:
+    """Refuse modeling-relevant tables that were not built as of `before`: a landmark on or
+    after it, an event dated on or after it, or a censoring after it."""
+    row = con.execute(
+        f"""SELECT count(*) FROM landmarks
+        WHERE landmark_date >= {_day(before)} OR event_date > {_day(before)}
+          OR (event <> {EVENT_CENSORED} AND event_date >= {_day(before)})"""
+    ).fetchone()
+    late = con.execute(
+        f"""SELECT count(*) FROM outcomes
+        WHERE event_date > {_day(before)}
+          OR (event <> {EVENT_CENSORED} AND event_date >= {_day(before)})"""
+    ).fetchone()
+    count = (row[0] if row else 0) + (late[0] if late else 0)
+    if count:
+        raise RefusedError(
+            f"{count} rows of the modeling-relevant cohort are dated on or after "
+            f"{before.isoformat()}: the EDA needs the cohort built as of that date (ADR 0016). "
+            "Run: uv run python -m trialpulse.cohort.build"
+        )
 
 
 def phase_group(phases: Sequence[str]) -> str:
@@ -551,7 +583,8 @@ def registration_by_year(
     month (among trials with a start date: the start date's calendar month ended before the
     first-post date), the median days from the end of the start month to registration among
     those, the share registered more than a year late, and the median days from first
-    submission to first posting. Years from `before` on are flagged descriptive."""
+    submission to first posting. Trials registered before `before` come from the cohort as
+    of that date; later years come from the final cohort and are flagged descriptive."""
     start_month_end = month_end_sql("f.start_date", "f.start_date_precision")
     cursor = con.execute(
         f"""WITH first_version AS (
@@ -563,8 +596,13 @@ def registration_by_year(
           SELECT year(l.landmark_date) AS year, l.landmark_date AS t0,
             {start_month_end} AS start_end, f.start_date_precision AS precision,
             f.study_first_submit_date AS submitted
-          FROM landmarks l JOIN first_version f ON f.nct_id = l.trial_id
-          WHERE l.landmark_index = 0
+          FROM (
+            SELECT trial_id, landmark_date FROM landmarks
+            WHERE landmark_index = 0 AND landmark_date < {_day(before)}
+            UNION ALL
+            SELECT trial_id, landmark_date FROM final_landmarks
+            WHERE landmark_index = 0 AND landmark_date >= {_day(before)}
+          ) l JOIN first_version f ON f.nct_id = l.trial_id
         )
         SELECT year, count(*) AS trials, count(start_end) AS with_start_date,
           avg(CASE WHEN precision = 'day' THEN 1.0 WHEN start_end IS NOT NULL THEN 0.0 END)
@@ -589,17 +627,22 @@ def post_dates_by_year(
 ) -> Rows:
     """Per year of the version clock, for versions of cohort trials: how many, the share
     whose post date is ESTIMATED, and the median and 90th percentile of the days from
-    submission to posting. A property of the registry's records, not of outcomes; years
-    from `before` on are still flagged descriptive."""
+    submission to posting. A property of the registry's records, not of outcomes. Versions
+    posted before `before` are those of the trials in the cohort as of that date; later
+    versions are those of the final cohort's trials, and their years are flagged
+    descriptive."""
     cursor = con.execute(
-        """SELECT year(v.effective_date) AS year, count(*) AS versions,
+        f"""SELECT year(v.effective_date) AS year, count(*) AS versions,
           avg(CASE WHEN v.effective_date_type = 'ESTIMATED' THEN 1.0 ELSE 0.0 END)
             AS share_estimated,
           median(date_diff('day', v.submitted_date, v.effective_date)) AS median_days_to_post,
           quantile_cont(date_diff('day', v.submitted_date, v.effective_date), 0.9)
             AS p90_days_to_post
         FROM wh.versions v
-        JOIN (SELECT DISTINCT trial_id FROM landmarks) c ON c.trial_id = v.nct_id
+        LEFT JOIN (SELECT DISTINCT trial_id FROM landmarks) a ON a.trial_id = v.nct_id
+        LEFT JOIN (SELECT DISTINCT trial_id FROM final_landmarks) f ON f.trial_id = v.nct_id
+        WHERE CASE WHEN v.effective_date < {_day(before)} THEN a.trial_id IS NOT NULL
+                   ELSE f.trial_id IS NOT NULL END
         GROUP BY 1 ORDER BY 1"""
     )
     rows = _records(cursor)
@@ -644,7 +687,8 @@ def covid_period_monthly(
     con: duckdb.DuckDBPyConnection, start: dt.date, end: dt.date
 ) -> dict[str, Any]:
     """DESCRIPTIVE ONLY: it looks at calendar time after 2018-01-01 (Section 10), so nothing
-    here may shape a model. Per calendar month from `start` to `end`, for cohort trials: how
+    here may shape a model, and it reads the final cohort, with outcomes through the data
+    cutoff. Per calendar month from `start` to `end`, for cohort trials: how
     many were under follow-up at the start of the month, and how many were terminated,
     withdrawn, or newly suspended (a SUSPENDED version that follows a version with another
     status) during it, per 1,000 trials under follow-up."""
@@ -652,10 +696,10 @@ def covid_period_monthly(
       FROM generate_series({_day(start)}, {_day(end)}, INTERVAL 1 MONTH) AS s(m)"""
     data = con.execute(
         f"""WITH months AS ({months}),
-        cohort AS (SELECT DISTINCT trial_id FROM landmarks),
+        cohort AS (SELECT DISTINCT trial_id FROM final_landmarks),
         o AS (
           SELECT o.t0, o.event_date, o.terminal_status
-          FROM outcomes o JOIN cohort c USING (trial_id)
+          FROM final_outcomes o JOIN cohort c USING (trial_id)
         ),
         open_trials AS (
           SELECT m.month_start, count(*) AS n FROM months m JOIN o

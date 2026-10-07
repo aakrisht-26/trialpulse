@@ -155,6 +155,8 @@ def supporting() -> Results:
         snapshot="2026-09-22",
         landmark_rows=10,
         landmark_trials=5,
+        final_landmark_rows=12,
+        final_landmark_trials=6,
         horizons=(12, 24),
         spacing_months=6,
         reg=reg,
