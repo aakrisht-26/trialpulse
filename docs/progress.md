@@ -73,18 +73,18 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Steps 4 and 5 are approved** (2026-10-07). Step 5 (EDA) was built on branch `provisional/step5-eda` and merged through PR aakrisht-26/trialpulse#2. **Step 6** is in progress (LLM test result in: macro-F1 0.842; Aakrisht runs the 10,000-text LLM sample labeling daily; the distilled model's test scoring waits for it). **Step 8** is approved. Step 7 starts after Aakrisht's next review.
+Current step: **Steps 4 and 5 are approved** (2026-10-07); Step 5 (EDA) was merged through PR aakrisht-26/trialpulse#2. The follow-up Aakrisht asked for in that review is built and waits for his review: training labels as of each origin (ADR 0016) and IPCW censoring weights by sponsor class (ADR 0017), with M0 rerun on the development origins. **Step 6** is in progress: 3,325 of 10,000 sample texts were labeled on 2026-10-07 (LLM test result: macro-F1 0.842); the final distilled model waits for the sample. **Step 8** is approved, with the two changes above. Step 7 starts after Aakrisht's next review.
 
 | Step | Title | Status |
 | --- | --- | --- |
 | 1 | Repo skeleton, tooling, CI | Approved and fully verified 2026-09-23 |
 | 2 | Feasibility spike (go/no-go) | **GO** (2026-09-30, ADR 0011): every automated criterion met; ADRs 0006, 0007 and 0011 accepted |
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
-| 4 | Cohort, outcomes and landmarks | Built and independently reviewed 2026-10-06, waiting for review (ADRs 0013 and 0014 accepted, ADR 0015 proposed, 3 open questions) |
+| 4 | Cohort, outcomes and landmarks | Approved 2026-10-07 and verified by Aakrisht (ADRs 0013, 0014 and 0015 accepted). Training labels rebuilt as of each origin on 2026-10-07 (ADR 0016), waiting for review |
 | 5 | Exploratory data analysis | Approved 2026-10-07 after the reproducibility fix (line endings); merged from PR aakrisht-26/trialpulse#2 |
-| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (1,375 of 10,000 on 2026-09-26); distilled model provisional |
+| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (3,325 of 10,000 on 2026-10-07); distilled model provisional |
 | 7 | Point-in-time features | Not started |
-| 8 | Evaluation harness and test lock | Approved 2026-09-23; M0 ran end to end on the development origins on the real cohort (Step 4), which closes its last criterion |
+| 8 | Evaluation harness and test lock | Approved 2026-09-23. Changed on 2026-10-07 by ADR 0016 (training rows as of each origin) and ADR 0017 (censoring weights by sponsor class), waiting for review |
 | 9 | Baselines and Cox analysis | Not started |
 | 10 | Discrete-time models and tuning | Not started |
 | 11 | Pre-registration, locked test and results | Not started |
@@ -105,6 +105,14 @@ Aakrisht's guidance from the Step 2 review. Each item is formalized with an ADR 
 3. **Step 7: evaluate the new `interventions` config.** If it is per version, intervention type becomes a candidate feature, adopted through an ADR.
 4. **Step 7: individual sponsors fall back to the class-level rate** (Aakrisht, 2026-09-30, Step 3 instruction). The warehouse stores no name or key for an individual sponsor (class INDIV, and, under ADR 0012, a person's name with a degree title under another class), so the sponsor track record feature uses the smoothed class-level early-stop rate for them, and their prior-registration count is not computed per person.
 5. **Step 7: sponsor renames are aliases, not new sponsors** (Aakrisht, 2026-09-30, Step 3 review). When the registry renames a trial's lead sponsor without a new version (the Step 3 parity sample found two, for example Endo Pharmaceuticals to "Endo USA Inc., a Keenova Therapeutics Company"), names that replace each other on the same trial are treated as aliases of one sponsor, so a rename does not start a new track record. Formalized with an ADR in Step 7.
+
+Added on 2026-10-07, from Aakrisht's review of Steps 4 and 5:
+
+6. **Step 7: enrollment type joins the amendment family.** The enrollment count is a target while its type is ESTIMATED and the number enrolled once it is ACTUAL (`docs/eda.md`, finding 4). The target change is computed only while the count is ESTIMATED, and "enrolled below the first target" is its own signal once it is ACTUAL.
+7. **Step 7: every date-based feature is computed at calendar-month precision,** so that the 2017 change in the registry's date precision (month through 2016, mostly day afterwards) cannot become a signal.
+8. **Step 10: sponsor class enters M2 and M3,** so that each rung of the ladder contains the one before: M0 sponsor class, M2 plus design, M3 plus amendment signals, M4 plus everything else. To be recorded as an ADR in Step 10 (it changes Section 9).
+9. **Step 11: the pre-registration discloses** that the COVID hypothesis came from descriptive aggregates of the stress-test period (`docs/eda.md`, section 7).
+10. **Step 14: the content hash covers the submitted status,** not the registry's computed UNKNOWN, so that a record the registry flips to UNKNOWN without a new version does not hash as a new version. Implemented at the start of Step 14 with its ADR; it changes the Step 3 contract and needs a warehouse rebuild.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -464,7 +472,7 @@ Then open `docs/data_audit.md`.
 
 ## Step 4: Cohort, outcomes and landmarks
 
-Date: 2026-09-30 to 2026-10-06. Status: **built and independently reviewed, waiting for Aakrisht's review**.
+Date: 2026-09-30 to 2026-10-06. Status: **approved by Aakrisht on 2026-10-07** and verified on his machine (see "Review of 2026-10-07" below).
 
 ### What was built
 
@@ -539,9 +547,9 @@ Two independent reviewers, as instructed (the earlier four-reviewer attempts fai
 | Section replacement split on any line starting with "# "; part 2 did not say which warehouse it came from | Yes | Fixed: only part headings separate parts; part 2 states the revision, schema version and versions checksum; unit tests added |
 | The content hash covers the registry's computed UNKNOWN, so one version would hash two ways before and after the registry flips it | Yes | **Not changed. Open question 3 below** (a Step 14 decision); the API v2 parity test now covers an UNKNOWN version |
 
-### Decisions pending approval
+### Decisions (approved on 2026-10-07)
 
-1. **ADR 0015 (proposed):** an interval counts only if it ended within the observation window (the data cutoff, or the origin when training). Implemented, since the alternative is measurably biased.
+1. **ADR 0015 (accepted on 2026-10-07):** an interval counts only if it ended within the observation window (the data cutoff, or the origin when training). Implemented, since the alternative is measurably biased.
 2. **A bare UNKNOWN** (no `last_known_status`) is lapsed from its post date; after a terminal version it is a reversal. None exists in the dataset; a live record could carry one.
 3. **Out-of-order versions are refused** by the cohort build instead of being interpreted.
 4. **`landmarks.parquet` holds only the contract columns and `stratum`** (the lead sponsor class of the state at L, "MISSING" when absent). Everything else about a trial's outcome is in `outcomes.parquet`, so that no label-derived column can reach a model as a feature.
@@ -550,7 +558,7 @@ Two independent reviewers, as instructed (the earlier four-reviewer attempts fai
 7. **Slow tests:** the test-lock tests stay in the default run although they take about 7 seconds, because they guard the lock; the warehouse tests share one synthetic warehouse per session; `tests/conftest.py` makes every test share one default TLS context by wrapping an httpx helper (test-only, and skipped if a future httpx drops the helper).
 8. **One more API v2 request** on 2026-10-05, to repeat the parity sample with the new column.
 
-### Open questions
+### Open questions (answered on 2026-10-07, see the review below)
 
 1. **Should walk-forward training labels be rebuilt as of each origin T?** Today the cohort is built once at the data cutoff and training rows are truncated at T, as Section 6 words it ("every outcome administratively censored at T"). Two things are then decided with hindsight: which trials are censored under the UNKNOWN rule and where, and which trials are excluded as reversals. Sizes at origin 2016 (reviewer 1): 19,314 of 405,251 training landmark rows exist only with hindsight (mostly lapsed at T and resolved later), 13,968 would exist only as of T (10,961 from UNKNOWN censoring decided after T, 3,007 from reversals after T), and 13,960 common rows have a different censoring date. No event label differs. Options:
    - (a) **Build each origin's training labels as of T** (`CohortRules.from_config(cfg, cutoff=T)` already supports it; the harness would read one training file per origin). The training set is then what a model trained at T would have seen, which is also what production retraining sees. **Recommended**, before Step 9 fits anything beyond M0.
@@ -595,7 +603,17 @@ uv run python -m trialpulse.eval.walkforward --model m0 --origins dev
 
 Then open `docs/data_audit.md` (part 2).
 
-## Step 5 (provisional): Exploratory data analysis
+### Review of 2026-10-07 (Aakrisht)
+
+**Approved.** Aakrisht verified Step 4 on his machine: migration 0002 applied, the cohort build identical to the previous build, 410 tests passed.
+
+- **ADR 0015 is accepted;** its line is in the CLAUDE.md Amendments. The other Step 4 decisions are approved as listed.
+- **Open question 1: yes.** Walk-forward training labels are rebuilt as of each origin, so that a training row's outcome, censoring, lapse resolution and reversal exclusion use only versions posted before the origin; evaluation rows keep outcomes through the data cutoff. Recorded as ADR 0016 and implemented (see "Follow-up to Steps 4, 5 and 8" below).
+- **Open question 2:** the 35,938 trials censored at or before registration are kept as approved.
+- **Open question 3: yes,** the content hash will cover the submitted status. To be implemented at the start of Step 14 with its ADR ("Guidance for later steps", item 10).
+- **The local backup branch from the commit split:** none exists. It was deleted on 2026-10-06 after the Step 4 push, and `git branch -a` shows only `main` and its remote.
+
+## Step 5: Exploratory data analysis
 
 Date: 2026-10-06 to 2026-10-07. Status: **approved by Aakrisht on 2026-10-07**, after the reproducibility fix described under "Review of 2026-10-07" below. Built on branch `provisional/step5-eda` under the extension of 2026-10-05, while Aakrisht was away, and merged into main through PR aakrisht-26/trialpulse#2 once its checks are green.
 
@@ -771,6 +789,165 @@ uv run pytest -q -m "slow or not slow"
 ```
 
 Then open `docs/eda.md`.
+
+## Follow-up to Steps 4, 5 and 8 (2026-10-07): training labels as of each origin, censoring weights by sponsor class
+
+Date: 2026-10-07. Status: **built and reviewed, waiting for Aakrisht's review**. Asked for in the review of Steps 4 and 5 on 2026-10-07. Step 7 is not started.
+
+### What was built
+
+- **Training labels as of each origin (ADR 0016).** For each walk-forward origin T the cohort build now builds the cohort as it would have been built on T: only versions posted before T are known, and observation ends on T. A training row's outcome, its censoring, whether a lapse was resolved and whether its trial is excluded for a reversal use nothing posted on or after T. The build writes `data/cohort/training/origin_<date>/landmarks.parquet` and `person_period.parquet` for the five origins, with the same rules and code as the final cohort (`CohortRules.as_of(T)`). The harness reads the file of its origin and refuses training rows dated after it; the step that truncated the final cohort is gone, and so is `person_period.training_rows`.
+- **IPCW censoring weights by sponsor class (ADR 0017).** Every IPCW metric (AUC, Brier score, lift, calibration slope and intercept) weights a row by a censoring curve fitted within its lead sponsor class at the landmark. The same metrics with one curve for all rows are reported beside them as the sensitivity check. A class with fewer than 200 rows in the slice being scored shares one pooled curve with the other small classes (`evaluation.censoring_min_rows`); that rule is mine and pending approval (open question 1).
+- **Evaluation rows are unchanged:** the final cohort's landmarks, with outcomes through the data cutoff.
+
+### Evidence
+
+| What was asked | Met | Evidence |
+| --- | --- | --- |
+| Per-origin training labels, with tests | Yes | `tests/cohort/test_training.py` (18 tests on the mini histories: a termination, a reversal, a resolved lapse, an UNKNOWN censoring and a study type that an origin did not know yet; the origin day itself), and updates in `tests/cohort/test_build.py`, `tests/cohort/test_person_period.py` and `tests/eval/test_walkforward.py` |
+| A test showing that a training label at origin T cannot change when versions after T are rewritten | Yes | `test_a_training_label_cannot_change_when_later_versions_are_rewritten`, for four origins: every version posted on or after T is rewritten or dropped and later versions are added to every trial; the landmark rows and the person-period rows of T are identical. A control shows the same rewrite changes the final cohort and a later origin. The same check on the real warehouse is below |
+| Sponsor-class censoring weights, with tests | Yes | `tests/eval/test_censoring_groups.py` (14 tests): weights worked out by hand for two groups and for a censoring on the horizon day; on synthetic data with a known answer, by-class weights recover the share stopped early within 0.006 where the single curve is off by more than 0.03; the values a walk-forward run writes, for all rows and per landmark index, equal the metrics computed directly on each slice |
+| M0 rerun on the development origins with both changes | Yes | Table below |
+| Labeling status checked, no API calls | Yes | 3,325 of 10,000 ("Step 6 status" below) |
+| Tests and checks clean | Yes | In my shell: ruff, ruff format and mypy clean; 557 passed and 11 deselected by default; 568 passed with the slow tests; the cohort build prints "Identical to the previous build: yes" on its second run; the EDA report prints "Up to date" and leaves the working tree clean |
+
+The build's own count of how the training rows changed (`docs/data_audit.md`, part 2):
+
+| Origin T | Landmark rows as of T | Final cohort, truncated at T | Only as of T | Only with hindsight | Same row, other label | Same label, other end date |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2016-01-01 | 399,905 | 405,251 | 13,968 | 19,314 | 0 | 13,960 |
+| 2017-01-01 | 480,046 | 481,985 | 16,232 | 18,171 | 0 | 17,097 |
+| 2018-01-01 | 567,423 | 564,612 | 20,051 | 17,240 | 0 | 19,554 |
+| 2019-01-01 | 653,603 | 651,168 | 22,429 | 19,994 | 0 | 23,593 |
+| 2020-01-01 | 748,038 | 742,153 | 25,461 | 19,576 | 0 | 26,639 |
+
+The 2016 row equals what an independent reviewer derived with separate SQL in the Step 4 review. The cohort build takes 30 to 40 seconds with the five training cohorts (about 18 before); the final cohort's files are unchanged (same checksums).
+
+**The rewrite check on the real warehouse** (a one-off script, not a test, since CI has no data): for each of the five origins, every version posted on or after T was rewritten (another status, study type, sponsor class and dates) and one more version dated T was added to every trial; in a second run all those versions were dropped. For the 2016 origin that is 2,935,347 of 4,444,542 versions. In both runs and at every origin the rebuilt training rows equal the files of the build: 0 landmark rows and 0 person-period rows differ. As a control, rewriting from 31 days before T does change them (2016 origin: 22,606 landmark rows only in the rebuilt set, 27,018 only in the file).
+
+### M0 on the development origins
+
+M0 is the Aalen-Johansen CIF by sponsor class. 1,000 cluster-bootstrap resamples, 0 invalid, about 10 minutes in my shell (595 seconds). A second run on the committed code wrote the same results file byte for byte. "Before" is the Step 4 run: hindsight labels truncated at T and one censoring curve. "Single curve" is the sensitivity check of the new run: labels as of T, one censoring curve (point estimates).
+
+| Origin | Horizon | Metric | Before | Now, by sponsor class (primary) | Now, single curve |
+| --- | --- | --- | --- | --- | --- |
+| 2016 | 12 months | AUC | 0.543 (0.532 to 0.557) | 0.544 (0.532 to 0.557) | 0.5435 |
+| 2016 | 12 months | AUC, four decimals | 0.5435 | 0.5439 | 0.5435 |
+| 2016 | 12 months | Brier score | 0.03251 (0.03109 to 0.03392) | 0.03248 (0.03106 to 0.03388) | 0.03250 |
+| 2016 | 12 months | Lift at 10% | 1.409 (1.260 to 1.583) | 1.417 (1.266 to 1.591) | 1.409 |
+| 2016 | 12 months | Calibration slope | 0.884 | 0.958 | 0.943 |
+| 2016 | 12 months | Calibration intercept | 0.084 | 0.052 | 0.052 |
+| 2016 | 24 months | AUC | 0.534 (0.525 to 0.544) | 0.534 (0.525 to 0.544) | 0.5338 |
+| 2016 | 24 months | AUC, four decimals | 0.5338 | 0.5345 | 0.5338 |
+| 2016 | 24 months | Brier score | 0.05974 (0.05782 to 0.06172) | 0.05968 (0.05778 to 0.06164) | 0.05974 |
+| 2016 | 24 months | Lift at 10% | 1.246 (1.137 to 1.358) | 1.254 (1.144 to 1.367) | 1.246 |
+| 2016 | 24 months | Calibration slope | 1.217 | 1.458 | 1.422 |
+| 2016 | 24 months | Calibration intercept | 0.028 | -0.022 | -0.022 |
+| 2016 | | Training rows | 405,251 | 399,905 | 399,905 |
+| 2016 | | Evaluation rows | 76,734 | 76,734 | 76,734 |
+| 2017 | 12 months | AUC | 0.551 (0.541 to 0.563) | 0.552 (0.542 to 0.563) | 0.5514 |
+| 2017 | 12 months | AUC, four decimals | 0.5514 | 0.5519 | 0.5514 |
+| 2017 | 12 months | Brier score | 0.03097 (0.02962 to 0.03231) | 0.03094 (0.02959 to 0.03228) | 0.03097 |
+| 2017 | 12 months | Lift at 10% | 1.583 (1.410 to 1.732) | 1.595 (1.420 to 1.744) | 1.583 |
+| 2017 | 12 months | Calibration slope | 1.090 | 1.144 | 1.125 |
+| 2017 | 12 months | Calibration intercept | 0.025 | 0.006 | 0.005 |
+| 2017 | 24 months | AUC | 0.534 (0.526 to 0.542) | 0.535 (0.527 to 0.543) | 0.5341 |
+| 2017 | 24 months | AUC, four decimals | 0.5342 | 0.5348 | 0.5341 |
+| 2017 | 24 months | Brier score | 0.05903 (0.05718 to 0.06087) | 0.05897 (0.05713 to 0.06080) | 0.05903 |
+| 2017 | 24 months | Lift at 10% | 1.249 (1.139 to 1.368) | 1.261 (1.151 to 1.381) | 1.249 |
+| 2017 | 24 months | Calibration slope | 1.320 | 1.490 | 1.446 |
+| 2017 | 24 months | Calibration intercept | 0.005 | -0.030 | -0.030 |
+| 2017 | | Training rows | 481,985 | 480,046 | 480,046 |
+| 2017 | | Evaluation rows | 82,627 | 82,627 | 82,627 |
+
+Reading:
+
+- **The AUC at 12 months, next to the previous 0.543 and 0.551: 0.544 (0.532 to 0.557) and 0.552 (0.542 to 0.563)** with both changes. With the labels alone (single curve) it is 0.5435 and 0.5514.
+- **The labels did not change how M0 ranks trials.** With one curve, as before, the AUC equals the earlier run to four decimals at 12 months and within 0.0001 at 24 months. M0 predicts one curve per sponsor class, so its ranking is the order of the classes, and that order is the same.
+- **Weights by sponsor class add 0.0004 to 0.0007 of AUC,** far inside the intervals, which are about 0.02 wide. M0 is still barely above 0.5: sponsor class alone carries little signal, which is what M0 is there to show.
+- **Calibration moved more, and mostly from the labels.** The slope at 12 months went from 0.884 to 0.943 (labels) to 0.958 (weights) at the 2016 origin, and from 1.090 to 1.125 to 1.144 at the 2017 origin. At 24 months it is now 1.458 and 1.490, outside 0.8 to 1.2 (it was 1.217 and 1.320). A slope above 1 means the sponsor classes differ more in the evaluation year than M0's curves say. I have not established why the as-of labels widen that gap; it is worth a look when M1 arrives in Step 9, since Step 11 plans a hypothesis on the calibration slope.
+
+### Review (2026-10-07)
+
+Two reviewers were started, as usual: one on the training labels, one on the censoring weights. **The reviewer of the training labels was cut off by the session's usage limit and returned nothing.** I did not rerun it, to save usage. In its place I ran three checks myself, which is not an independent review:
+
+- the rewrite check on the real warehouse (above): 0 rows differ at every origin;
+- a mutation check on a scratch copy: 16 single changes to the as-of code (a version posted on the origin counts as known; `as_of` does not limit the versions, or keeps the data cutoff; each of the three version filters reads all versions, or reads the origin day; the training cohorts are built with the final rules; each of the three conditions of `training_rows` is dropped; every origin trains on the first origin's rows; the training file is the final file). 15 were caught at first. The sixteenth (the version-order check reading the origin day) passed, so a test was added (`test_a_version_posted_on_the_origin_day_is_not_checked_for_order`), and it is caught now;
+- a search of `src/` for other readers of the final cohort files: the harness reads them for evaluation rows only. The EDA reads them with its own censoring at 2018-01-01 (open question 3).
+
+**The reviewer of the censoring weights completed.** It recomputed the 2016 origin with its own implementation (lifelines Kaplan-Meier per class, a pairwise weighted AUC): AUC 0.5439417453 and Brier score 0.0324756806 at 12 months, identical to the code, and likewise at 24 months and for the single curve. It confirmed that no censoring curve reaches 0 (lowest G at 24 months: 0.847), that no row is dropped beyond those censored by the horizon, that the largest weight is 1.18, and that the ADR's tables and its list of pooled classes are right. With one curve the 12-month weights of OTHER_GOV sum to 0.960 of its rows and those of NIH to 1.030; with curves by class every class sums to between 0.99987 and 1.00000. Its findings, and what was done:
+
+| Finding | Done |
+| --- | --- |
+| ADR 0017 held two unfilled placeholders and the results file was a 20-resample run | Already resolved when the review returned: the ADR is filled from the 1,000-resample run |
+| The small-class rule pools the most heavily censored class (OTHER_GOV, 11.4% censored within 24 months) with NIH (almost never censored) at the late landmarks; the scheme differs between landmark indices; the pooled group itself can be under 200 rows (92 and 71) | Not changed. Recorded in ADR 0017 with three options and their measured effect on M0 (at most 0.0003 of AUC at one landmark index). Open question 1 |
+| The CLAUDE.md Amendments line stated the pooling rule as accepted | The line now states only what you accepted and says the small-class rule is not accepted yet |
+| No test put a censoring on the horizon day: weighting rows past the horizon by G just before it passed every test | Test added, by hand: a stop on day 3, a censoring on day 5, a stop on day 8, horizon 5 give weights 1, 0, 2; also with per-row horizons and in two groups |
+| The harness wiring was only partly tested (lift, the walk-forward run, the grouping in the bootstrap) | Three tests added or extended: the lift of the harness with and without the classes; a walk-forward run on synthetic rows whose censoring depends on the stratum, compared slice by slice with the metrics computed directly; a bootstrap with two rows per trial and a class just above the minimum, compared with the bootstrap on fixed groups |
+| The censoring curve's tie convention: weights sum to 0.99998 of the rows, not exactly to the rows (Step 8 code, effect in the seventh decimal of the AUC) | Not changed. Noted in ADR 0017. Open question 2 |
+| `horizon_labels_and_weights` did not validate group labels (a missing label silently got weight 0) | Labels are read as text and a wrong number of labels is refused, with a test |
+
+After those changes, a mutation check of the weights on a scratch copy: 20 single changes, 19 caught. The one that passes (a landmark index is given the groups decided on all rows) is equivalent to the code, because the harness applies the minimum again on the slice.
+
+### Decisions made without asking (pending approval)
+
+1. **Small sponsor classes share one censoring curve** (ADR 0017, decision 2), with a minimum of 200 rows that is my number. See open question 1.
+2. **The single-curve sensitivity values are point estimates,** without bootstrap intervals, to keep the run time down.
+3. **Evaluation rows must carry `stratum`** (the lead sponsor class at the landmark); the harness refuses rows without it.
+4. **"Posted before T" is the rule for the origin day:** a version posted on T itself is not known to the origin, and an open trial is censored on T. This matches the earlier truncation (an event dated T was not known).
+5. **Training cohorts are built for all five origins,** including the locked ones. That builds training rows only; no locked origin was evaluated and the test lock was not touched.
+6. **`person_period.training_rows` is removed.** The person-period rows of an origin are the expansion of its as-of landmark rows.
+7. **The reversal clause of Section 6 is read per origin** (ADR 0016, Consequences): a trial with a reversal is excluded from evaluation, and from the training rows of every origin after the reversal was posted.
+8. **The cut-off reviewer was not rerun;** my own checks stand in for it (above). Say if you want the independent review of the training labels run before Step 7.
+
+None of these adds a dependency. Decisions 1 and 7 touch Section 6; decision 7 is part of ADR 0016, which you accepted, and decision 1 is the pending part of ADR 0017.
+
+### Open questions
+
+1. **How should classes too small for a censoring curve be handled?** Options, in ADR 0017: (a) keep the rule as built, groups decided on the slice being scored; (b) decide the groups once on all the evaluation rows of an origin and reuse them at each landmark index, so a class never changes scheme between landmark indices and OTHER_GOV, NIH, FED and NETWORK keep their own curve everywhere, at the price of curves on 100 to 200 rows at the late landmarks and a pooled remainder of 6 to 16 rows; (c) another minimum. For M0 the choice moves an AUC at one landmark index by at most 0.0003. **Recommended: (b).** It has to be settled before the pre-registration, since it is part of how the locked origins are scored.
+2. **The tie convention of the censoring curve.** The Step 8 code keeps a row with an event on day t at risk of a censoring on day t. Taking events first is the usual convention, and under it the weights sum exactly to the row count. The difference is in the seventh decimal of the AUC. **Recommended: adopt events first,** as a small change to the Step 8 metric with a hand-worked test and a line in ADR 0017, before any model beyond M0 is evaluated. Not done without your word, since it changes a metric definition.
+3. **The EDA still reads the final cohort.** Its modeling-relevant tables censor outcomes at 2018-01-01 (approved in the Step 5 review), but which rows exist and when a censored row ends still come from the final cohort, the same hindsight ADR 0016 removed from training. At the 2018 origin that is 20,051 landmark rows only as of T and 17,240 only with hindsight, of about 567,000, with no label differing on a shared row. Options: (a) leave Step 5 as approved and add one sentence on this limit to `docs/eda.md`; (b) rebuild the EDA on the cohort as of 2018-01-01, which needs the as-of outcomes table written by the build and a re-read of the eight findings against slightly different numbers. **Recommended: (b),** before Step 7, because point-in-time correctness is the project's main claim. Nothing was changed.
+4. **M1's training weights (Step 9).** M1 is "a static IPCW LightGBM binary classifier". Should its training weights also come from censoring curves by sponsor class, fitted on its training rows? **Recommended: yes,** so that training and evaluation make the same assumption. To be settled when Step 9 starts.
+5. **The Step 4 sanity table and the EDA use different rules for outcomes.** The sanity table in `docs/data_audit.md` follows outcomes to the data cutoff; the EDA censors them at 2018-01-01. Both are stated where they appear. Say if the sanity table should follow the EDA.
+
+### Step 6 status
+
+Checked on 2026-10-07 with `uv run python -m trialpulse.nlp.llm_labeler --status`, which reads the cache and makes no API call (0 requests): **3,325 of 10,000 texts are labeled, 6,675 are left**, about 4.2 more daily runs at the current rate. Step 6 is therefore not finished: the final distilled model, its single scoring on the 300 test items, the relabeling of all early stops and the docs wait for the sample. Nothing of Step 6 was changed.
+
+### Blocked, skipped or deferred
+
+- **Step 6** waits for the labeling (above).
+- **The independent review of the training labels** was cut off and replaced by my own checks (above).
+- **The content hash of the submitted status** (Step 4 open question 3) is implemented at the start of Step 14 with its ADR, as decided.
+- **Sponsor class in M2 and M3** is recorded as an ADR in Step 10, as decided.
+- **`docs/results_dev.md`** belongs to Step 9; M0's numbers are here and in `data/results/walkforward/m0_dev.json` (gitignored).
+- **The local backup branch** you asked to delete does not exist: it was deleted on 2026-10-06, and `git branch -a` shows only `main` and its remote.
+
+### Files touched
+
+- New: `docs/adr/0016-training-labels-as-of-each-origin.md`, `docs/adr/0017-ipcw-censoring-weights-by-sponsor-class.md`, `tests/cohort/test_training.py`, `tests/eval/test_censoring_groups.py`.
+- Changed: `CLAUDE.md` (Amendments: ADRs 0015, 0016, 0017), `config/project.yaml`, `src/trialpulse/config.py`, `src/trialpulse/cohort/{rules,outcomes,build,audit,person_period}.py`, `src/trialpulse/eval/{ipcw,metrics,walkforward}.py`, `tests/cohort/{test_build,test_person_period}.py`, `tests/eval/test_walkforward.py`, `tests/test_config.py`, `docs/adr/0015-intervals-end-within-the-observation-window.md`, `docs/data_audit.md`, `docs/progress.md`, `docs/interview_notes.md`.
+
+### Verify (PowerShell)
+
+The cohort build takes 30 to 40 seconds and should print "Identical to the previous build: yes" on its second run (the first run after pulling adds the training cohorts, so it prints "NO"). The EDA report should print "Up to date", and `git status --short` should print nothing. M0 takes about 10 minutes and rewrites `data/results/walkforward/m0_dev.json`. The last command makes no API call.
+
+```powershell
+git switch main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run python -m trialpulse.cohort.build
+uv run python -m trialpulse.cohort.build
+uv run python -m trialpulse.eda.report
+git status --short
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+uv run python -m trialpulse.eval.walkforward --model m0 --origins dev
+uv run python -m trialpulse.nlp.llm_labeler --status
+```
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
@@ -1163,7 +1340,7 @@ Also from the review: ADR 0009 (the tag must be on origin), and the 1% bootstrap
 
 4. **Failure behavior.** A bootstrap failure stops the walk-forward run with a message naming origin, horizon, slice and metric. The CLI exits with code 3.
 
-**Logged for later (Step 11):** a sensitivity check that estimates the censoring weights separately by sponsor class.
+**Logged for later (Step 11), and replaced on 2026-10-07 by ADR 0017:** the note was a sensitivity check that estimates the censoring weights separately by sponsor class. Aakrisht decided the reverse in the Step 5 review: censoring weights by sponsor class are the primary method, and the single curve is the sensitivity check.
 
 ### Verify (PowerShell, on main)
 
