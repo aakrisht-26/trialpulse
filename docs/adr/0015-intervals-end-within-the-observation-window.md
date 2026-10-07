@@ -1,7 +1,7 @@
 # 0015. Discrete-time rows: an interval counts only if it ended within the observation window
 
 - Date: 2026-10-06
-- Status: Proposed (Step 4, from the independent review). Implemented in `trialpulse.cohort.person_period`; pending Aakrisht's approval.
+- Status: **Accepted** by Aakrisht on 2026-10-07 (Step 4 review). Proposed on 2026-10-06 from the independent review of Step 4, and implemented in `trialpulse.cohort.person_period`.
 - Refines CLAUDE.md Section 6 ("Discrete-time formulation").
 
 ## Context
@@ -18,7 +18,7 @@ A model with any calendar feature (registration year is in the design family) wo
 
 ## Decision
 
-1. **An interval exists for a trial only if the interval ended on or before the end of observation**, whatever happened in it. The end of observation is the data cutoff in the person-period table, and the origin T in `training_rows`.
+1. **An interval exists for a trial only if the interval ended on or before the end of observation**, whatever happened in it. The end of observation is the data cutoff in the person-period table, and the origin T for training rows (since ADR 0016, the person-period rows of the cohort built as of T; before it, `training_rows`).
 2. The other conventions stay: intervals are (start, end]; an event on the end belongs to that interval; a trial censored on the end keeps the interval; a trial censored inside an interval under the UNKNOWN rule (a per-trial censoring) loses that interval and ends its sequence.
 3. An event dated T itself is not known at T (the harness censors it at T), so the interval ending on T is a continuation.
 
@@ -37,4 +37,4 @@ A model with any calendar feature (registration year is in the design family) wo
 
 - An event that falls in an interval the observation window cuts short is not a training row; the trial's earlier intervals remain, as continuations. Evaluation is unaffected: it uses landmark rows and IPCW, not person-period rows.
 - The newest landmarks contribute fewer rows: a landmark needs 6 months of observation after it to contribute its first interval.
-- CLAUDE.md Section 6, "Discrete-time formulation", would gain: "An interval that ends after the end of observation (the data cutoff, or the origin when training) is dropped for every trial."
+- CLAUDE.md Section 6, "Discrete-time formulation", gains through the Amendments: "An interval that ends after the end of observation (the data cutoff, or the origin when training) is dropped for every trial."
