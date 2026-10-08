@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 7 (point-in-time features)**, started on 2026-10-07 after Aakrisht approved the follow-up to Steps 4, 5 and 8 and its open questions. The changes he decided in that review are done (see "Review of the follow-up"). **Step 6** is in progress: 3,325 of 10,000 sample texts were labeled on 2026-10-07 (LLM test result: macro-F1 0.842); the final distilled model waits for the sample.
+Current step: **Step 7 (point-in-time features)**, built and independently reviewed on 2026-10-08, **waiting for Aakrisht's review**. Step 9 is not started; it begins with the calibration diagnosis ("Guidance for later steps", item 12). **Step 6** is in progress: 3,325 of 10,000 sample texts were labeled on 2026-10-07 (LLM test result: macro-F1 0.842); the final distilled model waits for the sample.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -83,7 +83,7 @@ Current step: **Step 7 (point-in-time features)**, started on 2026-10-07 after A
 | 4 | Cohort, outcomes and landmarks | Approved 2026-10-07 and verified by Aakrisht (ADRs 0013 to 0016 accepted); training labels as of each origin approved 2026-10-07 |
 | 5 | Exploratory data analysis | Approved 2026-10-07; merged from PR aakrisht-26/trialpulse#2. Rebuilt on the cohort as of 2018-01-01 on 2026-10-07, as decided in the review of the follow-up: no finding changed in substance |
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (3,325 of 10,000 on 2026-10-07); distilled model provisional |
-| 7 | Point-in-time features | Not started |
+| 7 | Point-in-time features | Built and independently reviewed 2026-10-08, waiting for review. ADRs 0019 and 0020 accepted under rules already set; ADR 0018 (sponsor aliases) and decisions 3 to 8 of ADR 0021 proposed |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
 | 9 | Baselines and Cox analysis | Not started |
 | 10 | Discrete-time models and tuning | Not started |
@@ -1023,6 +1023,195 @@ Decisions in this part that were mine:
 1. **`evaluate_predictions` takes the censoring groups, not the sponsor classes.** The caller decides them. A results file now lists the groups of each origin.
 2. **The EDA's by-year tables mix the two cohorts by design:** years before 2018 from the cohort as of 2018-01-01, later years (marked descriptive) from the final cohort. The report says so above each table.
 3. **The build writes the outcomes of all five origins,** not only of 2018-01-01, so that every as-of cohort has the same three files.
+
+## Step 7: Point-in-time features
+
+Date: 2026-10-07 to 2026-10-08. Status: **built and independently reviewed, waiting for Aakrisht's review**. Started after his approval of the follow-up to Steps 4, 5 and 8 on 2026-10-07. Step 9 is not started.
+
+### What was built
+
+- `uv run python -m trialpulse.features.build` computes the features of every landmark row and writes them to `data/features/` (gitignored), with `docs/features.md` generated from the registry.
+- `src/trialpulse/features/`:
+  - `registry.py`: every feature with its family, source fields, whether those fields have version history, and a description; the whitelist of fields a feature may read; `docs/features.md`.
+  - `states.py`: the `versions` view the queries read (the whitelisted columns and no other, with the submitted status in place of the registry's UNKNOWN label), and the state at each landmark with the running values of its history.
+  - `design.py`, `amendments.py`, `competition.py`: the three families as SQL over the state at the landmark; the phase a title states (ADR 0006).
+  - `sponsor.py`: the sponsor's track record from versions posted before the landmark, with aliases for renamed sponsors (ADR 0018), in one pass over the registry in date order.
+  - `text.py`: eligibility statistics (SQL with a Python twin), hashed word counts, and the text components fitted per origin (ADR 0019).
+  - `transforms.py`: the class rates of the sponsor's early-stop rate, fitted per origin.
+  - `frame.py`: `load(cfg, origin, role)`, the feature matrix a model of Steps 9 and 10 reads.
+  - `leakage.py`: the future-perturbation check, as a helper for the tests and as a command for the real data.
+  - `build.py`: the command.
+- `src/trialpulse/ingest/history.py`: downloads a config of the pinned dataset revision. `src/trialpulse/parquet.py`: the sorted Parquet writer with a content checksum, shared with the cohort build.
+- ADRs 0018 (sponsor identity and aliases, proposed), 0019 (TF-IDF and SVD in place of embeddings), 0020 (the `interventions` config), 0021 (conventions).
+
+**The features.** 123 main features in six families for each of 1,511,335 landmark rows (343,098 trials): design 28, amendments 16, sponsor 7, competition 1, text 69 (5 eligibility statistics and 64 text components), time 2. 58 are computed as of the landmark (one of them, the landmark index, is also a key); 65 are fitted per origin (the sponsor's smoothed early-stop rate and the text components). The current-record phase is kept apart in `sensitivity.parquet` and is not a main feature (ADR 0006).
+
+**The seven points of the Step 7 instructions.**
+
+| Asked | Done |
+| --- | --- |
+| 1. Phase from the versioned titles (ADR 0006); current-record phase only in the sensitivity set | `title_phase` reads the official title in effect at the landmark, then the brief title. Coverage is in the results below: a title states a phase in 23.8% of rows. `phase_current_record` is registered as unversioned, `main=False`, written to its own file, and a test keeps it out of the model columns |
+| 2. Competition as the versioned count of all open interventional trials (ADR 0007) | `open_interventional_trials`, from every trial's status history; lapsed records (ADR 0014) do not count |
+| 3. Enrollment type in the amendment family; every date-based feature at calendar-month precision | `enrollment_closed`, `enrollment_target_ratio` (while ESTIMATED), `enrolled_to_first_target_ratio` (once ACTUAL). One test enters the same history to the day and to the month and requires identical features; another puts the landmark on the 20th of a month, where month and day arithmetic differ (ADR 0021) |
+| 4. Sponsor aliases for renames without a version; no names for individual or person-named sponsors; the alias rule as an ADR | ADR 0018, **proposed**: the rule you described merges 6,615 names into one sponsor on the real data, so the rule is narrower. See "Decisions" and "Open questions" |
+| 5. Evaluate the interventions config; adopt only through an ADR and only if truly per version | It is per version: 973 of 973 cached versions of the registry's own history agree, and all 20 trials whose interventions changed change at the same versions. Adopted as 13 design features (ADR 0020) |
+| 6. Fitted transforms fit per origin on that origin's training rows only | The class rates and the text components, stored in `data/features/origin_<date>/`. A test rewrites every version posted on or after an origin, rebuilds the cohort and the features, and requires that origin's class rates, training features and training text components to be unchanged |
+| 7. All three leakage tests, plus the real-data rewrite check applied to the features; a two-reviewer review of point-in-time correctness | The three tests are in `tests/features/test_registry_leakage.py` and `test_sponsor.py`. `uv run python -m trialpulse.features.leakage` is the real-data check: 0 rows differ at every origin (below). The review is below |
+
+### Acceptance criteria
+
+| Criterion (CLAUDE.md Step 7) | Met | Evidence |
+| --- | --- | --- |
+| All three leakage tests pass | Yes | Future perturbation: `test_features_at_a_landmark_ignore_every_later_version` samples 500 landmark rows and, for each of their 42 dates, rewrites every later version and recomputes; 0 rows on or before the date change. Two controls: the same rewrite changes more than 30% of the later rows, in every family, and it reaches every whitelisted field and every post date. Whitelist: `test_features_read_only_whitelisted_fields` (the queries cannot see another column), `test_the_whitelist_names_real_fields_and_leaves_out_the_label` and `test_every_whitelisted_field_is_the_source_of_a_feature`. Sponsor track record: `test_only_outcomes_posted_before_the_landmark_count` by hand, and `test_the_sponsor_record_ignores_versions_posted_on_the_landmark_day` |
+| The registry completeness test passes | Yes | `test_every_computed_feature_is_registered_and_every_registered_one_is_computed`, and `test_the_feature_table_holds_each_landmark_row_once_with_the_registered_columns` on the built file |
+| Building features twice gives identical output hashes | Yes | Two builds of the real data on the final code: every one of the 20 output tables has the same row count and checksum (`features.parquet`: 1,511,335 rows, checksum 13943870016706046332828893), and the second build prints "Identical to the previous build: yes". The same on the synthetic registry in `test_building_twice_gives_identical_outputs` |
+| The feature registry and families; features for every landmark row; `docs/features.md` generated; a null-rate report; the embedding cache with its cost check | Yes | Above; the "Missing" column of `docs/features.md`; the cost check in ADR 0019 (about 20 hours for embeddings, so the Section 8 fallback applies; the hashed counts are cached per distinct text) |
+| ruff, ruff format, mypy and pytest clean | Yes | In my shell on the final code: `ruff check`, `ruff format --check` and `mypy src` clean; 678 passed and 12 deselected by default (2 minutes 37 seconds); 690 passed with the slow tests; 114 of them are the feature tests |
+
+### Results
+
+**The real-data rewrite check** (`uv run python -m trialpulse.features.leakage`, 14 minutes 47 seconds in my shell): for each origin, every version posted after it is rewritten (another value in every field a feature may read, a later post date, other interventions; a fifth dropped; one version added per trial), the features are recomputed, and every landmark row dated on or before the origin is compared with the build.
+
+| Origin | Versions posted after it (of 4,444,542), all rewritten | Landmark rows on or before it | Rows that differ from the build | Seconds |
+| --- | --- | --- | --- | --- |
+| 2016-01-01 | 2,934,669 | 419,554 | 0 | 78 |
+| 2017-01-01 | 2,737,318 | 505,638 | 0 | 124 |
+| 2018-01-01 | 2,506,475 | 599,793 | 0 | 166 |
+| 2019-01-01 | 2,252,532 | 698,994 | 0 | 222 |
+| 2020-01-01 | 1,979,616 | 804,581 | 0 | 278 |
+
+As a control, rewriting from 31 days before the 2016 origin changes all 7,239 rows whose landmark lies in those 31 days, in 56 of the 57 built features, and none of the 412,315 rows before them.
+
+**The phase a title states** (ADR 0006 asked for its coverage; rows of the cohort as of 2018-01-01, 567,423 rows of 136,893 trials):
+
+| Question | Rows | Share |
+| --- | --- | --- |
+| The title states a phase | 135,293 | 23.8% of all rows |
+| Of the rows whose current record gives a phase (338,557): the title states one | 131,754 | 38.9% |
+| Of the rows whose current record gives no phase (224,084): the title states one | 3,427 | 1.5% |
+| Of the rows where the title states a registry phase and the current record gives one (134,864): they are equal | 125,275 | 92.9% |
+
+  So the title phase is right when it speaks and silent for six in ten trials that have a phase. It is a weak stand-in for the phase field, which is what ADR 0006 expected; the current-record phase stays in the sensitivity set.
+
+**Sponsor aliases on the real data** (landmark rows before 2018-01-01 with a sponsor identity; ADR 0018 has the full table): 90,192 of 593,653 rows (15.2%) inherit registrations from a name their sponsor replaced, a median of 14. 582 alias links started before 2018-01-01, 469 were in force on that day and 113 had ended. The largest record is 2,896 registrations, against 2,888 without aliases. 15,915 of the 1,511,335 rows (1.1%) have a sponsor without an identity and get the class rate.
+
+**Missing values** (rows of the cohort as of 2018-01-01; `docs/features.md` has every feature): `enrolled_to_first_target_ratio` is missing in 97.1% of rows by design (it exists only once enrollment has closed). The upper age limit is missing in 49.7% (none given) and the age span with it (51.4%), `completion_slip_months` in 17.9%, `enrollment_target_ratio` in 6.3% and `primary_purpose` in 5.0%. Every other feature is missing in less than 5% of rows, the three sponsor counts in 1.0% (sponsors without an identity), and 32 features in none.
+
+**Run time and memory, in my shell** (16 GB of RAM): the build takes 472 and 476 seconds on its second and third run (features 140 seconds, reading the cached word counts 25 seconds, 45 to 75 seconds per origin for the fits) and 754 seconds on the first, which hashes the 835,435 texts. The leakage command takes 14 minutes 47 seconds. Both peak at about 7 GB of memory, and neither spilled to disk. The pass over the registry for the sponsor record takes about 10 seconds (6.7 million events).
+
+### Independent review (2026-10-08)
+
+Two reviewers read the uncommitted Step 7 work independently, with one brief: point-in-time correctness. Each was asked to recompute features from the warehouse with SQL of their own, not to read mine and agree. I verified every finding before acting on it (the standing rule for step reviews).
+
+**What they confirmed, by recomputing.** 0 mismatches in each of these:
+
+- 27 row-level design and amendment features on all 1,511,335 landmark rows;
+- the competition count at 118 landmark dates;
+- the sponsor's three counts on 3,335 sampled rows, and the alias links in force on 21 snapshot days;
+- the class rates, the text components and the loader's matrix for each origin.
+
+Neither found a feature that reads a version posted after its landmark. They found 20 other things, none rated high. All 20 were real.
+
+| Finding | What was done |
+| --- | --- |
+| `start_date_type` is recorded from 2017 on only (0% of versions with a start date through 2016, 53% in 2017, 99% in 2026), so the feature stood in for calendar time | Removed from the whitelist. `start_anticipated` derives the same thing from the start date in every year |
+| The registry's UNKNOWN label could be read through the `versions` view. No feature read it, but nothing stopped one | The view shows the submitted status in `overall_status` and nothing in `last_known_status`. Two tests |
+| One version posted under an old name erased a rename for good (alias rule with a quiet period), and the majority was taken among the trials that left only | New alias rule: trials that left a name against trials that still post under it (ADR 0018). Re-measured on the real data, above |
+| The calendar-month tests used landmarks on the first of a month only, where month and day arithmetic agree: five day-arithmetic mutants survived | A hand test with a landmark on the 20th, and the scripted registry now posts on 20 January and 31 August |
+| The rewrite of the leakage check left three whitelisted fields and every post date alone | It now rewrites every whitelisted field and moves post dates later. A test requires both |
+| "Versions in the last 6 months" counted the versions of 29 to 31 August at two landmarks, because landmark days are clamped to the month | The window starts at the previous landmark. Test |
+| `primary_completion_overdue` was true for dates the registry shows as ACTUAL (reached, not missed) | True only while the date is anticipated; new flag `primary_completion_reached` |
+| The SQL and the Python forms of the eligibility statistics and of the identity rule read letters outside ASCII differently | Patterns name ASCII letters, digits and blanks. Writing the test found one more difference (DuckDB's `trim` strips a no-break space, Python's `strip(" ")` does not), fixed the same way |
+| The text components depended on the number of BLAS threads (up to 3.5e-05, against 6 decimals kept) | The fit runs in double precision on one thread |
+| The cache of word counts had no record of the settings it was made under, and was written in two steps | One file, written whole and renamed, with the vectorizer settings, the scikit-learn version and a digest of its contents |
+| The real-data leakage command copied the whole registry and spilled 2.7 GB into the repository folder; I had stopped it after 47 minutes | Rewritten: the rewritten registry is a pair of views, only rows up to the origin are computed, and DuckDB spills into `data/duckdb_tmp/`. `.tmp/` is in `.gitignore` |
+| The null-rate report fell back to all rows if the cohort as of 2018-01-01 was missing (Section 10) | The build refuses instead. Test |
+| Whitelisted fields no feature read; competition's sources incomplete in the registry | Removed or declared. A test requires every whitelisted field to be a declared source |
+| Ten surviving mutants in the sponsor pass (an ended trial with later versions, the row's own ended trial, an exact half, same-day versions, sponsors without identity, the individual flag in SQL, a loop that hangs instead of failing) | One test each. Then a mutation check: 33 one-line faults were put into the feature code, one at a time, 16 of them into the sponsor pass and the identity rule (for example: an exact half counts as a majority, the wait runs from the latest change, a trial that left still counts as posting, a refused link is retried, a name without identity keeps a key). 32 fail a test. The last one (a link chosen after the wait counts from the same day instead of the next) gives the same answers, because a day's landmark rows are answered before that day's versions are applied. |
+| A link refused as a loop is never retried; same-day replacements and names without identity were unstated choices | Stated in ADR 0018, one test each |
+| ADR 0020 said "the 10 whose set of types changes" (it is 6 by set, 10 by list); ADR 0006 promised a coverage report for the title phase | Corrected; coverage and agreement are in the results above |
+
+**After the fixes** the two builds, the real-data check, the control and the alias measurements were all run again on the final code; the numbers in this section are from those runs.
+
+**A slip of mine to report.** While measuring the identity rule on 2026-10-07, one exploratory query printed about 20 sponsor keys that are personal names into this session's tool output. Nothing was written to the repository or to `data/`. The measurement scripts now print counts and integer codes, and names only of organizations with an organization word or at least 100 registrations.
+
+### Decisions made without asking
+
+Each of these is mine. The ones that change or refine CLAUDE.md are in an ADR; ADR 0018 and decisions 3 to 8 of ADR 0021 are **proposed** and wait for you.
+
+1. **The alias rule is not the one you described** (ADR 0018, proposed). Guidance item 5 says names that replace each other on a trial are aliases of one sponsor. On the real data that joins 6,615 names into one sponsor, because most replacements are trials changing hands. The rule built: a name passes its record to the name that took at least 2 of the trials that left it, if those are more than half of the trials that left it or still post under it, and once the first replacement is more than 365 days old. Three rules were tried and measured before this one, and its wait went from 90 days to a year on 2026-10-08, after the measurement in ADR 0018.
+2. **Placeholder names and person-titled names get no track record,** beside the individuals you named: `redacted` stands for 2,744 trials of many companies, and 934 keys open with a personal title and hold no organization word. They get the class rate.
+3. **`start_anticipated` replaces the registry's start date type,** which Section 8 lists ("start date actual or anticipated"). The registry recorded that field from 2017 on only, so it would stand in for calendar time. The flag is derived from the start date in every year.
+4. **Months where Section 8 says days.** "Days since last update" and "days since status last verified" are calendar months, under your guidance item 7 (every date-based feature at calendar-month precision). "Versions in the last 6 months" counts from the previous landmark (ADR 0021, decision 8).
+5. **Features Section 8 does not list:** `status`, `primary_completion_overdue`, `primary_completion_reached`, `registration_lag_months`, `sponsor_has_identity`, and the 13 intervention features (ADR 0020). `title_phase` is a category with the registry's phase names. Reasons are in ADR 0021, decision 7; the Step 10 ablation can drop any of them.
+6. **The interventions config was adopted, not only evaluated** (ADR 0020), under your condition: through an ADR, and only because it is per version. It needed a 92 MB download of the `interventions` config of the pinned revision into `data/raw/` (gitignored).
+7. **The details of the text components** (ADR 0019): words hashed into 2^18 columns, TF-IDF with sublinear term frequency, SVD to 32 dimensions per field, fitted per origin in double precision on one thread, rounded to 6 decimals.
+8. **The embedding cost check used a throwaway environment** outside the project, with random weights and no model download. Nothing was added to the project's dependencies, and `sentence-transformers` is still not installed.
+9. **joblib and threadpoolctl are imported directly.** scikit-learn requires and installs both, so `uv.lock` is unchanged; they were added to the mypy override for libraries without type information.
+10. **One feature table for every cohort** (ADR 0021, decision 3): a feature at L depends on the registry up to L only, so a row that exists in several cohorts is computed once.
+11. **The sponsor record reads versions posted before L; every other feature reads versions posted on or before L** (ADR 0021, decision 4; Section 8 says "ended before L" for the sponsor rate).
+12. **What "fitted per origin" means for the sponsor rate** (ADR 0021, decision 5): the class rates are the share of early stops among an origin's training trials that had ended by the origin, per sponsor class, smoothed toward the rate of all classes with the same prior weight of 10.
+13. **The whitelist is enforced by a view,** and the view shows the submitted status in place of the registry's UNKNOWN label (ADR 0021, decision 6). Left out beside the label-only field: the post date types, the start date type, the submit dates, sponsor names, and two fields no feature reads.
+14. **The report of missing values reads only the cohort as of 2018-01-01** (Section 10), and the build refuses to write it from other rows.
+15. **The real-data leakage check is a command** (`python -m trialpulse.features.leakage`), not a one-off script as for the training labels, so that you can run it. It compares rows up to each origin; the synthetic test is the one that puts every sampled landmark right before its own rewrite.
+16. **Housekeeping:** the sorted Parquet writer moved from the cohort build into `trialpulse/parquet.py` so both builds share it; `trialpulse.ingest.history` downloads one config of the pinned revision; `docs/features.md` is checked out with LF line endings like `docs/eda.md`; `.tmp/` is in `.gitignore`; the feature build and the leakage command take `--temp-dir`.
+17. **A mutation check was added to my own routine** after the review: 33 one-line faults, each run against the tests that should notice. It is a scratch script, not part of the repository.
+
+### Open questions
+
+1. **The alias rule (ADR 0018).** Three options, with what each does to the landmark rows before 2018-01-01 that have a sponsor identity (593,653 rows):
+   - (a) **The rule as built, with a wait of one year. Recommended.** 90,192 rows (15.2%) inherit registrations from a name their sponsor replaced; 582 links start before 2018 and 113 end, 11 of them within 90 days of starting; the largest record is 2,896 registrations against 2,888 without aliases. A rename counts a year after its first trial switched.
+   - (b) The same rule with a wait of 90 days. More rows inherit and a rename counts nine months sooner, but an active sponsor's record is lent after a batch hand-over: 80 links end within 90 days of starting, and the largest record grows from 2,888 to 3,076 registrations.
+   - (c) No aliases. Never wrong about a hand-over; every renamed sponsor restarts at zero.
+
+   Changing the wait is one line of `config/project.yaml` and a rebuild of 8 minutes.
+2. **A privacy gap in the warehouse.** 934 sponsor keys on 1,359 trials open with a personal title (dr, prof and similar) and hold no organization word. The ADR 0012 rule (class INDIV, or a degree title) does not catch them, so the warehouse stores those names. The feature build never reads a sponsor name, writes no name or key to any output and gives these sponsors the class rate. Options: (a) add the personal-title rule to ADR 0012 at the Step 14 warehouse rebuild, which is already planned for the content hash (**recommended**); (b) rebuild the warehouse now, and the cohort and the features after it. Bare personal names without a title cannot be found by any rule.
+3. **Intervention types in the canonical schema** (ADR 0020). The feature build joins the raw `interventions` config; the canonical version schema does not carry the types yet. I propose adding them at the Step 14 rebuild, with a parity test against API v2. Until then, serving parity for these 13 features is untested. Is that timing acceptable?
+4. **ADR 0021, decisions 3 to 8, and the details of ADR 0019:** accept as proposed, or change any?
+5. **`sentence-transformers` in the locked stack (Section 15).** Nothing uses it after ADR 0019. Leave it listed for a possible later embedding step, or remove it from Section 15 through the ADR?
+
+### Blocked, skipped or deferred
+
+- **Step 6** is unchanged: 3,325 of 10,000 texts labeled (checked on 2026-10-08 from the cache, no API call); the final distilled model waits for the sample. I did not run the labeling.
+- **The fitted transforms themselves** (document frequencies and SVD) are not saved, only what they produce. Step 13 saves them with the registered model.
+- **Serving parity for the 13 intervention features** waits for Step 14, when the canonical schema gains intervention types (ADR 0020).
+- **`docs/results_dev.md`, MLflow and any model beyond M0** belong to Step 9. No model was fitted on these features and no locked origin was evaluated. The test lock was not touched.
+- **The calibration diagnosis** you asked for is recorded as the first task of Step 9 ("Guidance for later steps", item 12). Not started.
+
+### Files touched
+
+- New: `src/trialpulse/features/` (11 modules), `src/trialpulse/ingest/history.py`, `src/trialpulse/parquet.py`, `tests/features/` (7 files), `tests/ingest/test_history.py`, `docs/features.md`, `docs/adr/0018` to `0021`.
+- Changed: `config/project.yaml`, `src/trialpulse/config.py` (the `features` section), `src/trialpulse/contracts/sponsor.py` (`has_identity`), `src/trialpulse/cohort/build.py` (uses the shared writer), `tests/test_config.py`, `.gitattributes` and `.gitignore` (one line each), `pyproject.toml` (the mypy override for libraries without type information), `CLAUDE.md` (Amendments: ADRs 0019, 0020 and decisions 1 and 2 of 0021), `docs/progress.md`, `docs/interview_notes.md`.
+
+### Verify (PowerShell)
+
+What to expect:
+
+- The download fetches the `interventions` config of the pinned revision (19 files, 92 MB) into `data/raw/` and needs `HF_TOKEN` in `.env`, as the `core` download did. A second run downloads nothing.
+- The cohort build should print "Identical to the previous build: yes" (if it prints "NO", your cohort files were older than commit `7389eb9`; run it once more).
+- The first feature build takes about 13 minutes (it hashes the 835,435 texts once) and prints "no previous build". The second takes about 8 minutes and must print "Identical to the previous build: yes" and "docs\features.md: up to date". `git status --short` should then print nothing.
+- `pytest tests/features` runs the three leakage tests among 113 tests.
+- The leakage command takes about 15 minutes and should print one line per origin with "0 differ from the build", then "No feature at a landmark changed when the versions posted after it were rewritten." It reads `data/` only and writes nothing.
+- The last command reads the labeling cache and makes no API call.
+
+```powershell
+git switch main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run python -m trialpulse.ingest.history --config interventions
+uv run python -m trialpulse.cohort.build
+uv run python -m trialpulse.features.build
+uv run python -m trialpulse.features.build
+git status --short
+uv run pytest tests/features -q
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+uv run python -m trialpulse.features.leakage
+uv run python -m trialpulse.nlp.llm_labeler --status
+```
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
