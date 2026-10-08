@@ -58,10 +58,11 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
-# scikit-learn, joblib, pandas and pyarrow ship no type information (pandas-stubs would be a new
-# dependency outside the locked stack).
+# scikit-learn, joblib, threadpoolctl, pandas and pyarrow ship no type information
+# (pandas-stubs would be a new dependency outside the locked stack). joblib and threadpoolctl
+# are installed by scikit-learn, which requires both.
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
+module = ["sklearn", "sklearn.*", "joblib", "threadpoolctl", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
@@ -72,7 +73,8 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # A default run skips the slow tests (worker pools, full app runs, real data) and takes
-# well under a minute. Run everything, as CI does, with: pytest -m "slow or not slow"
+# about three minutes, half of it the leakage tests of the features. Run everything, as CI
+# does, with: pytest -m "slow or not slow"
 addopts = [
     "-ra",
     "--strict-markers",

@@ -96,6 +96,14 @@ def test_committed_config_matches_locked_definitions() -> None:
     assert cfg.evaluation.calibration_bins == 10
     assert cfg.evaluation.lift_top_fraction == pytest.approx(0.10)
     assert cfg.evaluation.censoring_min_rows == 200  # ADR 0017
+    # Section 8: the 6-month window, the prior weight of 10 and 32 text dimensions.
+    assert cfg.features.recent_versions_months == 6
+    assert cfg.features.sponsor_prior_weight == 10
+    assert cfg.features.text_components == 32
+    assert cfg.features.leakage_test_landmarks == 500
+    assert cfg.features.sponsor_alias_min_trials == 2  # ADR 0018
+    assert cfg.features.sponsor_alias_wait_days == 365  # ADR 0018
+    assert cfg.features.text_hash_bits == 18  # ADR 0019
 
 
 def test_environment_cannot_override_project_config(monkeypatch: pytest.MonkeyPatch) -> None:

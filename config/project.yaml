@@ -63,5 +63,15 @@ evaluation:
   # origin shares one pooled curve with the other small classes, at every landmark index.
   censoring_min_rows: 200
 
+# Point-in-time features (CLAUDE.md Section 8).
+features:
+  recent_versions_months: 6     # "versions in the last 6 months"
+  sponsor_prior_weight: 10      # empirical Bayes weight of the class rate in the sponsor's rate
+  sponsor_alias_min_trials: 2   # trials a name must take over to count as a rename (ADR 0018)
+  sponsor_alias_wait_days: 365  # and days since the first of them, before it counts (ADR 0018)
+  text_components: 32           # dimensions kept per text field, fitted per origin
+  text_hash_bits: 18            # the hashed vocabulary has 2^18 columns (ADR 0019)
+  leakage_test_landmarks: 500   # landmarks sampled by the future-perturbation test
+
 seeds:
   default: 42

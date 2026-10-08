@@ -161,6 +161,18 @@ class EvaluationConfig(_Section):
     censoring_min_rows: PositiveInt
 
 
+class FeatureConfig(_Section):
+    """Constants of the point-in-time features (CLAUDE.md Section 8)."""
+
+    recent_versions_months: PositiveInt
+    sponsor_prior_weight: PositiveInt
+    sponsor_alias_min_trials: PositiveInt
+    sponsor_alias_wait_days: NonNegativeInt
+    text_components: PositiveInt
+    text_hash_bits: int = Field(ge=10, le=24)
+    leakage_test_landmarks: PositiveInt
+
+
 class SeedConfig(_Section):
     """Random seeds. Later steps add named seeds here."""
 
@@ -187,6 +199,7 @@ class ProjectConfig(BaseSettings):
     discrete_time: DiscreteTimeConfig
     walk_forward: WalkForwardConfig
     evaluation: EvaluationConfig
+    features: FeatureConfig
     seeds: SeedConfig
 
     @classmethod

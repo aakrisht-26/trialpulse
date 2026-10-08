@@ -8,6 +8,14 @@ back to the class-level rate for it.
 Other sponsors keep a display name (HTML unescaped, emails scrubbed) and a key: the name in
 lowercase with punctuation removed and whitespace collapsed (CLAUDE.md Section 8: no fuzzy
 entity resolution in v1).
+
+**Identity for the track record (Step 7, ADR 0018).** A stored key is not always a sponsor
+identity. `has_identity` says whether a key may carry a track record of its own: not when
+the sponsor is an individual, not when the key is a registry placeholder (a redacted name
+stands for many companies), and not when the key opens with a personal title and holds no
+organization word. The warehouse rule above does not catch that last kind, so such names
+are still stored; the feature build never reads the names and gives these sponsors the
+class-level rate.
 """
 
 import re
@@ -22,6 +30,20 @@ ORGANIZATION_WORD = re.compile(
     r"(?i)\b(universit|hospital|institut|cent(er|re)|clinic|college|foundation|inc|ltd|llc|"
     r"gmbh|corp|pharma|group|health|medical|research|network|association|society|school|"
     r"ministry|department|council|trust|agency|laborator|company|s\.a\.|ag\b|bv\b|sa\b)"
+)
+
+
+# Keys that stand for "no name given", not for one sponsor.
+PLACEHOLDER_KEYS: tuple[str, ...] = ("redacted", "no sponsor")
+# A personal title at the start of a key (keys are lowercase, without punctuation).
+PERSONAL_TITLE_KEY = r"^(dr|dra|drs|prof|professor|doctor|mr|mrs|ms|miss|sir) "
+# ORGANIZATION_WORD for keys. A key is words separated by single spaces, so a word starts
+# at the start of the key or after a space; "\b" would mean different things to Python and
+# to DuckDB (RE2) next to a letter outside ASCII.
+ORGANIZATION_WORD_KEY = (
+    r"(^| )(universit|hospital|institut|cent(er|re)|clinic|college|foundation|inc|ltd|llc|"
+    r"gmbh|corp|pharma|group|health|medical|research|network|association|society|school|"
+    r"ministry|department|council|trust|agency|laborator|company)"
 )
 
 
@@ -43,6 +65,25 @@ def sponsor_key(name: str) -> str | None:
     text = re.sub(r"[^\w\s]", " ", text)
     text = " ".join(text.split())
     return text or None
+
+
+def has_identity(key: str | None, individual: bool | None) -> bool:
+    """Whether a sponsor key may carry a track record of its own (ADR 0018)."""
+    if individual or not key or key in PLACEHOLDER_KEYS:
+        return False
+    titled = re.search(PERSONAL_TITLE_KEY, key) is not None
+    return not (titled and re.search(ORGANIZATION_WORD_KEY, key) is None)
+
+
+def has_identity_sql(key: str, individual: str) -> str:
+    """SQL form of `has_identity` for a key column and an is-individual column."""
+    placeholders = ", ".join(f"'{k}'" for k in PLACEHOLDER_KEYS)
+    return (
+        f"({key} IS NOT NULL AND {key} <> '' AND NOT coalesce({individual}, false) "
+        f"AND {key} NOT IN ({placeholders}) "
+        f"AND NOT (regexp_matches({key}, '{PERSONAL_TITLE_KEY}') "
+        f"AND NOT regexp_matches({key}, '{ORGANIZATION_WORD_KEY}')))"
+    )
 
 
 def sponsor(name: str | None, sponsor_class: str | None) -> Sponsor:
