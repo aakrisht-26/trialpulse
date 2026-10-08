@@ -3,6 +3,8 @@ data/
 *.parquet
 *.duckdb
 *.duckdb.wal
+# Where an in-memory DuckDB spills when no temp directory is set (rows of the dataset).
+.tmp/
 
 # Secrets
 .env

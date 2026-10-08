@@ -3,4 +3,5 @@
 # whatever core.autocrlf says. Without this, Git for Windows checks docs/eda.md out with CRLF,
 # and regenerating it shows the file as modified although its content is the same.
 docs/eda.md text eol=lf
+docs/features.md text eol=lf
 docs/figures/*.png binary
