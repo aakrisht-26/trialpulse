@@ -45,6 +45,7 @@ from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import load_project_config
 from trialpulse.eval.walkforward import LANDMARKS_PATH, training_path
+from trialpulse.parquet import write_table as _write_table
 from trialpulse.reports import replace_section
 from trialpulse.warehouse.audit import AUDIT_FAMILY, AUDIT_PATH
 from trialpulse.warehouse.build import WAREHOUSE_PATH
@@ -96,21 +97,6 @@ def build_cohort(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
         FROM person_period_frame ORDER BY trial_id, landmark_index, interval"""
     )
     con.unregister("person_period_frame")
-
-
-def _write_table(
-    con: duckdb.DuckDBPyConnection, table: str, path: Path, columns: Sequence[str], order: str
-) -> tuple[int, str]:
-    """Write one table to Parquet, sorted, and return its row count and checksum."""
-    con.execute(
-        f"""COPY (SELECT {", ".join(columns)} FROM {table} ORDER BY {order})
-        TO '{path.as_posix()}' (FORMAT parquet)"""
-    )
-    rows, checksum = con.execute(
-        "SELECT count(*), coalesce(sum(hash(t)::HUGEINT), 0) "
-        f"FROM read_parquet('{path.as_posix()}') t"
-    ).fetchone() or (0, 0)
-    return int(rows), str(checksum)
 
 
 def write_outputs(
