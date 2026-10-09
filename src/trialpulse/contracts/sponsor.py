@@ -35,8 +35,19 @@ ORGANIZATION_WORD = re.compile(
 
 # Keys that stand for "no name given", not for one sponsor.
 PLACEHOLDER_KEYS: tuple[str, ...] = ("redacted", "no sponsor")
-# A personal title at the start of a key (keys are lowercase, without punctuation).
-PERSONAL_TITLE_KEY = r"^(dr|dra|drs|prof|professor|doctor|mr|mrs|ms|miss|sir) "
+# A personal title at the start of a key (keys are lowercase, without punctuation): a title
+# in English, Spanish, Dutch, French or Italian, with any academic rank in front of it
+# ("PD Dr.", "Priv.-Doz. Dr.", "Univ.-Prof.", "Assoc. Prof."). A rank alone is not a title:
+# "ASST" opens the names of Italian hospital trusts.
+_TITLE_RANKS = (
+    "pd|priv|doz|dozent|docent|univ|ao|apl|assoc|associate|asst|assistant|adj|adjunct|hon|"
+    "honorary|em|emeritus"
+)
+_TITLES = (
+    "dr|dra|drs|prof|professor|doctor|mr|mrs|ms|miss|sir|pr|dott|dottor|dottoressa|docteur|"
+    "professeur|profesor|profesora|doctora|mme|mlle"
+)
+PERSONAL_TITLE_KEY = rf"^(({_TITLE_RANKS}) )*({_TITLES}) "
 # ORGANIZATION_WORD for keys. A key is words separated by single spaces, so a word starts
 # at the start of the key or after a space; "\b" would mean different things to Python and
 # to DuckDB (RE2) next to a letter outside ASCII.

@@ -123,6 +123,19 @@ def test_individual_sponsors_keep_no_name() -> None:
         "Miss Jane Doe",
         "Sir John Smith",
         "Dr. Jane O&#x27;Doe",  # entities are unescaped before the rule reads the name
+        # Titles in other languages, and an academic rank in front of a title.
+        "Pr Jeanne Dupont",
+        "Mme Jeanne Dupont",
+        "Dott. Gianna Rossi",
+        "Dottoressa Gianna Rossi",
+        "Profesora Juana P\u00e9rez",
+        "PD Dr. med. Hanna Muster",
+        "Priv.-Doz. Dr. Hanna Muster",
+        "Univ.-Prof. Dr. Hanna Muster",
+        "ao. Univ.-Prof. Dr. Hanna Muster",
+        "Assoc. Prof. Jane Doe",
+        "Associate Professor Jane Doe",
+        "Asst. Prof. Dr. Jane Doe",
     ],
 )
 def test_a_name_that_opens_with_a_personal_title_is_an_individual(name: str) -> None:
@@ -142,6 +155,11 @@ def test_a_name_that_opens_with_a_personal_title_is_an_individual(name: str) -> 
         ("Prof. Example Research Institute", "prof example research institute"),
         ("Sir Example Hospital &amp; Medical Centre", "sir example hospital medical centre"),
         ("Drexel University", "drexel university"),  # "dr" is not a word here
+        # An academic rank is a title only in front of one: these are organizations.
+        ("ASST Grande Ospedale Esempio", "asst grande ospedale esempio"),
+        ("PD Biosciences", "pd biosciences"),
+        ("Associate Laboratories of Example", "associate laboratories of example"),
+        ("Prime Therapeutics", "prime therapeutics"),
         ("Mrsa Diagnostics", "mrsa diagnostics"),
         ("Professional Therapies", "professional therapies"),
         ("Acme Pharma", "acme pharma"),
