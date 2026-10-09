@@ -13,7 +13,10 @@ dependencies = [
     "httpx>=0.28.1",
     "huggingface-hub>=1.32.0",
     "joblib>=1.6.0",
+    "lifelines>=0.30.3",
+    "lightgbm>=4.7.0",
     "matplotlib>=3.9",
+    "mlflow-skinny>=3.17.0",
     "numpy>=2.5.3",
     "pandera[pandas]>=0.33.1",
     "psycopg[binary]>=3",
@@ -60,10 +63,13 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
-# scikit-learn, joblib, threadpoolctl, pandas and pyarrow ship no type information
+# scikit-learn, joblib, threadpoolctl, pandas, pyarrow and lifelines ship no type information
 # (pandas-stubs would be a new dependency outside the locked stack).
 [[tool.mypy.overrides]]
-module = ["sklearn", "sklearn.*", "joblib", "threadpoolctl", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
+module = [
+    "sklearn", "sklearn.*", "joblib", "threadpoolctl", "pandas", "pandas.*", "pyarrow", "pyarrow.*",
+    "lifelines", "lifelines.*",
+]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]
@@ -94,7 +100,6 @@ branch = true
 
 [dependency-groups]
 dev = [
-    "lifelines>=0.30.3",
     "mypy>=2.3.1",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
