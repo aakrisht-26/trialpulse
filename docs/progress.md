@@ -1248,6 +1248,49 @@ uv run python -m trialpulse.nlp.llm_labeler --status
 
 Commits: `6a76482` (stage 1), `6071b2e` (joblib and threadpoolctl), `15ee270` (stage 2), `1f8e4de` (ADRs 0018 to 0021 accepted, Amendments).
 
+## Step 9: Baselines and Cox analysis
+
+Date: 2026-10-10. Status: **in progress**. Started on Aakrisht's instruction in the review of Step 7. Development origins only; the test lock is untouched.
+
+### Part 1: why M0's 24-month calibration slope moved (diagnosis only, reported before anything else was fitted)
+
+`uv run python -m trialpulse.eval.diagnosis` writes [calibration_diagnosis.md](calibration_diagnosis.md). Nothing is changed by it.
+
+**The question.** With training labels that knew what was posted after the origin, M0's 24-month calibration slope was 1.250 (origin 2016) and 1.363 (origin 2017). With labels as of the origin (ADR 0016) it is 1.458 and 1.490. (The 1.217 and 1.320 recorded earlier are the same hindsight fits scored with one censoring curve for all rows; with the by-class weights of ADR 0017 they are 1.250 and 1.363.)
+
+**The answer: yes, censoring of lapsed trials as of the origin explains the move, and more than all of it.** Each training row exists in two forms, as of the origin and in hindsight. M0 was refitted on hindsight labels with the as-of form swapped in for one kind of difference at a time, and scored on the same evaluation rows:
+
+| Training labels | Slope at 24 months, origin 2016 | Origin 2017 |
+| --- | --- | --- |
+| Hindsight | 1.250 | 1.363 |
+| Hindsight, but trials lapsed on the origin censored as the as-of cohort does | 1.574 (+0.324) | 1.623 (+0.260) |
+| Hindsight, but trials that lapsed later treated as the as-of cohort does | 1.167 (-0.083) | 1.280 (-0.083) |
+| Both | 1.460 (+0.210) | 1.514 (+0.152) |
+| As of the origin | 1.458 (+0.208) | 1.490 (+0.127) |
+
+The whole move is +0.208 (95% interval +0.144 to +0.270) and +0.127 (+0.087 to +0.176). The two lapse categories together reproduce it; what is left (-0.002 and -0.024) comes from trials that hindsight excludes for a reversal posted after the origin.
+
+**The mechanism, in three steps.**
+
+1. **What the as-of cohort does.** On the origin, 11,097 trials (2016) had a record that the UNKNOWN rule counts as lapsed. The as-of cohort censors each at its last status-verified date and drops its later landmarks. Hindsight knows that 4,745 of them were resolved by a later version, and observes those up to the origin: summed over their landmark rows, 96,875 years of observation without an event, where the as-of cohort keeps 10,959.
+2. **Whom it hits.** Lapsed records are mostly in sponsor class OTHER (universities and hospitals). Less event-free time for OTHER means a higher estimated hazard for OTHER: its predicted 24-month risk rises from 5.93% to 6.30% (2016), while INDUSTRY's moves from 7.41% to 7.53%. Swapping the prediction of OTHER alone moves the slope by +0.247 (2016) and +0.192 (2017); the other classes together move it by a quarter to a third of that, in the other direction.
+3. **Why the slope reacts so strongly.** M0 predicts one number per class, and two classes hold 95% of the rows. With as-of labels its slope is the observed gap between INDUSTRY and OTHER divided by the predicted gap, in logits: 0.278 over 0.191, which is 1.46 (the slope on those two classes alone is 1.45, on all classes 1.458). With hindsight labels the predicted gap is 0.239. A shift of 0.37 percentage points in the prediction for one class is most of the effect.
+
+**Is it a bias or a different question?** Both. The censoring is informative: of the trials lapsed on the 2016 origin, 8.5% stopped early later, 32.1% completed and 59.1% never came back, against 12.2%, 66.2% and 16.9% of the trials still open on the origin. A lapsed record is a quieter trial, and censoring it removes quiet time. But no build on the origin can know which lapsed records will come back: the hindsight labels were not available then, which is why ADR 0016 replaced them. The evaluation, which follows outcomes to the data cutoff, does know, and counts the quiet time of a record that came back. So training and evaluation treat the same kind of record differently, and a model fitted as of the origin runs slightly hot for the class with the most lapsed records.
+
+**How much it matters.** For M0, little beyond the slope itself: under every label set the AUC at 24 months stays between 0.5345 and 0.5350 and the Brier score moves in the fifth decimal, and with either plain label set the calibration intercept is 0.03 or less in size. Two things are worth keeping in view:
+
+- M0's slope is above 1 even with hindsight labels (1.250 and 1.363): INDUSTRY stopped early more often in the evaluation years than its training curve predicts (7.85% observed against 7.41% in 2016). That part has nothing to do with the labels.
+- Every later model is trained on the same as-of labels. A model with features can see how stale a record is (months since the last update, months since the status was verified), so it may absorb part of this; whether it does is a question for the M1 and M4 calibration tables, by sponsor class.
+
+**Possible remedies, for your decision (none applied):**
+
+- (a) **Leave the labels as they are and watch calibration by sponsor class** in Steps 9 and 10. Recommended for now: the effect on M0 is a third of a percentage point in one class, and a change to the training labels is a change to ADR 0016.
+- (b) **Observe a trial lapsed on the origin up to the origin** in the training labels, instead of censoring it at its status-verified date. It matches hindsight for the 4 in 10 that come back and overstates the event-free time of the 6 in 10 that never do, which the evaluation censors. It would need an ADR that amends ADRs 0014 and 0016 for training rows.
+- (c) **Weight training rows for lapse censoring by more than the sponsor class** (for example by how stale the record already is). Closer to the cause, and a modeling choice that belongs to Step 10.
+
+Decisions in this part that were mine: the five categories and the order of the swaps; scoring every label set with the harness's own metrics and censoring groups; 200 bootstrap resamples of the evaluation trials for the interval of the move, with the predictions held fixed (so the interval reflects the evaluation sample, not the training sample).
+
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
 Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to branch `provisional/step6-step8` on 2026-09-23 from main at `bd87054`, reviewed in PR #1, approved by Aakrisht, and merged into main the same day (merge commit `0d2248c`). The branch was then deleted. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.

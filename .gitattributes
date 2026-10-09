@@ -4,4 +4,5 @@
 # and regenerating it shows the file as modified although its content is the same.
 docs/eda.md text eol=lf
 docs/features.md text eol=lf
+docs/calibration_diagnosis.md text eol=lf
 docs/figures/*.png binary
