@@ -12,6 +12,7 @@ dependencies = [
     "duckdb>=1.5.5",
     "httpx>=0.28.1",
     "huggingface-hub>=1.32.0",
+    "joblib>=1.6.0",
     "matplotlib>=3.9",
     "numpy>=2.5.3",
     "pandera[pandas]>=0.33.1",
@@ -23,6 +24,7 @@ dependencies = [
     "sqlalchemy>=2",
     "streamlit>=1.64.0",
     "tenacity>=9.1.4",
+    "threadpoolctl>=3.7.0",
 ]
 
 [build-system]
@@ -59,8 +61,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 # scikit-learn, joblib, threadpoolctl, pandas and pyarrow ship no type information
-# (pandas-stubs would be a new dependency outside the locked stack). joblib and threadpoolctl
-# are installed by scikit-learn, which requires both.
+# (pandas-stubs would be a new dependency outside the locked stack).
 [[tool.mypy.overrides]]
 module = ["sklearn", "sklearn.*", "joblib", "threadpoolctl", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true

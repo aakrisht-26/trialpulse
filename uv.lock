@@ -1354,6 +1354,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "httpx" },
     { name = "huggingface-hub" },
+    { name = "joblib" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandera", extra = ["pandas"] },
@@ -1365,6 +1366,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "streamlit" },
     { name = "tenacity" },
+    { name = "threadpoolctl" },
 ]
 
 [package.dev-dependencies]
@@ -1384,6 +1386,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.32.0" },
+    { name = "joblib", specifier = ">=1.6.0" },
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "pandera", extras = ["pandas"], specifier = ">=0.33.1" },
@@ -1395,6 +1398,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2" },
     { name = "streamlit", specifier = ">=1.64.0" },
     { name = "tenacity", specifier = ">=9.1.4" },
+    { name = "threadpoolctl", specifier = ">=3.7.0" },
 ]
 
 [package.metadata.requires-dev]
