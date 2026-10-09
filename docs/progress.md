@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 7 (point-in-time features)**, built and independently reviewed on 2026-10-08, **waiting for Aakrisht's review**. Step 9 is not started; it begins with the calibration diagnosis ("Guidance for later steps", item 12). **Step 6** is in progress: 3,325 of 10,000 sample texts were labeled on 2026-10-07 (LLM test result: macro-F1 0.842); the final distilled model waits for the sample.
+Current step: **Step 9 (baselines and Cox analysis)**, started on 2026-10-10 after Aakrisht approved Step 7 (see "Review of Step 7"). It begins with the calibration diagnosis ("Guidance for later steps", item 12). **Step 6** is in progress: 5,250 of 10,000 sample texts are labeled (2026-10-10; LLM test result: macro-F1 0.842); the final distilled model waits for the sample. Since 2026-10-10 the daily labeling batch is run by Claude, once per session.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -82,10 +82,10 @@ Current step: **Step 7 (point-in-time features)**, built and independently revie
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
 | 4 | Cohort, outcomes and landmarks | Approved 2026-10-07 and verified by Aakrisht (ADRs 0013 to 0016 accepted); training labels as of each origin approved 2026-10-07 |
 | 5 | Exploratory data analysis | Approved 2026-10-07; merged from PR aakrisht-26/trialpulse#2. Rebuilt on the cohort as of 2018-01-01 on 2026-10-07, as decided in the review of the follow-up: no finding changed in substance |
-| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); Aakrisht labels the sample daily (3,325 of 10,000 on 2026-10-07); distilled model provisional |
-| 7 | Point-in-time features | Built and independently reviewed 2026-10-08, waiting for review. ADRs 0019 and 0020 accepted under rules already set; ADR 0018 (sponsor aliases) and decisions 3 to 8 of ADR 0021 proposed |
+| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); the sample is labeled in daily batches, by Claude since 2026-10-10 (5,250 of 10,000 on 2026-10-10); distilled model provisional |
+| 7 | Point-in-time features | Approved 2026-10-10 (ADRs 0018 to 0021 accepted). Personal-title sponsor names no longer stored (ADR 0022, warehouse schema version 3), decided in the same review |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
-| 9 | Baselines and Cox analysis | Not started |
+| 9 | Baselines and Cox analysis | In progress since 2026-10-10 |
 | 10 | Discrete-time models and tuning | Not started |
 | 11 | Pre-registration, locked test and results | Not started |
 | 12 | Explainability, model card, data card | Not started |
@@ -118,6 +118,11 @@ Added on 2026-10-07, from Aakrisht's review of the follow-up:
 
 11. **Step 9: M1's training weights use censoring curves by sponsor class,** fitted on its own training rows, so that training and evaluation make the same assumption (ADR 0017).
 12. **Step 9 starts with a diagnosis of the calibration shift,** before any model is compared: M0's 24-month calibration slopes are 1.458 and 1.490 with labels as of each origin (they were 1.217 and 1.320 with hindsight labels). Start with whether the censoring of lapsed trials as of the origin explains it. Diagnosis only, no fix yet.
+
+Added on 2026-10-10, from Aakrisht's review of Step 7:
+
+13. **Step 14: intervention types join the canonical version schema,** with a parity test between the dataset path and the API v2 path (ADR 0020).
+14. **Step 6: Claude runs the labeling batch,** once per session, in the background; it stops at the provider's daily limit. When the sample reaches 10,000, Step 6 is finished as specified.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -1212,6 +1217,36 @@ uv run pytest -q -m "slow or not slow"
 uv run python -m trialpulse.features.leakage
 uv run python -m trialpulse.nlp.llm_labeler --status
 ```
+
+### Review of Step 7 (Aakrisht, 2026-10-10) and what was done
+
+**Approved.** His decisions:
+
+- **ADR 0018:** option (a), the rule as built with the one-year wait. Accepted. "My original wording (names that replace each other are aliases) was wrong: it chains into one giant sponsor."
+- **ADR 0019 and decisions 3 to 8 of ADR 0021:** accepted as proposed, "unless one changes a locked definition; flag any that do". **None does.** Decisions 3 to 5 of ADR 0021 apply the Section 6 rules for the state at a landmark and for fitted transforms; decisions 6 to 8 and ADR 0019 refine the feature lists of Section 8 and the embedding model of Section 7. Section 6 is untouched. **ADR 0020:** accepted.
+- **The 17 decisions of the Step 7 report:** approved. joblib and threadpoolctl are now declared as direct dependencies.
+- **Open question 2 (personal-title sponsor names):** fix it now, not at Step 14. Done, see below.
+- **Open question 3:** yes, intervention types join the canonical schema at Step 14, with a parity test ("Guidance for later steps", item 13).
+- **Open question 5:** `sentence-transformers` leaves the locked stack (an Amendments line under ADR 0019). It was never in `pyproject.toml`, so no dependency was removed.
+- **Change of rule:** from now on I run the Step 6 labeling batch, once per session, in the background. Today's batch: 3,325 to 5,250 of 10,000 texts, stopped at the provider's daily limit as designed.
+
+**The personal-title fix (ADR 0022).** A sponsor whose normalized name opens with a personal title and holds no organization word is an individual: no name and no key is stored, on either path, and the canonical contract quarantines a row that carries such a key. Warehouse schema version 3; the cohort and feature builds refuse an older warehouse. The warehouse, the cohort and the features were rebuilt twice, so that each effect shows alone:
+
+| | Before (schema 2) | Stage 1: the titles you named | Stage 2: more title forms |
+| --- | --- | --- | --- |
+| Distinct stored sponsor keys | 52,797 | 51,863 | 51,815 |
+| Stored keys that open with a personal title and hold no organization word | 982 | 48 | 0 |
+| Names or keys stored for individuals | 0 | 0 | 0 |
+| Cohort files | | identical | identical |
+| Feature outputs (20 tables) | | **identical** | 19 identical; 177 rows of 40 trials differ in `features.parquet` |
+
+- **Your acceptance is met at stage 1** (commit `6a76482`): no personal-title key remains among the titles of the Step 7 rule (934 keys on 1,359 trials are no longer stored), and every feature output has the checksum of the Step 7 build.
+- **Stage 2 is my extension and is flagged** (commit `15ee270`, ADR 0022 decision 3). Counting the keys found 48 more, on 76 trials, that open with a title the Step 7 list did not know: French and Italian titles (Pr, Mme, Dott.) and academic ranks in front of a title (PD Dr., Priv.-Doz. Dr., Univ.-Prof., Assoc. Prof.). Not storing personal names is not negotiable, so they are individuals now too. This is the one place where the feature outputs are no longer those of Step 7: the feature build had treated these 48 keys as organizations, so 177 landmark rows of 40 trials lose `sponsor_has_identity` and their three sponsor counts and get the class rate. No other row and no other table changed. If you prefer the acceptance as you wrote it, reverting stage 2 is one constant and a rebuild.
+- **What a rule cannot catch** (counts only): 82 keys open with a title and hold an organization word (hospitals, companies and foundations named after a person; 36 of them sit on one trial each and may be a person with an affiliation); 20 keys on 89 trials open with a word that is only sometimes a title (7 with ASST, the Italian hospital trusts; 9 with MD, 4 of them of class INDUSTRY); and bare personal names without any title, whose number is unknown by construction.
+- **Other stores:** the warehouse was the only derived file with sponsor names. The raw downloads under `data/raw/` are the registry's own records and are never committed or redistributed.
+- **Checks, in my shell:** the two warehouse builds took 984 and 997 seconds; the cohort build printed "Identical to the previous build: yes" both times; 703 tests passed after stage 1.
+
+Commits: `6a76482` (stage 1), `6071b2e` (joblib and threadpoolctl), `15ee270` (stage 2), `1f8e4de` (ADRs 0018 to 0021 accepted, Amendments).
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
