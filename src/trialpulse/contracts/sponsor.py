@@ -1,9 +1,10 @@
 """Sponsor identity without people's names (CLAUDE.md Sections 2 and 8, Step 3).
 
-A sponsor is an individual when its class is INDIV, or when its name carries a personal
-degree title (PhD, MD, MPH and similar) and no organization word. An individual sponsor's
-name is never stored: its name and key are empty, and Step 7's sponsor track record falls
-back to the class-level rate for it.
+A sponsor is an individual when its class is INDIV, when its name carries a personal
+degree title (PhD, MD, MPH and similar) and no organization word (ADR 0012), or when its
+name opens with a personal title (Dr, Prof, Mr and similar) and holds no organization word
+(ADR 0022). An individual sponsor's name is never stored: its name and key are empty, and
+Step 7's sponsor track record falls back to the class-level rate for it.
 
 Other sponsors keep a display name (HTML unescaped, emails scrubbed) and a key: the name in
 lowercase with punctuation removed and whitespace collapsed (CLAUDE.md Section 8: no fuzzy
@@ -13,9 +14,8 @@ entity resolution in v1).
 identity. `has_identity` says whether a key may carry a track record of its own: not when
 the sponsor is an individual, not when the key is a registry placeholder (a redacted name
 stands for many companies), and not when the key opens with a personal title and holds no
-organization word. The warehouse rule above does not catch that last kind, so such names
-are still stored; the feature build never reads the names and gives these sponsors the
-class-level rate.
+organization word. Since ADR 0022 no key of that last kind is stored at all, and the
+canonical contract refuses one; the clause stays in `has_identity` as a second guard.
 """
 
 import re
@@ -54,10 +54,24 @@ class Sponsor:
     is_individual: bool
 
 
+def opens_with_personal_title(key: str | None) -> bool:
+    """Whether a sponsor key is a person named by title: it opens with a personal title and
+    holds no organization word (ADR 0022). "dr a example" is; "dr example memorial hospital"
+    is an organization named after a person."""
+    if not key:
+        return False
+    titled = re.search(PERSONAL_TITLE_KEY, key) is not None
+    return titled and re.search(ORGANIZATION_WORD_KEY, key) is None
+
+
 def is_individual(name: str | None, sponsor_class: str | None) -> bool:
     if (sponsor_class or "").upper() == INDIVIDUAL_CLASS:
         return True
-    return bool(name and DEGREE_TITLE.search(name) and not ORGANIZATION_WORD.search(name))
+    if not name:
+        return False
+    if DEGREE_TITLE.search(name) and not ORGANIZATION_WORD.search(name):
+        return True
+    return opens_with_personal_title(sponsor_key(name))
 
 
 def sponsor_key(name: str) -> str | None:
@@ -71,8 +85,7 @@ def has_identity(key: str | None, individual: bool | None) -> bool:
     """Whether a sponsor key may carry a track record of its own (ADR 0018)."""
     if individual or not key or key in PLACEHOLDER_KEYS:
         return False
-    titled = re.search(PERSONAL_TITLE_KEY, key) is not None
-    return not (titled and re.search(ORGANIZATION_WORD_KEY, key) is None)
+    return not opens_with_personal_title(key)
 
 
 def has_identity_sql(key: str, individual: str) -> str:

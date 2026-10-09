@@ -26,7 +26,7 @@ from .conftest import load_versions
 from .test_cohort import MINI
 
 
-def _warehouse(path: Path, schema_version: str = "2") -> Path:
+def _warehouse(path: Path, schema_version: str = "3") -> Path:
     with duckdb.connect(str(path)) as con:
         load_versions(con, MINI)
         con.execute("CREATE TABLE build_info (key VARCHAR, value VARCHAR)")
@@ -159,8 +159,8 @@ def test_the_build_writes_the_training_rows_of_every_origin(built: Path) -> None
 
 
 def test_an_old_warehouse_is_refused(tmp_path: Path) -> None:
-    warehouse = _warehouse(tmp_path / "old.duckdb", schema_version="1")
-    with pytest.raises(RefusedError, match="schema version 2"):
+    warehouse = _warehouse(tmp_path / "old.duckdb", schema_version="2")
+    with pytest.raises(RefusedError, match="schema version 3"):
         build.main(["--warehouse", str(warehouse), "--out-dir", str(tmp_path / "out")])
     with pytest.raises(RefusedError, match="no warehouse"):
         build.main(["--warehouse", str(tmp_path / "missing.duckdb")])

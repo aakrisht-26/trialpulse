@@ -14,6 +14,7 @@ import duckdb
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
+from trialpulse.contracts.sponsor import ORGANIZATION_WORD_KEY, PERSONAL_TITLE_KEY
 from trialpulse.contracts.text import EMAIL_PATTERN
 from trialpulse.contracts.versions import (
     CONTENT_COLUMNS,
@@ -368,14 +369,18 @@ def _text_section(con: duckdb.DuckDBPyConnection, info: dict[str, str]) -> list[
     emails_left = _one(
         con, f"SELECT count(*) FROM texts WHERE regexp_matches(text, '{EMAIL_PATTERN.pattern}')"
     )[0]
+    titled = f"regexp_matches(sponsor_key, '{PERSONAL_TITLE_KEY}')"
+    organization = f"regexp_matches(sponsor_key, '{ORGANIZATION_WORD_KEY}')"
     individual = _one(
         con,
-        """SELECT count(*) FILTER (WHERE sponsor_is_individual AND lead_sponsor_class = 'INDIV'),
+        f"""SELECT count(*) FILTER (WHERE sponsor_is_individual AND lead_sponsor_class = 'INDIV'),
           count(*) FILTER (WHERE sponsor_is_individual AND lead_sponsor_class IS DISTINCT FROM
             'INDIV'),
           count(DISTINCT nct_id) FILTER (WHERE sponsor_is_individual),
           count(*) FILTER (WHERE sponsor_is_individual
-            AND (lead_sponsor_name IS NOT NULL OR sponsor_key IS NOT NULL))
+            AND (lead_sponsor_name IS NOT NULL OR sponsor_key IS NOT NULL)),
+          count(DISTINCT sponsor_key) FILTER (WHERE {titled} AND NOT {organization}),
+          count(DISTINCT sponsor_key) FILTER (WHERE {titled} AND {organization})
         FROM versions""",
     )
     personal_columns = _one(
@@ -405,10 +410,15 @@ def _text_section(con: duckdb.DuckDBPyConnection, info: dict[str, str]) -> list[
         f"- Distinct normalized texts stored: {_n(info['texts.rows'])}. Email addresses left in "
         f"stored text: {_n(emails_left)}.",
         f"- Individual sponsors: {_n(individual[0])} versions with class INDIV and "
-        f"{_n(individual[1])} with a person's name (a degree title such as PhD or MD and no "
-        f"organization word) under another class, in {_n(individual[2])} trials. Names or keys "
+        f"{_n(individual[1])} with a person's name under another class (a degree title such "
+        "as PhD or MD, or a personal title such as Dr or Prof at the start, and no "
+        f"organization word; ADRs 0012 and 0022), in {_n(individual[2])} trials. Names or keys "
         f"stored for them: {_n(individual[3])}. Their sponsor track record in Step 7 falls back "
         "to the class-level rate.",
+        f"- Stored sponsor keys that open with a personal title and hold no organization word: "
+        f"{_n(individual[4])}. Keys that open with one and hold an organization word (a "
+        f"hospital, company or foundation named after a person): {_n(individual[5])}; these "
+        "are kept as organizations.",
         f"- Personal-data columns in the warehouse: {_n(personal_columns)}.",
         "",
     ]

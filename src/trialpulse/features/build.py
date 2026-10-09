@@ -45,7 +45,7 @@ import pandas as pd
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.audit import MODELING_EDA_BEFORE
-from trialpulse.cohort.build import COHORT_DIR, TRAINING_DIR_NAME
+from trialpulse.cohort.build import COHORT_DIR, TRAINING_DIR_NAME, check_warehouse_schema
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.features import amendments, design
@@ -169,6 +169,7 @@ def prepare(
             "uv run python -m trialpulse.ingest.history --config interventions"
         )
     con.execute(f"ATTACH '{warehouse.as_posix()}' AS wh (READ_ONLY)")
+    check_warehouse_schema(con)
     expose_versions(con, "wh.versions", rules)
     con.execute("CREATE OR REPLACE TEMP VIEW texts AS SELECT text_hash, text FROM wh.texts")
     con.execute(

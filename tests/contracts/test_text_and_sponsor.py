@@ -2,7 +2,12 @@
 
 import pytest
 
-from trialpulse.contracts.sponsor import sponsor, sponsor_key
+from trialpulse.contracts.sponsor import (
+    has_identity,
+    opens_with_personal_title,
+    sponsor,
+    sponsor_key,
+)
 from trialpulse.contracts.text import EMAIL_MARKER, is_html, normalize_text, scrub_emails
 
 
@@ -97,6 +102,78 @@ def test_individual_sponsors_keep_no_name() -> None:
     ):
         stored = sponsor(name, sponsor_class)
         assert (stored.name, stored.key, stored.is_individual) == (None, None, True)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Dr. Jane Doe",
+        "Dr Jane Doe",
+        "DR. JANE DOE",
+        "Dr.Jane Doe",
+        "Prof. Jane Doe",
+        "Professor Jane Doe",
+        "Prof. Dr. Jane Doe",
+        "Doctor Jane Doe",
+        "Dra. Juana P\u00e9rez",
+        "Drs. J. de Vries",
+        "Mr. John Smith",
+        "Mrs John Smith",
+        "Ms. Jane Doe",
+        "Miss Jane Doe",
+        "Sir John Smith",
+        "Dr. Jane O&#x27;Doe",  # entities are unescaped before the rule reads the name
+    ],
+)
+def test_a_name_that_opens_with_a_personal_title_is_an_individual(name: str) -> None:
+    """ADR 0022: such a sponsor is a person named by title, whatever its class. Nothing of
+    the name is stored."""
+    for sponsor_class in ("OTHER", "INDUSTRY", "NETWORK", None):
+        stored = sponsor(name, sponsor_class)
+        assert (stored.name, stored.key, stored.is_individual) == (None, None, True)
+    assert opens_with_personal_title(sponsor_key(name))
+
+
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        ("Dr. Example Memorial Hospital", "dr example memorial hospital"),
+        ("Dr. Example's Laboratories Ltd.", "dr example s laboratories ltd"),
+        ("Prof. Example Research Institute", "prof example research institute"),
+        ("Sir Example Hospital &amp; Medical Centre", "sir example hospital medical centre"),
+        ("Drexel University", "drexel university"),  # "dr" is not a word here
+        ("Mrsa Diagnostics", "mrsa diagnostics"),
+        ("Professional Therapies", "professional therapies"),
+        ("Acme Pharma", "acme pharma"),
+    ],
+)
+def test_an_organization_named_after_a_person_stays_an_organization(name: str, key: str) -> None:
+    stored = sponsor(name, "OTHER")
+    assert (stored.key, stored.is_individual) == (key, False)
+    assert stored.name is not None
+    assert not opens_with_personal_title(stored.key)
+    assert has_identity(stored.key, stored.is_individual)
+
+
+def test_no_stored_key_is_a_person_named_by_title() -> None:
+    """Whatever name comes in, a key that `sponsor` stores never opens with a personal title
+    without an organization word: the warehouse cannot hold one."""
+    titles = ("Dr", "Dr.", "Dra.", "Drs", "Prof", "Prof.", "Professor", "Doctor", "Mr", "Mrs.",
+              "Ms", "Miss", "Sir")  # fmt: skip
+    rest = ("Jane Doe", "J. Doe, MD", "Doe", "Jane van der Doe PhD", "\u00c9tienne Exemple")
+    for title in titles:
+        for tail in rest:
+            for name in (
+                f"{title} {tail}",
+                f"{title.upper()} {tail.upper()}",
+                f"  {title}  {tail} ",
+            ):
+                stored = sponsor(name, "OTHER")
+                assert stored.key is None, name
+                assert stored.name is None
+                assert stored.is_individual
+    assert not opens_with_personal_title(None)
+    assert not opens_with_personal_title("")
 
 
 def test_organizations_keep_a_display_name_and_a_normalized_key() -> None:

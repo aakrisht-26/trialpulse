@@ -468,7 +468,7 @@ def write_warehouse(path: Path, rows: list[dict[str, Any]]) -> None:
         con.unregister("versions_frame")
         con.execute("CREATE TABLE build_info (key VARCHAR, value VARCHAR)")
         con.execute(
-            "INSERT INTO build_info VALUES ('schema_version', '2'), "
+            "INSERT INTO build_info VALUES ('schema_version', '3'), "
             "('dataset.revision', 'synthetic')"
         )
 

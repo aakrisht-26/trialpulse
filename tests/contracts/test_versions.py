@@ -190,6 +190,8 @@ def _history_rows() -> pd.DataFrame:
         {**base, "nct_id": "NCT07654323", "sponsor_is_individual": True},  # name kept
         {**base, "nct_id": "NCT07654324", "start_date_precision": None},  # no precision
         {**base, "nct_id": "NCT07654325", "nct_version": None},  # history without version
+        # A key that names a person by title, as a row not built by `sponsor` could carry.
+        {**base, "nct_id": "NCT07654326", "sponsor_key": "dr a example"},
     ]
     return typed_frame(pd.DataFrame(rows))
 
@@ -206,6 +208,7 @@ def test_invalid_rows_are_quarantined_with_reasons() -> None:
         "NCT07654323/5": "row: no_individual_sponsor_name",
         "NCT07654324/6": "row: precision_and_type_match_date",
         "NCT07654325/7": "row: history_row_has_version",
+        "NCT07654326/8": "row: no_personal_title_sponsor_key",
     }
 
 

@@ -84,7 +84,7 @@ def _write_inputs(root: Path, data: Registry, rewrite_from: dt.date | None = Non
         con.execute("DROP TABLE base_interventions")
         con.execute("CREATE TABLE build_info (key VARCHAR, value VARCHAR)")
         con.execute(
-            "INSERT INTO build_info VALUES ('schema_version', '2'), "
+            "INSERT INTO build_info VALUES ('schema_version', '3'), "
             "('dataset.revision', 'synthetic')"
         )
     cohort_args = ["--warehouse", str(warehouse), "--out-dir", str(root / "cohort"),

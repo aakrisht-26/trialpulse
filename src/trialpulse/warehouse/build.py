@@ -65,7 +65,9 @@ WAREHOUSE_PATH = REPO_ROOT / "data" / "warehouse.duckdb"
 BUILD_LOG_PATH = REPO_ROOT / "data" / "warehouse_build.json"
 RAW_DIR = REPO_ROOT / "data" / "raw" / "history"
 TEMP_DIR = REPO_ROOT / "data" / "duckdb_tmp"
-SCHEMA_VERSION = "2"  # 2: last_known_status (ADR 0014)
+# 2: last_known_status (ADR 0014). 3: no name or key for a sponsor whose name opens with a
+# personal title and holds no organization word (ADR 0022).
+SCHEMA_VERSION = "3"
 TABLES: tuple[str, ...] = (
     "raw_versions",
     "texts",

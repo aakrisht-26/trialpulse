@@ -8,7 +8,8 @@ the offline history dataset and live API v2 records, so downstream code is sourc
 - Ages are stored in years ("6 Months" is 0.5).
 - Free text is stored once, normalized (trialpulse.contracts.text), in the warehouse's texts
   table; a version holds the text's SHA-256.
-- Sponsors follow trialpulse.contracts.sponsor: no individual's name is stored.
+- Sponsors follow trialpulse.contracts.sponsor: no individual's name is stored, and no key
+  that opens with a personal title and holds no organization word (ADR 0022).
 - `last_known_status` is the submitted status behind the registry's UNKNOWN: when the
   registry shows UNKNOWN (a status it computes, never one a sponsor submits), both sources
   keep the submitted status in this column (API v2 `lastKnownStatus`). It is empty otherwise.
@@ -27,7 +28,7 @@ from typing import Any
 import pandas as pd
 import pandera.pandas as pa
 
-from trialpulse.contracts.sponsor import sponsor
+from trialpulse.contracts.sponsor import opens_with_personal_title, sponsor
 from trialpulse.contracts.text import EMAIL_PATTERN, normalize_text, text_hash
 
 STATUSES: tuple[str, ...] = (
@@ -374,6 +375,12 @@ def _no_individual_name(df: pd.DataFrame) -> pd.Series:
     return ~(individual & (df["lead_sponsor_name"].notna() | df["sponsor_key"].notna()))
 
 
+def _no_personal_title_key(df: pd.DataFrame) -> pd.Series:
+    """No stored sponsor key is a person named by title (ADR 0022). `sponsor()` never
+    returns one; this keeps a row built any other way out of the warehouse."""
+    return ~df["sponsor_key"].map(opens_with_personal_title).astype(bool)
+
+
 def _last_known_status_only_behind_unknown(df: pd.DataFrame) -> pd.Series:
     return df["last_known_status"].isna() | df["overall_status"].eq("UNKNOWN")
 
@@ -432,6 +439,7 @@ VERSION_SCHEMA = pa.DataFrameSchema(
         pa.Check(_history_has_version, name="history_row_has_version"),
         pa.Check(_unique_history_version, name="unique_history_version"),
         pa.Check(_no_individual_name, name="no_individual_sponsor_name"),
+        pa.Check(_no_personal_title_key, name="no_personal_title_sponsor_key"),
         pa.Check(_precision_matches_date, name="precision_and_type_match_date"),
         pa.Check(
             _last_known_status_only_behind_unknown, name="last_known_status_only_behind_unknown"

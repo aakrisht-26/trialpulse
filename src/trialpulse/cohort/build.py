@@ -58,7 +58,9 @@ BUILD_LOG_PATH = COHORT_DIR / "build.json"
 TRAINING_DIR_NAME = "training"
 LANDMARK_ORDER = "trial_id, landmark_index"
 PERSON_PERIOD_ORDER = "trial_id, landmark_index, interval"
-MIN_WAREHOUSE_SCHEMA = 2  # last_known_status (ADR 0014)
+# 2 brought last_known_status (ADR 0014). 3 stopped storing sponsor names that open with a
+# personal title (ADR 0022): an older warehouse still holds them and must be rebuilt.
+MIN_WAREHOUSE_SCHEMA = 3
 OUTCOME_COLUMNS: tuple[str, ...] = (
     "trial_id",
     "t0",
@@ -212,13 +214,20 @@ def attach_warehouse(con: duckdb.DuckDBPyConnection, warehouse: Path) -> None:
             f"no warehouse at {warehouse}; run: uv run python -m trialpulse.warehouse.build"
         )
     con.execute(f"ATTACH '{warehouse.as_posix()}' AS wh (READ_ONLY)")
+    check_warehouse_schema(con)
+    con.execute("CREATE TEMP VIEW versions AS SELECT * FROM wh.versions")
+
+
+def check_warehouse_schema(con: duckdb.DuckDBPyConnection) -> None:
+    """Refuse a warehouse (attached as `wh`) built before the current rules for what is
+    stored."""
     version = con.execute("SELECT value FROM wh.build_info WHERE key = 'schema_version'").fetchone()
     if version is None or int(version[0]) < MIN_WAREHOUSE_SCHEMA:
         raise RefusedError(
-            f"the warehouse predates schema version {MIN_WAREHOUSE_SCHEMA} (last_known_status); "
-            "rebuild it: uv run python -m trialpulse.warehouse.build"
+            f"the warehouse predates schema version {MIN_WAREHOUSE_SCHEMA} (no stored names for "
+            "sponsors named by a personal title, ADR 0022); rebuild it: "
+            "uv run python -m trialpulse.warehouse.build"
         )
-    con.execute("CREATE TEMP VIEW versions AS SELECT * FROM wh.versions")
 
 
 def warehouse_stamp(con: duckdb.DuckDBPyConnection) -> str:
