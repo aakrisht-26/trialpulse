@@ -1,7 +1,7 @@
 # 0021. Conventions of the point-in-time features
 
 - Date: 2026-10-07
-- Status: decisions 1 and 2 are **accepted** by Aakrisht (Step 5 review of 2026-10-07, open questions 3 and 4). Decisions 3 to 8 are Claude's while building Step 7 and are **proposed**, listed for his review in the Step 7 report.
+- Status: **Accepted.** Decisions 1 and 2 by Aakrisht in the Step 5 review of 2026-10-07 (open questions 3 and 4). Decisions 3 to 8, made while building Step 7, in his review of Step 7 on 2026-10-10 ("accepted as proposed, unless one changes a locked definition; flag any that do"). None of them changes a locked definition of CLAUDE.md Section 6: decisions 3 to 5 apply its rules for the state at a landmark and for fitted transforms, and decisions 6 to 8 refine the feature lists of Section 8 (months where it says days, a derived flag in place of the start date type, the features it does not list, and the window of "versions in the last 6 months").
 - Refines CLAUDE.md Section 8 (feature rules and families) and Section 6 ("Fitted transforms").
 
 ## Context

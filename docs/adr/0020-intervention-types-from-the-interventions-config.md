@@ -1,7 +1,7 @@
 # 0020. Intervention types from the dataset's `interventions` config
 
 - Date: 2026-10-07
-- Status: **Accepted on the condition Aakrisht set** on 2026-10-07 for Step 7: "Evaluate the interventions config; adopt intervention type only through an ADR, and only if it is truly per version." The evaluation below shows the config is per version. Listed for his confirmation in the Step 7 report.
+- Status: **Accepted on the condition Aakrisht set** on 2026-10-07 for Step 7: "Evaluate the interventions config; adopt intervention type only through an ADR, and only if it is truly per version." The evaluation below shows the config is per version. Confirmed by Aakrisht on 2026-10-10 (review of Step 7), who also confirmed that intervention types join the canonical version schema at Step 14, with a parity test between the two paths.
 - Refines CLAUDE.md Section 7 (item 1: "if they are published later, adopting them requires an ADR") and Section 8 (design family).
 
 ## Context

@@ -1,7 +1,7 @@
 # 0019. Text components by TF-IDF and truncated SVD, not sentence embeddings
 
 - Date: 2026-10-07
-- Status: **Accepted** under the rule CLAUDE.md Section 8 already sets: "If embedding all distinct texts would take more than about 2 hours on CPU, use TF-IDF plus truncated SVD instead and record an ADR." The cost check below shows the condition holds. The details of the replacement (decisions 2 to 5) are Claude's and are listed for Aakrisht's review in the Step 7 report.
+- Status: **Accepted** under the rule CLAUDE.md Section 8 already sets: "If embedding all distinct texts would take more than about 2 hours on CPU, use TF-IDF plus truncated SVD instead and record an ADR." The cost check below shows the condition holds. The details of the replacement (decisions 2 to 5) were accepted by Aakrisht on 2026-10-10 (review of Step 7), with decision 6.
 - Refines CLAUDE.md Section 8 (text family) and Section 7, item 6 (the embedding model).
 
 ## Context
@@ -38,6 +38,7 @@ Both are over the limit of about 2 hours, the biomedical one by a factor of ten.
 3. **Everything fitted is fitted per origin.** The inverse document frequencies and the SVD are fitted for each walk-forward origin on the distinct texts of that origin's training rows only (Section 6), with sublinear term frequency, smoothed inverse document frequency and rows scaled to unit length. Hashed columns that no training text uses are left out of the fit: they are zero for every training text and can carry no component.
 4. **The components are stored per origin and per distinct text** (`data/features/origin_<date>/<field>_components.parquet`), for the texts of that origin's training and evaluation rows, rounded to 6 decimals.
 5. **The fit is reproducible on one machine.** It runs in double precision, on one BLAS thread, with the seed `seeds.default`. Two builds give identical components (checked by the build's checksums), whatever the number of cores the machine offers. Across processor types or BLAS libraries the last kept decimal may still differ, so a served model uses saved transforms, not a refit (see Consequences).
+6. **`sentence-transformers` leaves the locked stack** (Aakrisht, 2026-10-10). It was listed in CLAUDE.md Section 15 for the embeddings this ADR replaces and was never added to the project's dependencies. `joblib` (the cache of word counts) and `threadpoolctl` (one thread for the fit), which the feature build imports and scikit-learn already installs, are declared as direct dependencies.
 
 ## Evidence
 
@@ -57,8 +58,8 @@ Both are over the limit of about 2 hours, the biomedical one by a factor of ten.
 
 ## Consequences
 
-- `sentence-transformers` stays in the locked stack (Section 15) and is not installed: nothing uses it.
-- The word-count cache is saved with joblib, and the fit is held to one thread with threadpoolctl. scikit-learn requires and installs both. No dependency was added.
+- `sentence-transformers` is no longer part of the locked stack (decision 6). Adopting sentence embeddings later needs a new ADR that puts it back.
+- The word-count cache is saved with joblib, and the fit is held to one thread with threadpoolctl. scikit-learn requires and installs both, so declaring them (decision 6) installs nothing new.
 - The Step 10 ablation ("plus text") measures these components. If they add nothing, the text family reduces to the eligibility statistics.
 - Scoring a new text (Steps 13 and 14) needs the fitted inverse document frequencies and SVD of the champion's origin. The build writes the components, not the fitted transforms; Step 13 saves the transforms with the registered model.
 - SHAP drivers named "component 7 of the eligibility text" are not readable to a user. Step 12 should group the 64 components into "eligibility text" and "summary text" when it reports drivers.
