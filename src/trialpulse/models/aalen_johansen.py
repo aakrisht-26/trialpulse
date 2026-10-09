@@ -12,13 +12,16 @@ M0 (CLAUDE.md Section 9) is this estimator fitted per stratum (phase group, or s
 class if phase is not allowed): it asks whether there is any signal beyond base rates.
 """
 
+import datetime as dt
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Self
 
 import numpy as np
 import numpy.typing as npt
 
 from trialpulse.eval import EVENT_CENSORED, EVENT_STOP
+from trialpulse.eval.rows import LandmarkRows, horizon_days
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -64,8 +67,25 @@ class AalenJohansenModel:
 
     stratum_feature: str = "stratum"
     name: str = "m0"
+    landmark_indices: tuple[int, ...] | None = None  # every landmark index
+    feature_matrix: bool = False  # the stratum is a column of the landmark rows
     curves: dict[str, CIFCurve] = field(default_factory=dict)
     pooled: CIFCurve | None = None
+
+    def fit_rows(
+        self,
+        rows: LandmarkRows,
+        time: FloatArray,
+        event: npt.NDArray[np.int64],
+        origin: dt.date,
+    ) -> Self:
+        """What the walk-forward harness calls: fit on the training rows of an origin."""
+        self.fit(time, event, rows.features)
+        return self
+
+    def predict_months(self, rows: LandmarkRows, months: int) -> FloatArray:
+        """The CIF of an early stop `months` calendar months after each row's landmark."""
+        return self.predict_cif(horizon_days(rows.landmark_date, months), rows.features)
 
     def fit(
         self, time: FloatArray, event: npt.NDArray[np.int64], features: Mapping[str, np.ndarray]

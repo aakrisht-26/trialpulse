@@ -130,6 +130,38 @@ def calibration_slope_intercept(
     return slope, intercept
 
 
+def calibration_by_group(
+    time: FloatArray,
+    event: IntArray,
+    score: FloatArray,
+    horizon: FloatArray | float,
+    groups: npt.NDArray[Any],
+) -> list[dict[str, Any]]:
+    """Mean predicted risk against the IPCW early-stop rate at the horizon, within each
+    censoring group (the sponsor classes of ADR 0017), largest group first. A slope pooled
+    over groups cannot say which group a model overpredicts; this table can."""
+    y, w = horizon_labels_and_weights(time, event, horizon, groups)
+    p = np.asarray(score, dtype=np.float64)
+    labels = np.asarray(groups).astype(str)
+    names, counts = np.unique(labels, return_counts=True)
+    table: list[dict[str, Any]] = []
+    for name, count in sorted(zip(names, counts, strict=True), key=lambda nc: (-nc[1], nc[0])):
+        member = labels == name
+        weight = float(w[member].sum())
+        table.append(
+            {
+                "group": str(name),
+                "n": int(count),
+                "mean_predicted": float(p[member].mean()),
+                "observed": float((w[member] * y[member]).sum() / weight)
+                if weight > 0
+                else float("nan"),
+                "censored_before_horizon": float((w[member] == 0).mean()),
+            }
+        )
+    return table
+
+
 def calibration_table(
     time: FloatArray,
     event: IntArray,

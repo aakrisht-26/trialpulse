@@ -25,6 +25,18 @@ lock is checked before any data is loaded or any model is fitted.
 Input contract: the landmark rows of `trialpulse.eval.rows`. Evaluation rows must carry
 "stratum", the lead sponsor class at the landmark: the censoring weights are estimated
 within it (ADR 0017).
+
+**Models.** A model is fitted once per origin (`fit_rows`) and asked for the CIF of an
+early stop at each horizon (`predict_months`). Two attributes say what it needs:
+
+- `feature_matrix`: the Step 7 features of each row, joined from the feature build for the
+  origin (so every fitted transform is the one of that origin, Section 6);
+- `landmark_indices`: the landmark indices it is trained and scored on. M1 is a model of
+  landmark 0 only. Its censoring groups are still decided on all the evaluation rows of
+  the origin, so its rows carry the same weights as M0's rows at that landmark index.
+
+**Tracking.** The command logs each run to MLflow (`trialpulse.tracking`): the commit, the
+dataset revision, the configuration, the pooled metrics and the results file.
 """
 
 import argparse
@@ -32,13 +44,14 @@ import datetime as dt
 import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, Self
 
 import numpy as np
 import numpy.typing as npt
 
+from trialpulse import tracking
 from trialpulse.config import REPO_ROOT, Origin, ProjectConfig, load_project_config
 from trialpulse.dates import add_months, days_between
 from trialpulse.eval import EVENT_CENSORED
@@ -46,6 +59,7 @@ from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap
 from trialpulse.eval.ipcw import FloatArray, IntArray, censoring_groups
 from trialpulse.eval.lock import TestLockError, require_unlock
 from trialpulse.eval.metrics import (
+    calibration_by_group,
     calibration_slope_intercept,
     calibration_table,
     ipcw_auc,
@@ -61,24 +75,62 @@ from trialpulse.eval.rows import (
     training_path,
 )
 from trialpulse.models.aalen_johansen import AalenJohansenModel
+from trialpulse.models.static_clf import StaticClassifier
 
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "walkforward"
+FEATURES_DIR = REPO_ROOT / "data" / "features"
 CENSORING_COLUMN = "stratum"  # the lead sponsor class at the landmark (ADR 0017)
+TRAINING, EVALUATION = "training", "evaluation"
 
 
-class CIFModel(Protocol):
+class WalkForwardModel(Protocol):
+    """What the harness asks of a model (see the module text)."""
+
     name: str
+    landmark_indices: tuple[int, ...] | None
+    feature_matrix: bool
 
-    def fit(
-        self, time: FloatArray, event: IntArray, features: Mapping[str, npt.NDArray[Any]]
+    def fit_rows(
+        self, rows: LandmarkRows, time: FloatArray, event: IntArray, origin: dt.date
     ) -> Self: ...
 
-    def predict_cif(
-        self, horizon: FloatArray | float, features: Mapping[str, npt.NDArray[Any]]
-    ) -> FloatArray: ...
+    def predict_months(self, rows: LandmarkRows, months: int) -> FloatArray: ...
 
 
-MODELS: dict[str, Callable[[], CIFModel]] = {"m0": AalenJohansenModel}
+@dataclass(frozen=True)
+class FeatureRows:
+    """The feature matrix of some landmark rows, with the keys it belongs to."""
+
+    trial_id: npt.NDArray[Any]
+    landmark_index: IntArray
+    features: Mapping[str, npt.NDArray[Any]]
+
+
+# Given an origin, "training" or "evaluation", and the landmark indices wanted (None: all).
+FeatureLoader = Callable[[dt.date, str, tuple[int, ...] | None], FeatureRows]
+MODELS: dict[str, Callable[[ProjectConfig], WalkForwardModel]] = {
+    "m0": lambda cfg: AalenJohansenModel(),
+    "m1": StaticClassifier,
+}
+
+
+def attach_features(rows: LandmarkRows, loaded: FeatureRows, what: str) -> LandmarkRows:
+    """The rows with their feature columns. The features must be those of exactly these
+    rows, in the same order: anything else means the cohort and the feature build are not
+    from the same run, and is refused."""
+    same = (
+        len(loaded.trial_id) == len(rows)
+        and bool((np.asarray(loaded.trial_id).astype(str) == rows.trial_id.astype(str)).all())
+        and bool((np.asarray(loaded.landmark_index) == rows.landmark_index).all())
+    )
+    if not same:
+        raise ValueError(
+            f"the feature matrix does not hold the {what} ({len(loaded.trial_id):,} feature "
+            f"rows for {len(rows):,} landmark rows, or other keys): rebuild the cohort and "
+            "the features (uv run python -m trialpulse.cohort.build, then "
+            "uv run python -m trialpulse.features.build)"
+        )
+    return rows.with_features(loaded.features)
 
 
 def select_origins(cfg: ProjectConfig, spec: str) -> list[Origin]:
@@ -175,6 +227,7 @@ def evaluate_predictions(
         "calibration_table": calibration_table(
             time, event, score, float(np.median(horizon)), ev.calibration_bins
         ),
+        "calibration_by_group": calibration_by_group(time, event, score, horizon, groups),
         "single_censoring_curve": {
             "auc": ipcw_auc(time, event, score, horizon),
             "brier": ipcw_brier(time, event, score, horizon),
@@ -194,6 +247,7 @@ def run(
     unlock_flag: bool = False,
     repo: Path = REPO_ROOT,
     n_resamples: int | None = None,
+    load_features: FeatureLoader | None = None,
 ) -> dict[str, Any]:
     origins = select_origins(cfg, origins_spec)
     unlock = require_unlock({o.role for o in origins}, repo, unlock_flag)  # before any data
@@ -226,12 +280,33 @@ def run(
             )
         groups = censoring_groups(
             ev.features[CENSORING_COLUMN], cfg.evaluation.censoring_min_rows
-        )  # once per origin, the same at every landmark index
-        model = MODELS[model_name]().fit(train_time, train_event, train.features)
+        )  # once per origin, on all its evaluation rows, the same at every landmark index
+        model = MODELS[model_name](cfg)
+        if model.landmark_indices is not None:
+            keep = np.isin(train.landmark_index, model.landmark_indices)
+            train, train_time, train_event = train.subset(keep), train_time[keep], train_event[keep]
+            keep = np.isin(ev.landmark_index, model.landmark_indices)
+            ev, ev_time, ev_event, groups = (
+                ev.subset(keep),
+                ev_time[keep],
+                ev_event[keep],
+                groups[keep],
+            )
+        if model.feature_matrix:
+            if load_features is None:
+                raise ValueError(f"model {model_name} needs the feature matrix of Step 7")
+            only = model.landmark_indices
+            train = attach_features(
+                train, load_features(origin.date, TRAINING, only), "training rows"
+            )
+            ev = attach_features(
+                ev, load_features(origin.date, EVALUATION, only), "evaluation rows"
+            )
+        model.fit_rows(train, train_time, train_event, origin.date)
         horizons: dict[str, Any] = {}
         for months in cfg.horizons_months:
             h = horizon_days(ev.landmark_date, months)
-            score = model.predict_cif(h, ev.features)
+            score = model.predict_months(ev, months)
             where = f"origin {origin.date.isoformat()}, horizon {months} months"
             pooled = evaluate_predictions(
                 ev_time, ev_event, score, h, ev.trial_id, groups, cfg, resamples,
@@ -251,6 +326,10 @@ def run(
                 "role": origin.role,
                 "n_train_rows": len(train),
                 "n_eval_rows": len(ev),
+                "landmark_indices": "all"
+                if model.landmark_indices is None
+                else list(model.landmark_indices),
+                "model_summary": getattr(model, "summary", None),
                 "censoring_groups": {
                     str(name): int(count)
                     for name, count in zip(*np.unique(groups, return_counts=True), strict=True)
@@ -261,6 +340,65 @@ def run(
     return results
 
 
+def feature_loader(cfg: ProjectConfig, features_dir: Path, cohort_dir: Path) -> FeatureLoader:
+    """Read the feature matrix of an origin's rows from the Step 7 build. The feature
+    package is imported here, when a model first asks for features, so the harness itself
+    does not depend on it."""
+
+    def load(origin: dt.date, role: str, landmark_indices: tuple[int, ...] | None) -> FeatureRows:
+        from trialpulse.cli import RefusedError
+        from trialpulse.features import frame
+
+        if role not in (TRAINING, EVALUATION):
+            raise ValueError(f"unknown role {role!r}")
+        try:
+            matrix = frame.load(
+                cfg,
+                origin,
+                "training" if role == TRAINING else "evaluation",
+                features_dir,
+                cohort_dir,
+                landmark_indices,
+            )
+        except RefusedError as exc:  # a missing or stale build: one line, like the lock
+            raise ValueError(str(exc)) from exc
+        return FeatureRows(
+            matrix["trial_id"].to_numpy(dtype=object),
+            matrix["landmark_index"].to_numpy(dtype=np.int64),
+            frame.as_arrays(matrix),
+        )
+
+    return load
+
+
+def track(results: dict[str, Any], cfg: ProjectConfig, out: Path) -> dict[str, str]:
+    """Log one walk-forward result to MLflow and return where it went."""
+    unlock = results.get("unlock") or {}
+    first = results["origins"][0] if results["origins"] else {}
+    return tracking.log_run(
+        f"{results['model']}-{results['origins_spec']}",
+        {
+            "model": results["model"],
+            "origins": results["origins_spec"],
+            "origin_dates": ",".join(o["origin"] for o in results["origins"]),
+            "bootstrap_resamples": results["bootstrap_resamples"],
+            "horizons_months": ",".join(str(m) for m in cfg.horizons_months),
+            "landmark_indices": first.get("landmark_indices", "all"),
+            "training_labels": results["training_labels"],
+            "censoring_weights": "by lead sponsor class (ADR 0017)",
+        },
+        tracking.walkforward_metrics(results),
+        [out],
+        cfg,
+        tags={
+            "kind": "walk-forward",
+            "roles": ",".join(sorted({o["role"] for o in results["origins"]})),
+            "test_lock": "unlocked" if unlock else "locked",
+            **{f"unlock_{key}": str(value) for key, value in unlock.items()},
+        },
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Walk-forward evaluation")
     parser.add_argument("--model", required=True, choices=sorted(MODELS))
@@ -268,7 +406,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--unlock-test", action="store_true", help="see ADR 0004")
     parser.add_argument("--input", type=Path, default=LANDMARKS_PATH)
     parser.add_argument("--training-dir", type=Path, default=TRAINING_DIR)
+    parser.add_argument("--features-dir", type=Path, default=FEATURES_DIR)
     parser.add_argument("--resamples", type=int, default=None)
+    parser.add_argument("--no-track", action="store_true", help="do not log the run to MLflow")
     args = parser.parse_args(argv)
     cfg = load_project_config()
     try:
@@ -280,6 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             lambda origin: load_landmark_rows(training_path(args.training_dir, origin)),
             unlock_flag=args.unlock_test,
             n_resamples=args.resamples,
+            load_features=feature_loader(cfg, args.features_dir, args.input.parent),
         )
     except (TestLockError, FileNotFoundError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
@@ -291,6 +432,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = RESULTS_DIR / f"{args.model}_{args.origins.replace(',', '-')}.json"
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"wrote {out}")
+    if not args.no_track:
+        try:
+            results["tracking"] = track(results, cfg, out)
+        except Exception as exc:  # the results are on disk; say so and fail, do not lose them
+            print(f"failed: the run was not logged to MLflow ({exc}); its results are in {out}",
+                  file=sys.stderr)  # fmt: skip
+            return 5
+        out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        print(f"logged to {results['tracking']['store_description']}")
     return 0
 
 

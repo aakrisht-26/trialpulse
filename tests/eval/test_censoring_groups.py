@@ -363,7 +363,7 @@ def test_the_walk_forward_run_decides_the_groups_once_per_origin(
 
     train, train_time, train_event = training_rows(training(origin), t)
     ev, time, event = evaluation_rows(rows, t, chosen.walk_forward.eval_window_months)
-    model = MODELS["m0"]().fit(train_time, train_event, train.features)
+    model = MODELS["m0"](chosen).fit_rows(train, train_time, train_event, origin)
     stratum = ev.features["stratum"]
     for months in chosen.horizons_months:
         horizon = horizon_days(ev.landmark_date, months)

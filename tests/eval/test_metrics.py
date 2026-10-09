@@ -134,3 +134,36 @@ def test_calibration_detects_overconfidence() -> None:
 
     slope, _ = calibration_slope_intercept(time, event, overconfident, 365.0)
     assert slope == pytest.approx(0.5, abs=0.07)
+
+
+def test_calibration_by_group_is_the_weighted_rate_of_each_group() -> None:
+    """Two groups without censoring: the observed rate of a group is its share of early
+    stops by the horizon, and the mean prediction is taken over its own rows."""
+    from trialpulse.eval.metrics import calibration_by_group
+
+    time = np.array([1.0, 2.0, 9.0, 9.0, 3.0, 9.0])
+    event = np.array([1, 2, 0, 0, 1, 0])
+    score = np.array([0.5, 0.1, 0.2, 0.2, 0.8, 0.4])
+    groups = np.array(["a", "a", "a", "a", "b", "b"])
+    table = calibration_by_group(time, event, score, 5.0, groups)
+    assert [row["group"] for row in table] == ["a", "b"]  # the larger group first
+    assert table[0] == {
+        "group": "a",
+        "n": 4,
+        "mean_predicted": pytest.approx(0.25),
+        "observed": pytest.approx(0.25),
+        "censored_before_horizon": 0.0,
+    }
+    assert table[1]["observed"] == pytest.approx(0.5)
+    assert table[1]["mean_predicted"] == pytest.approx(0.6)
+    # A row censored before the horizon has no label, and the group says how many there
+    # are. The row still open at the horizon stands in for it: one of two rows at risk was
+    # censored on day 4, so it weighs 2, and the rate is 1 of 1 + 1 + 2, not 1 of 3.
+    time[2], event[2] = 4.0, 0
+    censored = calibration_by_group(time, event, score, 5.0, groups)
+    assert censored[0]["censored_before_horizon"] == pytest.approx(0.25)
+    assert censored[0]["observed"] == pytest.approx(0.25)
+    time[3] = 4.5  # both of the last rows censored before the horizon: stops 1 of 2
+    assert calibration_by_group(time, event, score, 5.0, groups)[0]["observed"] == pytest.approx(
+        0.5
+    )

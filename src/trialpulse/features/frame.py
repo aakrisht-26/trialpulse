@@ -16,11 +16,13 @@ place predictions meet outcomes.
 
 import datetime as dt
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import duckdb
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from trialpulse.cli import RefusedError
@@ -37,24 +39,36 @@ from trialpulse.features.build import (
     components_name,
     origin_source,
 )
-from trialpulse.features.registry import TEXT_FIELDS, matrix_columns
+from trialpulse.features.registry import BY_NAME, CATEGORY, KEY_COLUMNS, TEXT_FIELDS, matrix_columns
 from trialpulse.features.transforms import SponsorPriors
 
 Role = Literal["training", "evaluation"]
 
 
-def _rows_sql(cfg: ProjectConfig, origin: dt.date, role: Role, cohort_dir: Path) -> str:
+def _rows_sql(
+    cfg: ProjectConfig,
+    origin: dt.date,
+    role: Role,
+    cohort_dir: Path,
+    landmark_indices: Sequence[int] | None,
+) -> str:
     files = cohort_key_files(cohort_dir, [origin])
+    only = (
+        ""
+        if landmark_indices is None
+        else f"landmark_index IN ({', '.join(str(int(k)) for k in landmark_indices)})"
+    )
     if role == "training":
         return (
             "SELECT trial_id, landmark_index FROM "
             f"read_parquet('{files[origin_source(origin)].as_posix()}')"
+            + (f" WHERE {only}" if only else "")
         )
     end = add_months(origin, cfg.walk_forward.eval_window_months)
     return (
         f"SELECT trial_id, landmark_index FROM read_parquet('{files['final'].as_posix()}') "
         f"WHERE landmark_date >= DATE '{origin.isoformat()}' "
-        f"AND landmark_date < DATE '{end.isoformat()}'"
+        f"AND landmark_date < DATE '{end.isoformat()}'" + (f" AND {only}" if only else "")
     )
 
 
@@ -64,9 +78,11 @@ def load(
     role: Role,
     features_dir: Path = FEATURES_DIR,
     cohort_dir: Path = COHORT_DIR,
+    landmark_indices: Sequence[int] | None = None,
 ) -> pd.DataFrame:
     """The key columns and every main feature for an origin's training or evaluation rows,
-    sorted by trial and landmark index."""
+    sorted by trial and landmark index. With `landmark_indices`, only the rows of those
+    landmark indices (M1 reads landmark 0 only)."""
     folder = features_dir / origin_source(origin)
     needed = [features_dir / FEATURES_NAME, features_dir / TEXT_KEYS_NAME, folder / PRIORS_NAME]
     needed += [folder / components_name(field) for field in TEXT_FIELDS]
@@ -87,7 +103,7 @@ def load(
     )
     with duckdb.connect() as con:
         frame: pd.DataFrame = con.execute(
-            f"""WITH wanted AS ({_rows_sql(cfg, origin, role, cohort_dir)})
+            f"""WITH wanted AS ({_rows_sql(cfg, origin, role, cohort_dir, landmark_indices)})
             SELECT f.*, {components}, f.trial_id IS NULL AS no_features
             FROM wanted w
             LEFT JOIN read_parquet('{(features_dir / FEATURES_NAME).as_posix()}') f
@@ -109,3 +125,20 @@ def load(
         frame["sponsor_prior_stopped"].to_numpy(dtype=np.float64, na_value=np.nan),
     )
     return frame[list(matrix_columns())]
+
+
+def as_arrays(frame: pd.DataFrame) -> dict[str, npt.NDArray[Any]]:
+    """The feature columns of a matrix as plain arrays, one per feature: numbers and flags
+    as floats with NaN for a missing value (a flag is 1.0 or 0.0), categories as objects
+    with None for a missing value. The key columns are left out, except `landmark_index`,
+    which is a feature too."""
+    out: dict[str, npt.NDArray[Any]] = {}
+    for name in frame.columns:
+        if name in KEY_COLUMNS and name not in BY_NAME:
+            continue
+        column = frame[name]
+        if BY_NAME[name].kind == CATEGORY:
+            out[name] = column.astype(object).where(column.notna(), None).to_numpy(dtype=object)
+        else:
+            out[name] = column.astype("Float64").to_numpy(dtype=np.float64, na_value=np.nan)
+    return out

@@ -4,6 +4,7 @@ requested to prove they are refused; no locked origin is evaluated."""
 import datetime as dt
 import json
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import numpy as np
@@ -279,3 +280,176 @@ def test_load_landmark_rows(tmp_path: Path) -> None:
     assert rows.features["stratum"].tolist() == ["phase2"]
     with pytest.raises(FileNotFoundError, match="Step 4"):
         load_landmark_rows(tmp_path / "missing.parquet")
+
+
+# Models that need features, and models of some landmark indices only -----------------------------
+
+
+class _FeatureModel:
+    """A stand-in for M1: scored at landmark 0 only, and it predicts from a feature that
+    exists only in the feature matrix."""
+
+    name = "probe"
+    landmark_indices: tuple[int, ...] | None = (0,)
+    feature_matrix = True
+
+    def __init__(self, cfg: ProjectConfig) -> None:
+        self.summary = {"fitted_on": 0}
+
+    def fit_rows(
+        self, rows: LandmarkRows, time: Any, event: Any, origin: dt.date
+    ) -> "_FeatureModel":
+        assert set(rows.landmark_index.tolist()) == {0}
+        assert "risk" in rows.features
+        assert len(time) == len(event) == len(rows)
+        self.summary = {"fitted_on": len(rows), "origin": origin.isoformat()}
+        return self
+
+    def predict_months(self, rows: LandmarkRows, months: int) -> Any:
+        return np.clip(rows.features["risk"] * months / 24.0, 0.01, 0.99)
+
+
+def _feature_loader(rows: LandmarkRows, calls: list[Any]) -> walkforward.FeatureLoader:
+    """Features for whichever rows the harness asks for: a risk that is higher for the
+    stratum that stops early more often."""
+
+    def load(origin: dt.date, role: str, only: tuple[int, ...] | None) -> walkforward.FeatureRows:
+        calls.append((origin, role, only))
+        t = np.datetime64(origin, "D")
+        if role == "training":
+            chosen = _training(origin)
+        else:
+            chosen, _, _ = evaluation_rows(rows, t, 12)
+        if only is not None:
+            chosen = chosen.subset(np.isin(chosen.landmark_index, only))
+        risk = np.where(chosen.features["stratum"] == "phase2", 0.4, 0.1)
+        return walkforward.FeatureRows(chosen.trial_id, chosen.landmark_index, {"risk": risk})
+
+    return load
+
+
+def test_a_feature_model_gets_its_rows_with_features_at_its_landmark_indices(
+    cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(walkforward.MODELS, "probe", _FeatureModel)
+    rows, calls = _rows(), []
+    results = run(
+        cfg, "probe", "2016", lambda: rows, _training, n_resamples=20,
+        load_features=_feature_loader(rows, calls),
+    )  # fmt: skip
+    origin = results["origins"][0]
+    day = dt.date(2016, 1, 1)
+    assert calls == [(day, "training", (0,)), (day, "evaluation", (0,))]
+    ev, _, _ = evaluation_rows(rows, np.datetime64(day, "D"), 12)
+    first = ev.landmark_index == 0
+    assert origin["n_eval_rows"] == int(first.sum()) < len(ev)
+    assert origin["n_train_rows"] == int((_training(day).landmark_index == 0).sum())
+    assert origin["landmark_indices"] == [0]
+    assert origin["model_summary"] == {"fitted_on": origin["n_train_rows"], "origin": "2016-01-01"}
+    for months in cfg.horizons_months:
+        written = origin["horizons"][str(months)]
+        assert set(written["by_landmark_index"]) == {"0"}
+        assert written["pooled"]["n_rows"] == origin["n_eval_rows"]
+        assert written["pooled"]["auc"]["estimate"] > 0.55  # the feature carries the ranking
+    # The censoring groups are decided on all the evaluation rows of the origin, before the
+    # landmark filter: the same groups M0 has at landmark index 0.
+    m0 = run(cfg, "m0", "2016", lambda: rows, _training, n_resamples=20)["origins"][0]
+    assert (
+        origin["censoring_groups"]
+        == m0["horizons"]["12"]["by_landmark_index"]["0"]["censoring_groups"]
+    )
+    assert m0["landmark_indices"] == "all"
+    assert m0["model_summary"] is None
+
+
+def test_a_feature_model_is_refused_without_features_or_with_those_of_other_rows(
+    cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(walkforward.MODELS, "probe", _FeatureModel)
+    rows = _rows()
+    with pytest.raises(ValueError, match="needs the feature matrix"):
+        run(cfg, "probe", "2016", lambda: rows, _training, n_resamples=5)
+
+    def one_row_short(origin: dt.date, role: str, only: Any) -> walkforward.FeatureRows:
+        full = _feature_loader(rows, [])(origin, role, only)
+        return walkforward.FeatureRows(
+            full.trial_id[1:], full.landmark_index[1:], {"risk": full.features["risk"][1:]}
+        )
+
+    with pytest.raises(ValueError, match="does not hold the training rows"):
+        run(cfg, "probe", "2016", lambda: rows, _training, n_resamples=5,
+            load_features=one_row_short)  # fmt: skip
+
+    def other_order(origin: dt.date, role: str, only: Any) -> walkforward.FeatureRows:
+        full = _feature_loader(rows, [])(origin, role, only)
+        back = slice(None, None, -1)
+        return walkforward.FeatureRows(
+            full.trial_id[back], full.landmark_index[back], {"risk": full.features["risk"][back]}
+        )
+
+    with pytest.raises(ValueError, match="or other keys"):
+        run(cfg, "probe", "2016", lambda: rows, _training, n_resamples=5,
+            load_features=other_order)  # fmt: skip
+
+
+def test_the_command_logs_each_run_unless_told_not_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
+) -> None:
+    def write(rows: LandmarkRows, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame = pd.DataFrame(  # noqa: F841 (read by DuckDB below)
+            {"trial_id": rows.trial_id, "landmark_index": rows.landmark_index,
+             "landmark_date": rows.landmark_date, "event": rows.event,
+             "event_date": rows.event_date, "stratum": rows.features["stratum"]}
+        )  # fmt: skip
+        with duckdb.connect() as con:
+            con.execute(
+                f"""COPY (SELECT trial_id, landmark_index, CAST(landmark_date AS DATE)
+                  AS landmark_date, event, CAST(event_date AS DATE) AS event_date, stratum
+                FROM frame) TO '{path.as_posix()}' (FORMAT parquet)"""
+            )
+
+    final, training_dir = tmp_path / "landmarks.parquet", tmp_path / "training"
+    origin = dt.date(2016, 1, 1)
+    write(_rows(), final)
+    write(_training(origin), training_path(training_dir, origin))
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path / "results")
+    args = ["--model", "m0", "--origins", "2016", "--resamples", "20", "--input", str(final),
+            "--training-dir", str(training_dir)]  # fmt: skip
+    assert walkforward.main([*args, "--no-track"]) == 0
+    out = tmp_path / "results" / "m0_2016.json"
+    assert "tracking" not in json.loads(out.read_text(encoding="utf-8"))
+    assert tracked_runs == []
+    assert walkforward.main(args) == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved["tracking"]["run_name"] == "m0-2016"
+    (logged,) = tracked_runs
+    assert logged["name"] == "m0-2016"
+    assert logged["artifacts"] == [str(out)]
+    assert logged["params"]["model"] == "m0"
+    assert logged["params"]["origin_dates"] == "2016-01-01"
+    assert logged["params"]["bootstrap_resamples"] == 20
+    assert logged["tags"] == {"kind": "walk-forward", "roles": "dev", "test_lock": "locked"}
+    pooled = saved["origins"][0]["horizons"]["12"]["pooled"]
+    assert logged["metrics"]["auc_12m_2016"] == pooled["auc"]["estimate"]
+    assert logged["metrics"]["auc_12m_mean"] == pooled["auc"]["estimate"]
+    assert logged["metrics"]["calibration_slope_12m_2016"] == pooled["calibration_slope"]
+
+
+def test_a_tracking_failure_keeps_the_results_and_fails_the_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Twelve minutes of bootstrap must not be lost to a network error at the last step."""
+    results = {"model": "m0", "origins_spec": "2016", "origins": []}
+
+    def broken(*args: object, **kwargs: object) -> dict[str, str]:
+        raise ConnectionError("the server did not answer")
+
+    monkeypatch.setattr(walkforward, "run", lambda *a, **k: dict(results))
+    monkeypatch.setattr(walkforward, "track", broken)
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
+    assert walkforward.main(["--model", "m0", "--origins", "2016"]) == 5
+    message = capsys.readouterr().err
+    assert "not logged to MLflow" in message
+    assert "the server did not answer" in message
+    assert json.loads((tmp_path / "m0_2016.json").read_text(encoding="utf-8")) == results
