@@ -36,7 +36,7 @@ from trialpulse.eda.charts import draw
 from trialpulse.eda.document import render
 from trialpulse.eda.refs import FIGURES
 from trialpulse.eda.results import compute
-from trialpulse.eval.walkforward import LANDMARKS_PATH, training_path
+from trialpulse.eval.rows import LANDMARKS_PATH, training_path
 from trialpulse.reports import write_text_if_changed
 from trialpulse.warehouse.build import WAREHOUSE_PATH
 

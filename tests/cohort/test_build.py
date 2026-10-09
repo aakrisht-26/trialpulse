@@ -14,12 +14,8 @@ from trialpulse.cohort.audit import aj_sanity_table
 from trialpulse.cohort.landmarks import LANDMARK_COLUMNS
 from trialpulse.config import load_project_config
 from trialpulse.dates import days_between
-from trialpulse.eval.walkforward import (
-    REQUIRED_COLUMNS,
-    load_landmark_rows,
-    training_path,
-    training_rows,
-)
+from trialpulse.eval.rows import REQUIRED_COLUMNS
+from trialpulse.eval.walkforward import load_landmark_rows, training_path, training_rows
 from trialpulse.models.aalen_johansen import aalen_johansen
 
 from .conftest import load_versions

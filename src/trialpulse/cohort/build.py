@@ -44,7 +44,7 @@ from trialpulse.cohort.outcomes import build_outcomes, build_states, check_versi
 from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import load_project_config
-from trialpulse.eval.walkforward import LANDMARKS_PATH, training_path
+from trialpulse.eval.rows import LANDMARKS_PATH, training_path
 from trialpulse.parquet import write_table as _write_table
 from trialpulse.reports import replace_section
 from trialpulse.warehouse.audit import AUDIT_FAMILY, AUDIT_PATH
