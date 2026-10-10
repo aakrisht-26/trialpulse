@@ -77,7 +77,7 @@ OBJECTIVE = (
 SPACES: dict[str, dict[str, tuple[float, float, str]]] = {
     "logistic": {"C": (1e-3, 1e2, "log")},
     "boosting": {
-        "learning_rate": (0.02, 0.2, "log"),
+        "learning_rate": (0.03, 0.2, "log"),
         "num_leaves": (15, 255, "log-int"),
         "min_data_in_leaf": (20, 500, "log-int"),
         "feature_fraction": (0.4, 1.0, "linear"),

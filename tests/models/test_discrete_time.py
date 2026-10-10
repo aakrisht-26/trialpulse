@@ -87,6 +87,41 @@ def test_a_horizon_is_a_whole_number_of_intervals(cfg: ProjectConfig) -> None:
     assert twelve == pytest.approx(cumulative_incidence(stop, complete)[:, 1])
 
 
+def test_a_horizon_costs_only_the_intervals_it_needs(
+    cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Twelve months are two intervals: scoring them does not score the other two. A second
+    horizon on the same rows adds the missing intervals and gives what a model asked for
+    all four at once gives."""
+    rows, time, event = simulated_rows(900, seed=2)
+    model = build("m2", cfg).fit_rows(rows, time, event, ORIGIN)
+    asked: list[int] = []
+    real = model._probabilities
+
+    def counting(landmark: Any, interval: int) -> Any:
+        asked.append(interval)
+        return real(landmark, interval)
+
+    monkeypatch.setattr(model, "_probabilities", counting)
+    twelve = model.predict_months(rows, 12)
+    assert asked == [1, 2]
+    assert model.predict_months(rows, 6) == pytest.approx(model.hazards(rows, 1)[0][:, 0])
+    assert asked == [1, 2]  # already known
+    twenty_four = model.predict_months(rows, 24)
+    assert asked == [1, 2, 3, 4]
+    assert model.summary["predicted_rows"] == len(rows)
+    fresh = build("m2", cfg).fit_rows(rows, time, event, ORIGIN)
+    stop, complete = fresh.hazards(rows)
+    both = cumulative_incidence(stop, complete)
+    assert np.array_equal(twelve, both[:, 1])
+    assert np.array_equal(twenty_four, both[:, 3])
+    # Other rows are scored afresh.
+    other = rows.subset(np.arange(len(rows)) < 10)
+    model.predict_months(other, 12)
+    assert asked == [1, 2, 3, 4, 1, 2]
+    assert model.summary["predicted_rows"] == 10
+
+
 # Person-period rows ------------------------------------------------------------------------------
 
 

@@ -41,6 +41,10 @@ rounds on every row.
 
 **Settings.** `tuned_settings` reads the settings chosen by `trialpulse.models.tuning`
 from config/tuned/<model>.json. Without that file a model runs on the defaults below.
+
+**Speed.** The linear models are fitted on one linear-algebra thread: with the few dozen
+columns they have, a pool of threads spends its time handing work around (20 seconds
+against 3 for the same fit and the same coefficients, measured on the 2016 origin).
 """
 
 import datetime as dt
@@ -55,7 +59,9 @@ from typing import Any, Self
 import lightgbm as lgb
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from threadpoolctl import threadpool_limits
 
 from trialpulse.cohort.person_period import expand
 from trialpulse.cohort.rules import CohortRules
@@ -118,8 +124,8 @@ BOOSTING_FIXED: dict[str, Any] = {
     "bagging_freq": 1,
     "max_cat_to_onehot": 8,
     "deterministic": True,
-    "force_col_wise": True,
-    "num_threads": 4,
+    "force_row_wise": True,  # the faster layout for this many rows; the trees are the same
+    "num_threads": 8,
     "verbosity": -1,
 }
 
@@ -196,7 +202,27 @@ def cumulative_incidence(stop: FloatArray, complete: FloatArray) -> FloatArray:
 
 
 def _missing(values: npt.NDArray[Any]) -> npt.NDArray[np.bool_]:
-    return np.array([v is None or v != v for v in np.asarray(values, dtype=object)], dtype=bool)
+    absent: npt.NDArray[np.bool_] = np.asarray(
+        pd.isna(np.asarray(values, dtype=object)), dtype=bool
+    )
+    return absent
+
+
+def _levels(values: npt.NDArray[Any]) -> tuple[str, ...]:
+    """The levels of a category among these rows, as text, sorted."""
+    raw = np.asarray(values, dtype=object)
+    return tuple(sorted({str(v) for v in raw[~_missing(raw)]}))
+
+
+def _codes(values: npt.NDArray[Any], levels: Sequence[str]) -> npt.NDArray[np.int64]:
+    """The position of each value among `levels`; -1 for a missing value and for a level
+    that is not among them (first seen after training)."""
+    raw = np.asarray(values, dtype=object)
+    absent = _missing(raw)
+    text = np.where(absent, "", raw).astype(str)
+    codes = np.asarray(pd.Categorical(text, categories=list(levels)).codes, dtype=np.int64)
+    codes[absent] = -1
+    return codes
 
 
 def _signed_log(values: FloatArray) -> FloatArray:
@@ -237,10 +263,8 @@ class LinearDesign:
             values = features[name]
             kind = cls._kind(name)
             if kind == CATEGORY:
-                absent = _missing(values)
-                levels = sorted({str(v) for v in np.asarray(values, dtype=object)[~absent]})
-                design.categories[name] = tuple(levels)
-                design.flags[name] = bool(absent.any())
+                design.categories[name] = _levels(values)
+                design.flags[name] = bool(_missing(values).any())
             elif kind == FLAG:
                 design.flags[name] = bool(np.isnan(np.asarray(values, dtype=np.float64)).any())
             else:
@@ -284,13 +308,12 @@ class LinearDesign:
             values = features[name]
             kind = self._kind(name)
             if kind == CATEGORY:
-                absent = _missing(values)
-                text = np.array([str(v) for v in np.asarray(values, dtype=object)], dtype=object)
-                for level in self.categories[name]:
-                    out[:, j] = (text == level) & ~absent
-                    j += 1
+                codes = _codes(values, self.categories[name])
+                known = np.flatnonzero(codes >= 0)
+                out[known, j + codes[known]] = 1.0
+                j += len(self.categories[name])
                 if self.flags[name]:
-                    out[:, j] = absent
+                    out[:, j] = _missing(values)
                     j += 1
             elif kind == FLAG:
                 raw = np.asarray(values, dtype=np.float64)
@@ -314,12 +337,7 @@ def tree_levels(
     features: Mapping[str, npt.NDArray[Any]], names: Sequence[str]
 ) -> dict[str, tuple[str, ...]]:
     """The levels of each categorical feature among these rows, sorted."""
-    levels = {}
-    for name in names:
-        if BY_NAME[name].kind == CATEGORY:
-            values = np.asarray(features[name], dtype=object)
-            levels[name] = tuple(sorted({str(v) for v in values[~_missing(values)]}))
-    return levels
+    return {name: _levels(features[name]) for name in names if BY_NAME[name].kind == CATEGORY}
 
 
 def tree_matrix(
@@ -337,12 +355,8 @@ def tree_matrix(
     for j, name in enumerate(names):
         values = features[name]
         if name in levels:
-            code = {level: float(i) for i, level in enumerate(levels[name])}
-            absent = _missing(values)
-            out[:, j] = [
-                np.nan if gone else code.get(str(v), np.nan)
-                for v, gone in zip(np.asarray(values, dtype=object), absent, strict=True)
-            ]
+            codes = _codes(values, levels[name])
+            out[:, j] = np.where(codes < 0, np.nan, codes)
         else:
             out[:, j] = np.asarray(values, dtype=np.float64)
     return out
@@ -359,7 +373,7 @@ class DiscreteTimeModel:
     feature_matrix: bool = True
     settings: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)
-    _scored: tuple[Any, FloatArray, FloatArray] | None = field(default=None, repr=False)
+    _scored: tuple[Any, FloatArray, FloatArray, int] | None = field(default=None, repr=False)
 
     @property
     def features(self) -> tuple[str, ...]:
@@ -404,24 +418,40 @@ class DiscreteTimeModel:
     def _size(self) -> int:
         raise NotImplementedError
 
-    def _probabilities(self, features: Mapping[str, npt.NDArray[Any]], interval: int) -> FloatArray:
+    def _landmark_matrix(self, features: Mapping[str, npt.NDArray[Any]]) -> npt.NDArray[np.float32]:
+        """The columns of the landmark rows, without the interval."""
+        raise NotImplementedError
+
+    def _probabilities(self, landmark: npt.NDArray[np.float32], interval: int) -> FloatArray:
         """The probability of each of `CLASSES` in one interval, per landmark row."""
         raise NotImplementedError
 
-    def hazards(self, rows: LandmarkRows) -> tuple[FloatArray, FloatArray]:
-        """The hazards of an early stop and of a completion in each interval, per row."""
-        if self._scored is not None and self._scored[0] is rows:
-            return self._scored[1], self._scored[2]
-        started = clock.perf_counter()
+    def hazards(
+        self, rows: LandmarkRows, intervals: int | None = None
+    ) -> tuple[FloatArray, FloatArray]:
+        """The hazards of an early stop and of a completion in each of the first `intervals`
+        intervals (all of them by default), per row. The hazards of the rows scored last are
+        kept, so a second horizon costs only the intervals the first did not need."""
+        wanted = self.n_intervals if intervals is None else intervals
+        done = 0
         stop = np.empty((len(rows), self.n_intervals))
         complete = np.empty((len(rows), self.n_intervals))
-        for j in range(1, self.n_intervals + 1):
-            p = self._probabilities(rows.features, j)
-            stop[:, j - 1], complete[:, j - 1] = p[:, EVENT_STOP], p[:, EVENT_COMPLETE]
-        self._scored = (rows, stop, complete)
-        self.summary["predict_seconds"] = round(clock.perf_counter() - started, 1)
-        self.summary["predicted_rows"] = len(rows)
-        return stop, complete
+        if self._scored is not None and self._scored[0] is rows:
+            _, stop, complete, done = self._scored
+        if done < wanted:
+            started = clock.perf_counter()
+            landmark = self._landmark_matrix(rows.features)
+            for j in range(done + 1, wanted + 1):
+                p = self._probabilities(landmark, j)
+                stop[:, j - 1], complete[:, j - 1] = p[:, EVENT_STOP], p[:, EVENT_COMPLETE]
+            self._scored = (rows, stop, complete, wanted)
+            seconds = clock.perf_counter() - started
+            again = self.summary.get("predicted_rows") == len(rows) and done > 0
+            self.summary["predict_seconds"] = round(
+                seconds + (self.summary.get("predict_seconds", 0.0) if again else 0.0), 1
+            )
+            self.summary["predicted_rows"] = len(rows)
+        return stop[:, :wanted], complete[:, :wanted]
 
     def predict_months(self, rows: LandmarkRows, months: int) -> FloatArray:
         intervals, rest = divmod(months, int(self.cfg.discrete_time.interval_months))
@@ -430,7 +460,7 @@ class DiscreteTimeModel:
                 f"a horizon of {months} months is not a whole number of intervals within "
                 f"{self.n_intervals}"
             )
-        stop, complete = self.hazards(rows)
+        stop, complete = self.hazards(rows, intervals)
         cif: FloatArray = cumulative_incidence(stop, complete)[:, intervals - 1]
         return cif
 
@@ -460,7 +490,8 @@ class DiscreteTimeLogistic(DiscreteTimeModel):
         self.model = LogisticRegression(
             C=float(self.settings["C"]), max_iter=LOGISTIC_MAX_ITER, tol=1e-4
         )
-        self.model.fit(x, periods.outcome)
+        with threadpool_limits(limits=1):  # see the module text
+            self.model.fit(x, periods.outcome)
         iterations = int(np.max(self.model.n_iter_))
         return {
             "columns": x.shape[1],
@@ -471,12 +502,17 @@ class DiscreteTimeLogistic(DiscreteTimeModel):
     def _size(self) -> int:
         return len(pickle.dumps((self.design, self.model)))
 
-    def _probabilities(self, features: Mapping[str, npt.NDArray[Any]], interval: int) -> FloatArray:
-        if self.design is None or self.model is None:
+    def _landmark_matrix(self, features: Mapping[str, npt.NDArray[Any]]) -> npt.NDArray[np.float32]:
+        if self.design is None:
             raise RuntimeError(f"{self.name} is not fitted")
-        landmark = self.design.matrix(features)
+        return self.design.matrix(features)
+
+    def _probabilities(self, landmark: npt.NDArray[np.float32], interval: int) -> FloatArray:
+        if self.model is None:
+            raise RuntimeError(f"{self.name} is not fitted")
         x = self._columns(landmark, np.full(len(landmark), interval, dtype=np.int64))
-        raw = self.model.predict_proba(x)
+        with threadpool_limits(limits=1):
+            raw = self.model.predict_proba(x)
         out = np.zeros((len(landmark), len(CLASSES)))
         for column, label in enumerate(self.model.classes_):  # a class absent in training stays 0
             out[:, int(label)] = raw[:, column]
@@ -555,10 +591,14 @@ class DiscreteTimeBoosting(DiscreteTimeModel):
     def _size(self) -> int:
         return 0 if self.booster is None else len(self.booster.model_to_string())
 
-    def _probabilities(self, features: Mapping[str, npt.NDArray[Any]], interval: int) -> FloatArray:
+    def _landmark_matrix(self, features: Mapping[str, npt.NDArray[Any]]) -> npt.NDArray[np.float32]:
         if self.booster is None:
             raise RuntimeError(f"{self.name} is not fitted")
-        landmark = tree_matrix(features, self.features, self.levels)
+        return tree_matrix(features, self.features, self.levels)
+
+    def _probabilities(self, landmark: npt.NDArray[np.float32], interval: int) -> FloatArray:
+        if self.booster is None:
+            raise RuntimeError(f"{self.name} is not fitted")
         x = np.column_stack([landmark, np.full(len(landmark), float(interval), dtype=np.float32)])
         out: FloatArray = np.asarray(self.booster.predict(x), dtype=np.float64)
         return out

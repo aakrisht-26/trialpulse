@@ -105,7 +105,7 @@ def test_committed_config_matches_locked_definitions() -> None:
     assert cfg.features.sponsor_alias_wait_days == 365  # ADR 0018
     assert cfg.features.text_hash_bits == 18  # ADR 0019
     assert cfg.tuning.n_trials == 40  # Section 9: a fixed budget of 40 trials per model
-    assert cfg.tuning.trial_sample_share == 0.25
+    assert cfg.tuning.trial_sample_share == 0.10
 
 
 def test_environment_cannot_override_project_config(monkeypatch: pytest.MonkeyPatch) -> None:
