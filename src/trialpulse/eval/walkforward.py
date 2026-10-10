@@ -35,6 +35,14 @@ early stop at each horizon (`predict_months`). Two attributes say what it needs:
   landmark 0 only. Its censoring groups are still decided on all the evaluation rows of
   the origin, so its rows carry the same weights as M0's rows at that landmark index.
 
+**Predictions.** With a predictions folder, the scores of every evaluation row are saved
+per origin, with the row's follow-up, event and censoring group. `trialpulse.eval.compare`
+reads them to bootstrap the difference between two models on the same resampled trials.
+The files hold registry ids and scores only, and are not committed.
+
+**Tuning.** `--tune` first chooses a model's settings on the development origins
+(`trialpulse.models.tuning`), then runs the model with them.
+
 **Tracking.** The command logs each run to MLflow (`trialpulse.tracking`): the commit it
 started from, the dataset revision, the configuration, the pooled metrics and the results
 file. The results file is written first. If the run cannot be logged, the command says so
@@ -47,11 +55,14 @@ import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, Self
 
+import duckdb
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 
 from trialpulse import tracking
 from trialpulse.config import REPO_ROOT, Origin, ProjectConfig, load_project_config
@@ -76,10 +87,12 @@ from trialpulse.eval.rows import (
     load_landmark_rows,
     training_path,
 )
+from trialpulse.models import discrete_time
 from trialpulse.models.aalen_johansen import AalenJohansenModel
 from trialpulse.models.static_clf import StaticClassifier
 
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "walkforward"
+PREDICTIONS_DIR = RESULTS_DIR / "predictions"
 FEATURES_DIR = REPO_ROOT / "data" / "features"
 CENSORING_COLUMN = "stratum"  # the lead sponsor class at the landmark (ADR 0017)
 TRAINING, EVALUATION = "training", "evaluation"
@@ -113,6 +126,8 @@ FeatureLoader = Callable[[dt.date, str, tuple[int, ...] | None], FeatureRows]
 MODELS: dict[str, Callable[[ProjectConfig], WalkForwardModel]] = {
     "m0": lambda cfg: AalenJohansenModel(),
     "m1": StaticClassifier,
+    # M2, M3, M4 and the ablation rungs of M4 (ADR 0024).
+    **{name: partial(discrete_time.build, name) for name in discrete_time.FAMILY_SETS},
 }
 
 
@@ -189,6 +204,7 @@ def evaluate_predictions(
     cfg: ProjectConfig,
     n_resamples: int,
     context: str = "",
+    years: npt.NDArray[Any] | None = None,
 ) -> dict[str, Any]:
     """The metrics of one slice. The primary values weight each row by the censoring curve
     of its group (ADR 0017). `groups` holds the group of each row, decided beforehand on all
@@ -230,6 +246,9 @@ def evaluate_predictions(
             time, event, score, float(np.median(horizon)), ev.calibration_bins
         ),
         "calibration_by_group": calibration_by_group(time, event, score, horizon, groups),
+        "calibration_by_registration_year": []
+        if years is None
+        else calibration_by_group(time, event, score, horizon, groups, by=years),
         "single_censoring_curve": {
             "auc": ipcw_auc(time, event, score, horizon),
             "brier": ipcw_brier(time, event, score, horizon),
@@ -238,6 +257,50 @@ def evaluate_predictions(
             "calibration_intercept": single_intercept,
         },
     }
+
+
+def registration_years(rows: LandmarkRows, spacing_months: int) -> IntArray:
+    """The calendar year each row's trial was first posted: its landmark date less the
+    landmark index times the spacing of the landmarks."""
+    first_post = rows.landmark_date.copy()
+    for k in np.unique(rows.landmark_index):
+        member = rows.landmark_index == k
+        first_post[member] = add_months(rows.landmark_date[member], -spacing_months * int(k))
+    years: IntArray = first_post.astype("datetime64[Y]").astype(np.int64) + 1970
+    return years
+
+
+def save_predictions(
+    path: Path,
+    rows: LandmarkRows,
+    time: FloatArray,
+    event: IntArray,
+    groups: npt.NDArray[Any],
+    scores: Mapping[int, FloatArray],
+) -> None:
+    """The scores of an origin's evaluation rows, one row per landmark row, sorted by key."""
+    frame = pd.DataFrame(  # noqa: F841 (read by DuckDB below)
+        {
+            "trial_id": rows.trial_id.astype(str),
+            "landmark_index": rows.landmark_index,
+            "landmark_date": rows.landmark_date,
+            "time": time,
+            "event": event,
+            "censoring_group": np.asarray(groups).astype(str),
+            **{f"score_{months}": score for months, score in scores.items()},
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with duckdb.connect() as con:
+        con.execute(
+            f"""COPY (SELECT * REPLACE (CAST(landmark_date AS DATE) AS landmark_date) FROM frame
+            ORDER BY trial_id, landmark_index) TO '{path.as_posix()}' (FORMAT parquet)"""
+        )
+
+
+def predictions_path(folder: Path, model: str, origins_spec: str, origin: dt.date) -> Path:
+    spec = origins_spec.replace(",", "-")
+    return folder / f"{model}_{spec}" / f"origin_{origin.isoformat()}.parquet"
 
 
 def run(
@@ -250,6 +313,7 @@ def run(
     repo: Path = REPO_ROOT,
     n_resamples: int | None = None,
     load_features: FeatureLoader | None = None,
+    predictions_dir: Path | None = None,
 ) -> dict[str, Any]:
     origins = select_origins(cfg, origins_spec)
     unlock = require_unlock({o.role for o in origins}, repo, unlock_flag)  # before any data
@@ -305,23 +369,30 @@ def run(
                 ev, load_features(origin.date, EVALUATION, only), "evaluation rows"
             )
         model.fit_rows(train, train_time, train_event, origin.date)
+        years = registration_years(ev, cfg.landmarks.spacing_months)
         horizons: dict[str, Any] = {}
+        scores: dict[int, FloatArray] = {}
         for months in cfg.horizons_months:
             h = horizon_days(ev.landmark_date, months)
-            score = model.predict_months(ev, months)
+            score = scores[months] = model.predict_months(ev, months)
             where = f"origin {origin.date.isoformat()}, horizon {months} months"
             pooled = evaluate_predictions(
                 ev_time, ev_event, score, h, ev.trial_id, groups, cfg, resamples,
-                f"{where}, pooled",
+                f"{where}, pooled", years,
             )  # fmt: skip
             by_index = {}
             for k in np.unique(ev.landmark_index):
                 m = ev.landmark_index == k
                 by_index[str(int(k))] = evaluate_predictions(
                     ev_time[m], ev_event[m], score[m], h[m], ev.trial_id[m], groups[m],
-                    cfg, resamples, f"{where}, landmark index {int(k)}",
+                    cfg, resamples, f"{where}, landmark index {int(k)}", years[m],
                 )  # fmt: skip
             horizons[str(months)] = {"pooled": pooled, "by_landmark_index": by_index}
+        if predictions_dir is not None:
+            save_predictions(
+                predictions_path(predictions_dir, model_name, origins_spec, origin.date),
+                ev, ev_time, ev_event, groups, scores,
+            )  # fmt: skip
         results["origins"].append(
             {
                 "origin": origin.date.isoformat(),
@@ -418,10 +489,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--training-dir", type=Path, default=TRAINING_DIR)
     parser.add_argument("--features-dir", type=Path, default=FEATURES_DIR)
     parser.add_argument("--resamples", type=int, default=None)
+    parser.add_argument("--predictions-dir", type=Path, default=PREDICTIONS_DIR)
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="choose the model's settings first (development origins, Section 9)",
+    )
     tracking.add_arguments(parser)
     args = parser.parse_args(argv)
     cfg = load_project_config()
     started = tracking.git_state()
+    if args.tune:
+        from trialpulse.models.tuning import main as tune
+
+        code: int = tune(
+            ["--model", args.model, "--input", str(args.input),
+             "--training-dir", str(args.training_dir), "--features-dir", str(args.features_dir),
+             *(["--no-track"] if args.no_track else []),
+             *(["--local-tracking"] if args.local_tracking else [])]
+        )  # fmt: skip
+        if code != 0:
+            return code
     try:
         results = run(
             cfg,
@@ -432,6 +520,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             unlock_flag=args.unlock_test,
             n_resamples=args.resamples,
             load_features=feature_loader(cfg, args.features_dir, args.input.parent),
+            predictions_dir=args.predictions_dir,
         )
     except (TestLockError, FileNotFoundError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)

@@ -572,3 +572,133 @@ def test_rows_take_feature_columns_of_their_own_length_only() -> None:
     assert set(renamed.features["stratum"].tolist()) == {"from the feature build"}
     with pytest.raises(ValueError, match=f"risk: {len(rows) - 1} values for {len(rows)} rows"):
         rows.with_features({"risk": np.zeros(len(rows) - 1)})
+
+
+# Step 10: saved predictions, the registration year, tuning before a run ---------------------------
+
+
+def test_the_registration_year_is_the_landmark_less_its_index() -> None:
+    """Landmark k lies 6k months after the first post date."""
+    rows = LandmarkRows(
+        np.array(["a", "b", "c", "d"]),
+        np.array([0, 1, 2, 6], dtype=np.int64),
+        np.array(["2016-03-10", "2016-03-10", "2016-12-31", "2019-01-01"], dtype="datetime64[D]"),
+        np.zeros(4, dtype=np.int64),
+        np.array(["2020-01-01"] * 4, dtype="datetime64[D]"),
+        {"stratum": np.array(["x"] * 4)},
+    )
+    # 2016-03-10; 2015-09-10; 2015-12-31; 2016-01-01.
+    assert walkforward.registration_years(rows, 6).tolist() == [2016, 2015, 2015, 2016]
+
+
+def test_every_slice_reports_calibration_by_registration_year(cfg: ProjectConfig) -> None:
+    rows = _rows()
+    origin = run(cfg, "m0", "2016", lambda: rows, _training, n_resamples=20)["origins"][0]
+    ev, _, _ = evaluation_rows(rows, np.datetime64("2016-01-01"), 12)
+    years = walkforward.registration_years(ev, cfg.landmarks.spacing_months)
+    for months in cfg.horizons_months:
+        pooled = origin["horizons"][str(months)]["pooled"]
+        table = pooled["calibration_by_registration_year"]
+        assert [row["group"] for row in table] == [str(y) for y in sorted(set(years.tolist()))]
+        assert {row["group"] for row in table} == {"2015", "2016"}  # landmarks 0 and 1 of 2016
+        assert sum(row["n"] for row in table) == pooled["n_rows"]
+        for row in table:
+            assert row["n"] == int((years == int(row["group"])).sum())
+            assert 0.0 <= row["mean_predicted"] <= 1.0
+        first = origin["horizons"][str(months)]["by_landmark_index"]["0"]
+        assert {r["group"] for r in first["calibration_by_registration_year"]} == {"2016"}
+
+
+def test_the_harness_saves_the_scores_of_every_evaluation_row(
+    cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(walkforward.MODELS, "probe", _FeatureModel)
+    rows = _rows()
+    run(cfg, "m0", "2016", lambda: rows, _training, n_resamples=10, predictions_dir=tmp_path)
+    run(cfg, "probe", "2016", lambda: rows, _training, n_resamples=10,
+        load_features=_feature_loader(rows, []), predictions_dir=tmp_path)  # fmt: skip
+    day = dt.date(2016, 1, 1)
+    path = walkforward.predictions_path(tmp_path, "m0", "2016", day)
+    assert path == tmp_path / "m0_2016" / "origin_2016-01-01.parquet"
+    assert walkforward.predictions_path(tmp_path, "m4", "2016,2017", day).parent.name == (
+        "m4_2016-2017"
+    )
+    with duckdb.connect() as con:
+        saved = con.execute(f"SELECT * FROM '{path.as_posix()}'").df()
+        other = walkforward.predictions_path(tmp_path, "probe", "2016", day)
+        probe = con.execute(f"SELECT * FROM '{other.as_posix()}'").df()
+    ev, ev_time, ev_event = evaluation_rows(rows, np.datetime64(day, "D"), 12)
+    order = np.lexsort((ev.landmark_index, ev.trial_id))
+    assert list(saved.columns) == [
+        "trial_id", "landmark_index", "landmark_date", "time", "event", "censoring_group",
+        "score_12", "score_24",
+    ]  # fmt: skip
+    assert saved["trial_id"].tolist() == ev.trial_id[order].tolist()
+    assert saved["landmark_index"].tolist() == ev.landmark_index[order].tolist()
+    assert saved["time"].tolist() == ev_time[order].tolist()
+    assert saved["event"].tolist() == ev_event[order].tolist()
+    assert set(saved["censoring_group"]) == {"POOLED"}  # two classes, both under 200 rows
+    # The scores are the model's predictions for those rows.
+    train, time, event = training_rows(_training(day), np.datetime64(day, "D"))
+    from trialpulse.models.aalen_johansen import AalenJohansenModel
+
+    model = AalenJohansenModel().fit_rows(train, time, event, day)
+    assert saved["score_12"].to_numpy() == pytest.approx(model.predict_months(ev, 12)[order])
+    assert saved["score_24"].to_numpy() == pytest.approx(model.predict_months(ev, 24)[order])
+    # A model of landmark 0 only saves its rows only.
+    assert set(probe["landmark_index"]) == {0}
+    assert len(probe) == int((ev.landmark_index == 0).sum())
+    # Without a folder nothing is written.
+    run(cfg, "m0", "2016", lambda: rows, _training, n_resamples=10)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m0_2016", "probe_2016"]
+
+
+def test_the_ladder_and_the_ablation_rungs_are_models_of_the_harness() -> None:
+    assert set(walkforward.MODELS) == {
+        "m0", "m1", "m2", "m3", "m4", "m4-design", "m4-amendments", "m4-sponsor",
+    }  # fmt: skip
+    cfg = load_project_config()
+    for name in ("m2", "m3", "m4", "m4-sponsor"):
+        model = walkforward.MODELS[name](cfg)
+        assert model.name == name
+        assert model.feature_matrix
+        assert model.landmark_indices is None
+
+
+def test_tuning_runs_before_the_model_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trialpulse.models import tuning
+
+    order: list[Any] = []
+    codes = iter([0, tracking.FAILED_EXIT_CODE])
+
+    def tune(argv: list[str]) -> int:
+        order.append(("tune", argv))
+        return next(codes)
+
+    def fake_run(*args: object, **kwargs: object) -> dict[str, object]:
+        order.append("run")
+        return {"model": "m4", "origins_spec": "dev", "origins": [], "bootstrap_resamples": 5,
+                "training_labels": "as of each origin (ADR 0016)"}  # fmt: skip
+
+    monkeypatch.setattr(tuning, "main", tune)
+    monkeypatch.setattr(walkforward, "run", fake_run)
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
+    args = ["--model", "m4", "--origins", "dev", "--tune", "--local-tracking",
+            "--features-dir", str(tmp_path / "features")]  # fmt: skip
+    assert walkforward.main(args) == 0
+    (first, argv), second = order
+    assert (first, second) == ("tune", "run")
+    assert argv[:2] == ["--model", "m4"]
+    assert argv[argv.index("--features-dir") + 1] == str(tmp_path / "features")
+    assert "--local-tracking" in argv  # the tuning run is logged where the model run is
+    assert "--no-track" not in argv
+    # A tuning that fails stops the command before the model runs.
+    order.clear()
+    assert walkforward.main(args) == tracking.FAILED_EXIT_CODE
+    assert [step if isinstance(step, str) else step[0] for step in order] == ["tune"]
+    # Without --tune nothing is tuned.
+    order.clear()
+    assert walkforward.main([*args[:4], "--no-track"]) == 0
+    assert order == ["run"]
