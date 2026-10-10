@@ -92,9 +92,14 @@ def test_a_failure_is_explained_on_one_line_without_the_password(
     assert "\n" not in text
     assert text.startswith("API request to endpoint")
     assert "the repository named in MLFLOW_TRACKING_URI does not exist there" in text
-    leaked = RuntimeError("could not reach https://someone:not-a-real-password@host/x")
-    assert "not-a-real-password" not in tracking.explain(leaked, server)
-    assert "[password]" in tracking.explain(leaked, server)
+    leaked = RuntimeError("the server refused the password not-a-real-password")
+    assert tracking.explain(leaked, server) == "the server refused the password [password]"
+    # Credentials written inside an address go too, whatever they are.
+    address = RuntimeError("could not reach https://someone:another-token@host/x?y=1")
+    assert tracking.explain(address, server) == "could not reach https://[credentials]@host/x?y=1"
+    assert tracking.explain(RuntimeError("see https://host/a@b"), server) == "see https://host/a@b"
+    # Before a target exists (the store could not even be chosen) there is no hint to add.
+    assert tracking.explain(RuntimeError("error 404"), None) == "error 404"
     # The hint is about a server; a local store that fails gets its own message only.
     local = tracking.Target(tracking.LOCAL, "sqlite:///x.db")
     assert tracking.explain(RuntimeError("error 404"), local) == "error 404"
@@ -104,8 +109,11 @@ def test_a_failure_is_explained_on_one_line_without_the_password(
 def test_a_configured_server_is_used_and_its_password_is_never_shown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("MLFLOW_TRACKING_USERNAME", raising=False)
-    monkeypatch.delenv("MLFLOW_TRACKING_PASSWORD", raising=False)
+    # Set, then removed: monkeypatch then knows both names and takes away at the end of the
+    # test what tracking_target writes into the environment of this process.
+    for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
+        monkeypatch.setenv(name, "placeholder")
+        monkeypatch.delenv(name)
     secrets = Secrets(
         _env_file=None,  # type: ignore[call-arg]
         mlflow_tracking_uri="https://tracking.example.test/owner/repo.mlflow",
@@ -121,6 +129,17 @@ def test_a_configured_server_is_used_and_its_password_is_never_shown(
     assert os.environ["MLFLOW_TRACKING_PASSWORD"] == "not-a-real-password"
     for shown in (repr(target), str(target), target.description, repr(secrets)):
         assert "not-a-real-password" not in shown
+    # An address can hold credentials of its own, so a target never shows its address.
+    inside = tracking.Target(tracking.REMOTE, "https://someone:a-token-in-the-address@host/x")
+    assert "a-token-in-the-address" not in repr(inside)
+    assert "host/x" not in repr(inside)
+    assert inside.uri.endswith("@host/x")  # MLflow still gets it
+
+
+def test_the_environment_is_left_as_it_was_by_the_test_above() -> None:
+    """The fake credentials of the test above must not reach the tests that run after it."""
+    assert os.environ.get("MLFLOW_TRACKING_PASSWORD") != "not-a-real-password"
+    assert os.environ.get("MLFLOW_TRACKING_USERNAME") != "someone"
 
 
 def test_the_git_state_is_the_commit_and_whether_tracked_files_changed(tmp_path: Path) -> None:
@@ -207,3 +226,89 @@ def test_a_store_that_refuses_a_run_raises_a_tracking_error_with_the_state_it_wa
     broken = tracking.Target(tracking.LOCAL, "no-such-scheme://nowhere")
     with pytest.raises(tracking.TrackingError):
         tracking.log_run("m1-dev", {}, {"auc": 0.6}, [], cfg, target=broken)
+
+
+def test_only_finite_metrics_are_logged() -> None:
+    kept = tracking.finite_metrics(
+        {"auc": 0.6, "slope": float("nan"), "up": float("inf"), "down": float("-inf"), "n": 3}
+    )
+    assert kept == {"auc": 0.6, "n": 3.0}
+    assert all(isinstance(value, float) for value in kept.values())
+
+
+def test_the_source_of_a_run_is_a_path_inside_the_repository(tmp_path: Path) -> None:
+    """MLflow would log the path of the script on the disk of the machine. A run names the
+    command by its path inside the repository, and by its file name when it is elsewhere."""
+    script = tmp_path / "src" / "trialpulse" / "eval" / "walkforward.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    assert tracking.source_name(tmp_path, str(script)) == "src/trialpulse/eval/walkforward.py"
+    assert tracking.source_name(tmp_path / "elsewhere", str(script)) == "walkforward.py"
+    assert tracking.source_name(tmp_path, "") == "unknown"
+    assert not Path(tracking.source_name()).is_absolute()
+
+
+def test_the_address_of_the_git_remote_is_logged_without_credentials(tmp_path: Path) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, check=True)
+
+    assert tracking.remote_address(tmp_path / "missing") == ""
+    git("init", "-q")
+    assert tracking.remote_address(tmp_path) == ""  # no remote
+    git("remote", "add", "origin", "https://someone:a-token@example.test/owner/repo.git")
+    assert tracking.remote_address(tmp_path) == "https://example.test/owner/repo.git"
+    git("remote", "set-url", "origin", "https://example.test/owner/repo.git")
+    assert tracking.remote_address(tmp_path) == "https://example.test/owner/repo.git"
+
+
+@pytest.mark.slow
+def test_a_run_carries_the_project_s_values_in_the_tags_mlflow_sets_by_itself(
+    tmp_path: Path, real_tracking: None
+) -> None:
+    """MLflow fills these four tags from the machine: HEAD when the run is logged, the path
+    of the script on the disk, the login name, the remote as git has it. A run must carry
+    the commit it started from, and nothing that describes the machine."""
+    import mlflow
+
+    cfg = load_project_config()
+    target = tracking.local_target(tmp_path / "store")
+    started = {"git_commit": "0123abcd", "git_dirty": "no"}
+    info = tracking.log_run("m0-dev", {}, {"auc": 0.6}, [], cfg, target=target, state=started)
+    mlflow.set_tracking_uri(target.uri)
+    tags = mlflow.get_run(info["run_id"]).data.tags
+    assert tags["mlflow.source.git.commit"] == "0123abcd" == tags["git_commit"]
+    assert tags["mlflow.user"] == tracking.RUN_USER == "trialpulse"
+    assert tags["mlflow.source.name"] == tracking.source_name()
+    assert not Path(tags["mlflow.source.name"]).is_absolute()
+    assert tags["mlflow.source.git.repoURL"] == tracking.remote_address()
+    assert "@" not in tags["mlflow.source.git.repoURL"].split("://")[-1].split("/")[0]
+
+
+@pytest.mark.slow
+def test_the_local_option_and_every_failure_before_the_store_reach_log_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, real_tracking: None
+) -> None:
+    """log_run chooses its store with the `local` it was given, and a failure while choosing
+    it is a TrackingError like any other: the command that called keeps its results."""
+    cfg = load_project_config()
+    asked: list[bool] = []
+
+    def choose(secrets: object = None, local_store: object = None, local: bool = False) -> Any:
+        asked.append(local)
+        return tracking.local_target(tmp_path / ("local" if local else "server"))
+
+    monkeypatch.setattr(tracking, "tracking_target", choose)
+    info = tracking.log_run("m1-dev", {}, {"auc": 0.6}, [], cfg, local=True)
+    assert asked == [True]
+    assert (tmp_path / "local" / "mlflow.db").is_file()
+    assert not (tmp_path / "server").exists()
+    assert info["store"] == tracking.LOCAL
+    tracking.log_run("m1-dev", {}, {"auc": 0.6}, [], cfg)
+    assert asked == [True, False]
+
+    def no_store(*args: object, **kwargs: object) -> Any:
+        raise PermissionError("the folder of the local store cannot be created")
+
+    monkeypatch.setattr(tracking, "tracking_target", no_store)
+    with pytest.raises(tracking.TrackingError, match="cannot be created"):
+        tracking.log_run("m1-dev", {}, {"auc": 0.6}, [], cfg)

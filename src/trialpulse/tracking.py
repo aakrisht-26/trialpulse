@@ -19,13 +19,23 @@ somewhere else.
 **What is never logged.** No data rows, no trial texts, no sponsor names and no secrets:
 parameters are settings and identifiers, metrics are numbers, and artifacts are the result
 files a command already wrote (aggregates only) and config/project.yaml.
+
+**MLflow's own tags.** MLflow adds tags to every run from the machine it runs on. Four of
+them are set here instead, because the defaults would be wrong or would publish a detail
+of that machine: the commit is the one the run started from (MLflow reads HEAD when the
+run is logged), the source is the command's path inside the repository (not its path on
+the disk), the user is the project's name (not a login name), and the address of the git
+remote is logged without any credentials it may hold. MLflow still adds the branch name.
 """
 
 import argparse
+import math
 import os
+import re
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +48,8 @@ LOCAL = "local"
 NOT_SET = "MLFLOW_TRACKING_URI is not set"
 ASKED_FOR = "--local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used"
 FAILED_EXIT_CODE = 5
+RUN_USER = "trialpulse"  # the "user" of a run is the project, not a login name
+CREDENTIALS_IN_ADDRESS = re.compile(r"://[^/@\s]+@")
 
 
 class TrackingError(RuntimeError):
@@ -49,7 +61,7 @@ class Target:
     """Where runs are logged."""
 
     kind: str  # "remote" (the configured server) or "local" (mlruns/, temporary)
-    uri: str
+    uri: str = field(repr=False)  # an address may hold credentials: never shown
     artifacts: str = ""  # where a local store keeps artifact files; a server decides its own
     why_local: str = NOT_SET
 
@@ -99,14 +111,16 @@ def local_target(store: Path, why: str = NOT_SET) -> Target:
     )
 
 
-def explain(exc: BaseException, target: Target) -> str:
-    """What went wrong, on one line, without the password of the server. A 404 from a server
-    gets the usual cause: MLflow reports it as a failed request and says no more."""
+def explain(exc: BaseException, target: Target | None) -> str:
+    """What went wrong, on one line, without the password of the server and without
+    credentials written inside an address. A 404 from a server gets the usual cause: MLflow
+    reports it as a failed request and says no more."""
     text = " ".join(str(exc).split()) or type(exc).__name__
     password = os.environ.get("MLFLOW_TRACKING_PASSWORD")
     if password:
         text = text.replace(password, "[password]")
-    if target.kind == REMOTE and "404" in text:
+    text = CREDENTIALS_IN_ADDRESS.sub("://[credentials]@", text)
+    if target is not None and target.kind == REMOTE and "404" in text:
         text += (
             ". A 404 from the server usually means that the repository named in "
             "MLFLOW_TRACKING_URI does not exist there, or that these credentials cannot see it"
@@ -132,6 +146,34 @@ def git_state(repo: Path = REPO_ROOT) -> dict[str, str]:
     return {"git_commit": commit or "unknown", "git_dirty": "yes" if dirty else "no"}
 
 
+def remote_address(repo: Path = REPO_ROOT) -> str:
+    """The address of the repository's git remote, without credentials; empty if none."""
+    try:
+        done = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=repo, capture_output=True, text=True, check=False,
+        )  # fmt: skip
+    except OSError:
+        return ""
+    address = done.stdout.strip() if done.returncode == 0 else ""
+    return CREDENTIALS_IN_ADDRESS.sub("://", address)
+
+
+def source_name(repo: Path = REPO_ROOT, script: str | None = None) -> str:
+    """The running command as a path inside the repository, or its file name when it is
+    not inside: never a path of the machine it ran on."""
+    path = Path(sys.argv[0] if script is None else script)
+    try:
+        return path.resolve().relative_to(repo.resolve()).as_posix()
+    except (ValueError, OSError):
+        return path.name or "unknown"
+
+
+def finite_metrics(metrics: Mapping[str, float]) -> dict[str, float]:
+    """The metrics a store can take: a value that is not a number, or not finite, is left out."""
+    return {name: float(value) for name, value in metrics.items() if math.isfinite(value)}
+
+
 def log_run(
     name: str,
     params: Mapping[str, Any],
@@ -150,17 +192,24 @@ def log_run(
     state is read now. Metrics that are not finite are left out (MLflow refuses them on some
     stores) and counted in a tag. Raises TrackingError if the store does not take the run."""
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")  # no advice lines in the output
-    import mlflow
-
-    target = target or tracking_target(local=local)
     state = dict(state) if state is not None else git_state(repo)
-    finite = {k: float(v) for k, v in metrics.items() if v == v and abs(v) != float("inf")}
+    finite = finite_metrics(metrics)
+    own = {
+        "mlflow.source.git.commit": state["git_commit"],
+        "mlflow.source.git.repoURL": remote_address(repo),
+        "mlflow.source.name": source_name(repo),
+        "mlflow.user": RUN_USER,
+    }
+    resolved = target
     try:
-        mlflow.set_tracking_uri(target.uri)
-        if target.artifacts and mlflow.get_experiment_by_name(EXPERIMENT) is None:
-            mlflow.create_experiment(EXPERIMENT, artifact_location=target.artifacts)
+        import mlflow
+
+        resolved = target or tracking_target(local=local)
+        mlflow.set_tracking_uri(resolved.uri)
+        if resolved.artifacts and mlflow.get_experiment_by_name(EXPERIMENT) is None:
+            mlflow.create_experiment(EXPERIMENT, artifact_location=resolved.artifacts)
         mlflow.set_experiment(EXPERIMENT)
-        with mlflow.start_run(run_name=name) as active:
+        with mlflow.start_run(run_name=name, tags=own) as active:
             mlflow.set_tags(
                 {
                     **state,
@@ -178,10 +227,10 @@ def log_run(
                     mlflow.log_artifact(str(path))
             run_id = active.info.run_id
     except Exception as exc:  # whatever the client raises: the caller keeps its results
-        raise TrackingError(explain(exc, target)) from exc
+        raise TrackingError(explain(exc, resolved)) from exc
     return {
-        "store": target.kind,
-        "store_description": target.description,
+        "store": resolved.kind,
+        "store_description": resolved.description,
         "experiment": EXPERIMENT,
         "run_id": run_id,
         "run_name": name,

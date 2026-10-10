@@ -36,8 +36,10 @@ def one_ssl_context_for_the_session() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def tracked_runs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """No test logs a run to the project's MLflow server. A command that would log one adds
-    a record to this list instead. A test that asks for the `real_tracking` fixture gets the
-    real function, and must give it a local store of its own."""
+    a record to this list instead, with everything the command handed over (the local
+    option and the git state included, so a test can follow them from the command line to
+    the store). A test that asks for the `real_tracking` fixture gets the real function, and
+    must give it a local store of its own."""
     from trialpulse import tracking
 
     runs: list[Any] = []
@@ -53,6 +55,8 @@ def tracked_runs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
                 "metrics": dict(metrics),
                 "artifacts": [str(a) for a in artifacts],
                 "tags": dict(tags or {}),
+                "local": kwargs.get("local", False),
+                "state": kwargs.get("state"),
             }
         )
         return {"store": "test", "store_description": "a list kept by the test", "run_id": "0",

@@ -352,8 +352,6 @@ def test_a_feature_model_gets_its_rows_with_features_at_its_landmark_indices(
         assert set(written["by_landmark_index"]) == {"0"}
         assert written["pooled"]["n_rows"] == origin["n_eval_rows"]
         assert written["pooled"]["auc"]["estimate"] > 0.55  # the feature carries the ranking
-    # The censoring groups are decided on all the evaluation rows of the origin, before the
-    # landmark filter: the same groups M0 has at landmark index 0.
     m0 = run(cfg, "m0", "2016", lambda: rows, _training, n_resamples=20)["origins"][0]
     assert (
         origin["censoring_groups"]
@@ -361,6 +359,50 @@ def test_a_feature_model_gets_its_rows_with_features_at_its_landmark_indices(
     )
     assert m0["landmark_indices"] == "all"
     assert m0["model_summary"] is None
+
+
+def test_the_censoring_groups_are_decided_before_the_landmark_filter(
+    cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0017: a class gets a censoring curve of its own if it has enough rows among all
+    the evaluation rows of the origin. A model of landmark 0 only must keep those groups,
+    although at landmark 0 alone the same classes are too small: only then do its rows carry
+    the weights M0's rows carry there. (On the real rows this is FED, NIH and NETWORK.)"""
+    monkeypatch.setitem(walkforward.MODELS, "probe", _FeatureModel)
+    rows = _rows()
+    ev, _, _ = evaluation_rows(rows, np.datetime64("2016-01-01"), 12)
+    overall = {
+        str(name): int(n)
+        for name, n in zip(*np.unique(ev.features["stratum"], return_counts=True), strict=True)
+    }
+    first = ev.landmark_index == 0
+    at_zero = {
+        str(name): int(n)
+        for name, n in zip(*np.unique(ev.features["stratum"][first], return_counts=True),
+                           strict=True)
+    }  # fmt: skip
+    # A threshold between the two counts of every class: large enough overall, too small at
+    # landmark 0.
+    threshold = max(at_zero.values()) + 1
+    assert threshold <= min(overall.values())
+    tight = cfg.model_copy(
+        update={"evaluation": cfg.evaluation.model_copy(update={"censoring_min_rows": threshold})}
+    )
+    origin = run(
+        tight, "probe", "2016", lambda: rows, _training, n_resamples=20,
+        load_features=_feature_loader(rows, []),
+    )["origins"][0]  # fmt: skip
+    assert origin["censoring_groups"] == at_zero  # each class under its own name, none pooled
+    m0 = run(tight, "m0", "2016", lambda: rows, _training, n_resamples=20)["origins"][0]
+    for months in tight.horizons_months:
+        ours = origin["horizons"][str(months)]["pooled"]
+        theirs = m0["horizons"][str(months)]["by_landmark_index"]["0"]
+        assert ours["censoring_groups"] == theirs["censoring_groups"] == at_zero
+        # The same rows with the same weights: the observed rate of each group is the same
+        # number under both models.
+        assert [(g["group"], g["n"], g["observed"]) for g in ours["calibration_by_group"]] == [
+            (g["group"], g["n"], g["observed"]) for g in theirs["calibration_by_group"]
+        ]
 
 
 def test_a_feature_model_is_refused_without_features_or_with_those_of_other_rows(
@@ -426,6 +468,8 @@ def test_the_command_logs_each_run_unless_told_not_to(
     assert saved["tracking"]["run_name"] == "m0-2016"
     (logged,) = tracked_runs
     assert logged["name"] == "m0-2016"
+    assert logged["local"] is False
+    assert logged["state"] == tracking.git_state()  # read by the command, handed to the store
     assert logged["artifacts"] == [str(out)]
     assert logged["params"]["model"] == "m0"
     assert logged["params"]["origin_dates"] == "2016-01-01"
@@ -457,33 +501,61 @@ def test_a_tracking_failure_keeps_the_results_and_fails_the_command(
 
 
 def test_the_run_is_credited_to_the_commit_it_started_from_and_can_go_to_the_local_store(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
 ) -> None:
     """The git state is read before the work, not when the run is logged: a commit made
     during a 40-minute run must not be named as the code that produced it."""
     order: list[str] = []
-    seen: dict[str, object] = {}
+    started = {"git_commit": "started-here", "git_dirty": "no"}
 
     def state() -> dict[str, str]:
         order.append("state")
-        return {"git_commit": "started-here", "git_dirty": "no"}
+        return dict(started)
 
     def run(*args: object, **kwargs: object) -> dict[str, object]:
         order.append("run")
-        return {"model": "m0", "origins_spec": "2016", "origins": []}
-
-    def track(results: object, cfg: object, out: object, local: bool, started: object) -> object:
-        seen.update(local=local, state=started)
-        return {"store_description": "a list kept by the test"}
+        return {"model": "m0", "origins_spec": "2016", "origins": [], "bootstrap_resamples": 20,
+                "training_labels": "as of each origin (ADR 0016)"}  # fmt: skip
 
     monkeypatch.setattr(tracking, "git_state", state)
     monkeypatch.setattr(walkforward, "run", run)
-    monkeypatch.setattr(walkforward, "track", track)
     monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
     assert walkforward.main(["--model", "m0", "--origins", "2016", "--local-tracking"]) == 0
     assert order == ["state", "run"]
-    assert seen == {"local": True, "state": {"git_commit": "started-here", "git_dirty": "no"}}
+    # What the command line asked for reaches the store, through track: not only main.
+    assert [(r["local"], r["state"]) for r in tracked_runs] == [(True, started)]
     assert walkforward.main(["--model", "m0", "--origins", "2016"]) == 0
-    assert seen["local"] is False
+    assert [(r["local"], r["state"]) for r in tracked_runs] == [(True, started), (False, started)]
     with pytest.raises(SystemExit):  # one or the other, not both
         walkforward.main(["--model", "m0", "--origins", "2016", "--no-track", "--local-tracking"])
+
+
+def test_a_run_of_a_locked_origin_would_be_tagged_with_its_unlock(
+    cfg: ProjectConfig, tmp_path: Path, tracked_runs: list[Any]
+) -> None:
+    """Section 10: the registration that unlocked a test run is recorded with the run in
+    MLflow. No locked origin is evaluated here: `track` is handed a results record as the
+    harness would write it at Step 11."""
+    results: dict[str, Any] = {
+        "model": "m4", "origins_spec": "test", "bootstrap_resamples": 1000,
+        "training_labels": "as of each origin (ADR 0016)", "origins": [],
+        "unlock": {"tag": "prereg-v1", "commit": "abc1234", "registered": "2026-11-01"},
+    }  # fmt: skip
+    walkforward.track(results, cfg, tmp_path / "m4_test.json")
+    assert tracked_runs[-1]["tags"] == {
+        "kind": "walk-forward", "roles": "", "test_lock": "unlocked", "unlock_tag": "prereg-v1",
+        "unlock_commit": "abc1234", "unlock_registered": "2026-11-01",
+    }  # fmt: skip
+    results["unlock"] = None
+    walkforward.track(results, cfg, tmp_path / "m4_test.json")
+    assert tracked_runs[-1]["tags"] == {"kind": "walk-forward", "roles": "", "test_lock": "locked"}
+
+
+def test_rows_take_feature_columns_of_their_own_length_only() -> None:
+    rows = _rows(n_trials=20)
+    more = rows.with_features({"risk": np.arange(len(rows), dtype=np.float64)})
+    assert set(more.features) == {"stratum", "risk"}
+    assert more.features["risk"][-1] == len(rows) - 1
+    assert "risk" not in rows.features  # the rows handed in are not changed
+    with pytest.raises(ValueError, match=f"risk: {len(rows) - 1} values for {len(rows)} rows"):
+        rows.with_features({"risk": np.zeros(len(rows) - 1)})
