@@ -33,6 +33,21 @@ def one_ssl_context_for_the_session() -> Iterator[None]:
     patch.undo()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def default_model_settings(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """The tests fit the discrete-time models with their default settings, whatever the
+    tuning last wrote to config/tuned: those files change with every tuning, and a test
+    that read them failed on the day M4's were committed. A test that needs tuned settings
+    writes a file of its own. For the whole session, so that a model fitted once per module
+    is covered too. `tests/models/test_tuned_files.py` reads the committed files on purpose."""
+    from trialpulse.models import discrete_time
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(discrete_time, "TUNED_DIR", tmp_path_factory.mktemp("no_tuned_settings"))
+    yield
+    patch.undo()
+
+
 @pytest.fixture(autouse=True)
 def tracked_runs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """No test logs a run to the project's MLflow server. A command that would log one adds
