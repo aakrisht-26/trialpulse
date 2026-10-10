@@ -16,7 +16,7 @@ from trialpulse.cli import RefusedError
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import diagnosis as dg
 from trialpulse.eval.ipcw import censoring_groups, horizon_labels_and_weights
-from trialpulse.eval.metrics import calibration_slope_intercept, ipcw_auc
+from trialpulse.eval.metrics import calibration_slope_intercept, ipcw_auc, ipcw_brier
 from trialpulse.eval.walkforward import (
     evaluation_rows,
     horizon_days,
@@ -213,6 +213,10 @@ def test_what_became_of_the_trials_censored_on_the_origin(hand_cohort: dict[str,
             _outcome("A", D(2013, 6, 1), censor_reason="unknown"),
             _outcome("B", T),
             _outcome("X", T, reversal=True),
+            # Nor is a trial posted outside the window, or one that was never in the
+            # population (never interventional at a landmark).
+            _outcome("W", T, in_window=False),
+            _outcome("P", T, ever_in_population=False),
         ],
         OUTCOME_COLUMNS,
     )
@@ -397,11 +401,16 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
         .predict_cif(h, ev.features)
     )
     hindsight = reported[dg.HINDSIGHT]
-    grouped, _ = calibration_slope_intercept(ev_time, ev_event, hindsight_score, h, groups)
+    grouped, intercept = calibration_slope_intercept(ev_time, ev_event, hindsight_score, h, groups)
     single, _ = calibration_slope_intercept(ev_time, ev_event, hindsight_score, h)
     assert hindsight["calibration_slope"] == pytest.approx(grouped)
+    assert hindsight["calibration_intercept"] == pytest.approx(intercept)
+    assert abs(grouped - intercept) > 0.1  # a slope printed as the intercept would show
     assert hindsight["calibration_slope_single_curve"] == pytest.approx(single)
     assert abs(grouped - single) > 1e-4  # the two are different numbers on these rows
+    brier = ipcw_brier(ev_time, ev_event, hindsight_score, h, groups)
+    assert hindsight["brier"] == pytest.approx(brier, rel=1e-12)
+    assert abs(brier - ipcw_brier(ev_time, ev_event, hindsight_score, h)) > 1e-6
     assert hindsight["auc"] == pytest.approx(
         ipcw_auc(ev_time, ev_event, hindsight_score, h, groups)
     )

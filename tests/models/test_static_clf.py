@@ -227,11 +227,16 @@ def test_m1_runs_through_the_walk_forward_harness(cfg: ProjectConfig) -> None:
     for months in cfg.horizons_months:
         pooled = result["horizons"][str(months)]["pooled"]
         assert pooled["auc"]["estimate"] > 0.62
-        # A coarse bound on purpose. Other seeds of these simulated rows give slopes from
-        # 1.0 to 1.7, so a narrow one would test the seed. What it must catch is a model
-        # trained on the latest registrations: its slope is 0.2 to 0.3.
-        assert 0.5 < pooled["calibration_slope"] < 2.5
+        # Sanity bounds only: a model that came through the harness is not wildly off.
+        # They name no fault. Other seeds of these simulated rows give slopes from 0.8 to
+        # 1.7 on unchanged code, and no fault tried so far leaves these bounds on these
+        # rows (a model trained on the latest registrations gives 1.2 to 1.5 here, though
+        # 0.2 to 0.3 on the real rows). The faults are caught elsewhere: the rows by the
+        # count in the next line and by the tests above, the weights by the test below.
+        assert 0.6 < pooled["calibration_slope"] < 2.5
         assert abs(pooled["calibration_intercept"]) < 1.0
+        # The harness hands M1 every landmark 0 row before the origin; M1 leaves out the
+        # registrations whose horizon had not passed.
         assert summary[str(months)]["training_rows"] < result["n_train_rows"]
 
 
@@ -245,6 +250,16 @@ def test_each_fit_gets_the_rows_labels_and_weights_of_the_rule(
     those of the evaluation metrics, with one censoring curve per sponsor class fitted on
     the rows whose horizon had passed (ADR 0017, ADR 0023)."""
     rows, time, event = simulated_rows(12_000, seed=4, lapse_share=0.3)
+    # Two small classes, one with lapsed records and one without. Each has enough rows for
+    # a censoring curve of its own among all rows, and too few among the rows whose horizon
+    # had passed, where the groups are decided: there they share the pooled curve.
+    stratum = rows.features["stratum"].copy()
+    stratum[np.flatnonzero(stratum == "OTHER")[:220]] = "FED"
+    stratum[np.flatnonzero(stratum == "INDUSTRY")[:220]] = "NETWORK"
+    rows = type(rows)(
+        rows.trial_id, rows.landmark_index, rows.landmark_date, rows.event, rows.event_date,
+        {**rows.features, "stratum": stratum},
+    )  # fmt: skip
     calls: list[dict[str, Any]] = []
     real = static_clf.lgb.train
 
@@ -263,6 +278,8 @@ def test_each_fit_gets_the_rows_labels_and_weights_of_the_rule(
                 "rounds": kwargs["num_boost_round"],
                 "best": booster.best_iteration,
                 "ran": booster.current_iteration(),
+                "params": dict(params),
+                "patience": [c.stopping_rounds for c in kwargs.get("callbacks") or []],
             }
         )
         return booster
@@ -294,7 +311,22 @@ def test_each_fit_gets_the_rows_labels_and_weights_of_the_rule(
         _, single[complete] = horizon_labels_and_weights(time[complete], event[complete], horizon)
         assert np.abs(final["w"] - single[labeled]).max() > 0.02
         assert final["w"].max() > 1.05
-        assert final["w"][rows.features["stratum"][labeled] != "OTHER"].max() < 1.01
+        assert final["w"][np.isin(stratum[labeled], ["INDUSTRY", "NIH"])].max() < 1.01
+        # The two small classes are pooled: too few rows where the groups are decided,
+        # enough among all rows. NETWORK has no lapsed record, so only the pooled curve
+        # can give its rows a weight above 1.
+        small = cfg.evaluation.censoring_min_rows
+        for name in ("FED", "NETWORK"):
+            assert (classes == name).sum() < small <= (stratum == name).sum()
+        assert set(groups[np.isin(classes, ["FED", "NETWORK"])].tolist()) == {"POOLED"}
+        assert final["w"][stratum[labeled] == "NETWORK"].max() > 1.02
+        # The settings of both fits: the fixed ones with the seed of the configuration, and
+        # the patience of early stopping on the first fit only.
+        expected = {**static_clf.PARAMS, "seed": cfg.seeds.default}
+        assert choosing["params"] == final["params"] == expected
+        assert choosing["patience"] == [static_clf.EARLY_STOPPING_ROUNDS] == [50]
+        assert final["patience"] == []
+        assert model.summary["settings"] == {**expected, "max_rounds": static_clf.MAX_ROUNDS}
         # The fit that chooses the trees: the registrations before the last training year,
         # stopped on that year, which is the latest 12 months whose horizon had passed.
         year_start = add_months(np.array([day]), -(months + 12))[0]

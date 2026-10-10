@@ -98,6 +98,16 @@ def test_a_failure_is_explained_on_one_line_without_the_password(
     address = RuntimeError("could not reach https://someone:another-token@host/x?y=1")
     assert tracking.explain(address, server) == "could not reach https://[credentials]@host/x?y=1"
     assert tracking.explain(RuntimeError("see https://host/a@b"), server) == "see https://host/a@b"
+    # A token alone, a password that holds an "@", and every address of a message.
+    masked = "https://[credentials]@host/x"
+    assert tracking.explain(RuntimeError("https://only-a-token@host/x"), server) == masked
+    assert tracking.explain(RuntimeError("https://user:p@ss@host/x"), server) == masked
+    both = tracking.explain(RuntimeError("see https://a:b@h/x and https://c@i/y"), server)
+    assert both == "see https://[credentials]@h/x and https://[credentials]@i/y"
+    # An "@" after the host begins no user information, and neither does the user of an
+    # address in the short form git uses.
+    for plain in ("https://host?mail=a@b.test", "https://host#part@x", "git@host.test:o/r.git"):
+        assert tracking.explain(RuntimeError(plain), server) == plain
     # Before a target exists (the store could not even be chosen) there is no hint to add.
     assert tracking.explain(RuntimeError("error 404"), None) == "error 404"
     # The hint is about a server; a local store that fails gets its own message only.
@@ -259,6 +269,10 @@ def test_the_address_of_the_git_remote_is_logged_without_credentials(tmp_path: P
     assert tracking.remote_address(tmp_path) == "https://example.test/owner/repo.git"
     git("remote", "set-url", "origin", "https://example.test/owner/repo.git")
     assert tracking.remote_address(tmp_path) == "https://example.test/owner/repo.git"
+    git("remote", "set-url", "origin", "https://only-a-token@example.test/owner/repo.git")
+    assert tracking.remote_address(tmp_path) == "https://example.test/owner/repo.git"
+    git("remote", "set-url", "origin", "git@example.test:owner/repo.git")  # no credentials
+    assert tracking.remote_address(tmp_path) == "git@example.test:owner/repo.git"
 
 
 @pytest.mark.slow
@@ -281,7 +295,7 @@ def test_a_run_carries_the_project_s_values_in_the_tags_mlflow_sets_by_itself(
     assert tags["mlflow.source.name"] == tracking.source_name()
     assert not Path(tags["mlflow.source.name"]).is_absolute()
     assert tags["mlflow.source.git.repoURL"] == tracking.remote_address()
-    assert "@" not in tags["mlflow.source.git.repoURL"].split("://")[-1].split("/")[0]
+    assert tracking.CREDENTIALS_IN_ADDRESS.search(tags["mlflow.source.git.repoURL"]) is None
 
 
 @pytest.mark.slow

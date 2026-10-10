@@ -283,6 +283,11 @@ def _hand_features(n: int = 2_000) -> dict[str, Any]:
         dtype=object,
     )
     features["minimum_age_years"] = np.array([18.0, 17.0, 0.0, np.nan, 65.0] * (n // 5))
+    features["healthy_volunteers"] = np.array([1.0, 0.0, np.nan, 0.0] * (n // 4))
+    features["intervention_model"] = np.array(
+        ["PARALLEL", "SINGLE_GROUP", "CROSSOVER", "SINGLE_GROUP", "FACTORIAL"] * (n // 5),
+        dtype=object,
+    )
     duration = rng.uniform(6.0, 60.0, n)
     duration[:100] = np.nan  # 5% without a planned duration
     duration[100:110] = -6.0  # a completion date before the start date
@@ -324,6 +329,15 @@ def test_the_design_follows_its_rules_row_by_row() -> None:
     assert design["status_rest"].sum() == len(design) // 2
     # No minimum age given means no lower age limit: open to participants under 18.
     assert design["children_eligible"].to_numpy()[:5].tolist() == [0.0, 1.0, 1.0, 1.0, 0.0]
+    # A flag that is not given counts as "no".
+    assert design["healthy_volunteers"].to_numpy()[:4].tolist() == [1.0, 0.0, 0.0, 0.0]
+    # Each level under its own name, and every level without a column of its own in "rest".
+    assert labels["model_single_group"] == "single group"
+    assert labels["model_crossover"] == "crossover"
+    assert labels["model_rest"] == "another intervention model, or none given"
+    assert design["model_single_group"].to_numpy()[:5].tolist() == [0.0, 1.0, 0.0, 1.0, 0.0]
+    assert design["model_crossover"].to_numpy()[:5].tolist() == [0.0, 0.0, 1.0, 0.0, 0.0]
+    assert design["model_rest"].to_numpy()[:5].tolist() == [0.0, 0.0, 0.0, 0.0, 1.0]
     # A number: a missing value takes the median of the others and gets a "not given" flag
     # when more than 1% are missing; the planned duration is held between 0 and 15 years.
     years = design["planned_years"].to_numpy()
@@ -403,7 +417,7 @@ def test_the_report_puts_every_number_in_its_own_column() -> None:
     ratio = {"hazard_ratio": 1.64, "ci_low": 1.56, "ci_high": 1.73, "p": 0.0004,
              "hazard_ratio_first_year": 3.1, "hazard_ratio_later": 1.31,
              "schoenfeld_statistic": 274.84, "schoenfeld_p": 0.0321}  # fmt: skip
-    other = {"hazard_ratio": 0.9, "ci_low": 0.82, "ci_high": 1.0, "p": 0.041,
+    other = {"hazard_ratio": 0.9, "ci_low": 0.82, "ci_high": 1.0, "p": 0.004,
              "hazard_ratio_first_year": 0.88, "hazard_ratio_later": 0.93,
              "schoenfeld_statistic": 0.96, "schoenfeld_p": 0.325}  # fmt: skip
     result = {
@@ -439,9 +453,10 @@ def test_the_report_puts_every_number_in_its_own_column() -> None:
     )
     assert row in stop
     assert row not in complete
-    assert "| sponsor class INDUSTRY | OTHER | 0.90 | 0.82 to 1.00 | 0.041 |" in complete
+    # A p value is printed to three decimals down to 0.001; only below that as "<0.001".
+    assert "| sponsor class INDUSTRY | OTHER | 0.90 | 0.82 to 1.00 | 0.004 |" in complete
     assert (
-        "| planned duration, per year | (a number) | 0.90 | 0.82 to 1.00 | 0.041 | 0.88 | 0.93 "
+        "| planned duration, per year | (a number) | 0.90 | 0.82 to 1.00 | 0.004 | 0.88 | 0.93 "
         "| 1.0 | 0.325 |"
     ) in stop
     assert "the 117,742 interventional trials" in text

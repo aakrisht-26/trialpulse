@@ -18,7 +18,7 @@ since registration. Two checks are reported per covariate: the test on scaled Sc
 residuals against the rank of the event times, and, because with this many trials the test
 rejects for differences too small to matter, the hazard ratio fitted separately on the
 first year after registration and on the time after it. A ratio that changes sides or size
-between the two windows is an average over time, not a constant.
+between the two windows is not a constant: the single ratio only summarizes it.
 
 The test is computed here (`schoenfeld_test`), with the statistic lifelines uses, because
 the run time of `lifelines.statistics.proportional_hazard_test` grows about with the

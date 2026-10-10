@@ -146,6 +146,13 @@ def _by_index_section(results: dict[str, dict[str, Any]], months: str) -> list[s
     return [f"## By landmark index, {months} months", "", *markdown_table(headers, rows), ""]
 
 
+def _first_landmark_slice(result: dict[str, Any], day: str, months: str) -> dict[str, Any] | None:
+    """The landmark 0 slice of a model at one origin and horizon, or nothing if the model
+    has no result for that origin."""
+    origin = next((o for o in result["origins"] if o["origin"] == day), None)
+    return None if origin is None else _slice(origin, months, FIRST_LANDMARK)
+
+
 def _decile_section(results: dict[str, dict[str, Any]], months: str) -> list[str]:
     """Predicted against observed risk by decile of each model's own predictions, at
     landmark 0."""
@@ -154,8 +161,7 @@ def _decile_section(results: dict[str, dict[str, Any]], months: str) -> list[str
     for day in origins:
         tables = {}
         for model, result in results.items():
-            origin = next(o for o in result["origins"] if o["origin"] == day)
-            s = _slice(origin, months, FIRST_LANDMARK)
+            s = _first_landmark_slice(result, day, months)
             if s is not None and s.get("calibration_table"):
                 tables[model] = {row["bin"]: row for row in s["calibration_table"]}
         if not tables:
@@ -199,8 +205,7 @@ def _by_group_section(results: dict[str, dict[str, Any]], months: str) -> list[s
     for day in origins:
         tables = {}
         for model, result in results.items():
-            origin = next(o for o in result["origins"] if o["origin"] == day)
-            s = _slice(origin, months, FIRST_LANDMARK)
+            s = _first_landmark_slice(result, day, months)
             if s is not None and "calibration_by_group" in s:
                 tables[model] = {row["group"]: row for row in s["calibration_by_group"]}
         if not tables:
@@ -269,7 +274,13 @@ def _m1_section(result: dict[str, Any]) -> list[str]:
 def _diagnosis_section(path: Path) -> list[str]:
     if not path.is_file():
         return []
-    results = json.loads(path.read_text(encoding="utf-8"))["origins"]
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(saved, dict) or "origins" not in saved:
+        raise RefusedError(
+            f"{path} was written by an older version of the diagnosis; write it again with: "
+            "uv run python -m trialpulse.eval.diagnosis"
+        )
+    results = saved["origins"]
     lines = [
         "## Calibration of M0 and the training labels",
         "",
@@ -352,7 +363,8 @@ def _runs_section(
         ("Calibration diagnosis of M0", diagnosis_path),
     ):
         if path.is_file():
-            entries.append((what, json.loads(path.read_text(encoding="utf-8")).get("tracking")))
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            entries.append((what, saved.get("tracking") if isinstance(saved, dict) else None))
     for what, info in entries:
         if info is None:
             rows.append([what, "not logged", "", "", ""])
@@ -380,8 +392,10 @@ def _runs_section(
     ]
     stores = [info.get("store") if info else None for _, info in entries]
     if any(store != "remote" for store in stores):
+        on_server = sum(store == "remote" for store in stores)
+        how_many = "None of the runs above is" if on_server == 0 else "Not every run above is"
         lines += [
-            "**Not every run above is on the project's MLflow server (DagsHub).** A run in a "
+            f"**{how_many} on the project's MLflow server (DagsHub).** A run in a "
             "local store exists only on the machine that produced it, and a run that is not "
             "logged exists nowhere. The numbers of this document do not depend on where a "
             "run is logged; the runs are logged to the server again once it takes them.",
@@ -455,17 +469,21 @@ def document(cfg: ProjectConfig, results: dict[str, dict[str, Any]], root: Path)
     ]
     for months in (str(m) for m in cfg.horizons_months):
         lines += _by_group_section(results, months)
-    lines += [
-        "## Predicted against observed risk by decile, landmark 0",
-        "",
-        "The rows of each model are sorted by its own predicted risk and cut into ten groups "
-        "of equal size; the observed risk of a group is its Aalen-Johansen cumulative "
-        "incidence at the horizon (Section 6). A model with few distinct predictions (M0 has "
-        "one per sponsor class) puts equal predictions in neighboring groups.",
-        "",
-    ]
+    deciles: list[str] = []
     for months in (str(m) for m in cfg.horizons_months):
-        lines += _decile_section(results, months)
+        deciles += _decile_section(results, months)
+    if deciles:
+        lines += [
+            "## Predicted against observed risk by decile, landmark 0",
+            "",
+            "The rows of each model are sorted by its own predicted risk and cut into ten "
+            "groups of equal size; the observed risk of a group is its Aalen-Johansen "
+            "cumulative incidence at the horizon (Section 6). A model with few distinct "
+            "predictions (M0 has one per sponsor class) puts equal predictions in neighboring "
+            "groups.",
+            "",
+            *deciles,
+        ]
     if "m1" in results:
         lines += _m1_section(results["m1"])
     diagnosis_path = root / "diagnosis" / "m0_calibration.json"

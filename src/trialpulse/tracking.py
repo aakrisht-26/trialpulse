@@ -49,7 +49,10 @@ NOT_SET = "MLFLOW_TRACKING_URI is not set"
 ASKED_FOR = "--local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used"
 FAILED_EXIT_CODE = 5
 RUN_USER = "trialpulse"  # the "user" of a run is the project, not a login name
-CREDENTIALS_IN_ADDRESS = re.compile(r"://[^/@\s]+@")
+# User information in front of a host: everything from "://" to the last "@" before the
+# path, query or fragment begins (a password may itself hold an "@"). A password with an
+# unencoded "/" cannot be told from a path and is not covered.
+CREDENTIALS_IN_ADDRESS = re.compile(r"://[^/?#\s]*@")
 
 
 class TrackingError(RuntimeError):
