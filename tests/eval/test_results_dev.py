@@ -71,7 +71,7 @@ def _result(
         shift = 0.0 if year == "2016" else 0.01
         horizons: dict[str, Any] = {}
         for months, drop in HORIZON_AUC.items():
-            predicted = PREDICTED[model] + shift + (0.02 if months == "24" else 0.0)
+            predicted = PREDICTED.get(model, 0.025) + shift + (0.02 if months == "24" else 0.0)
             by_index = {"0": _slice(auc + shift + drop + 0.05, 300, predicted)}
             if landmarks == "all":
                 by_index["1"] = _slice(auc + shift + drop - 0.02, 700, predicted)
@@ -133,7 +133,8 @@ def test_the_document_compares_the_models_pooled_and_at_registration(
     _write(root, "m0", _result("m0", 0.54, tracking=_tracking("m0")))
     _write(root, "m1", _result("m1", 0.62, landmarks=[0], tracking=_tracking("m1", dirty="yes")))
     doc = tmp_path / "results_dev.md"
-    assert results_dev.main(["--results", str(root), "--doc", str(doc)]) == 0
+    args = ["--results", str(root), "--doc", str(doc), "--tuned-dir", str(tmp_path / "none")]
+    assert results_dev.main(args) == 0
     text = doc.read_text(encoding="utf-8")
     assert "Research demo. Not medical advice. Not for patient decision-making." in text
     assert "ClinicalTrials.gov" in text
@@ -242,8 +243,12 @@ def test_the_document_compares_the_models_pooled_and_at_registration(
     assert "id `abc123` | `0123456` | yes |" in runs.split("| M1, development origins |")[1]
     assert "on the project's MLflow server (DagsHub)" not in text  # both runs are on it
     assert "models: M0, M1" in capsys.readouterr().out
-    assert results_dev.main(["--results", str(root), "--doc", str(doc)]) == 0
+    assert results_dev.main(args) == 0
     assert "up to date" in capsys.readouterr().out
+    # One model over all landmark indices is no ladder: no champion, no step-10 section.
+    for heading in ("## The ladder", "## Differences between models", "## Ablation of M4",
+                    "## Run time and size", "## Tuning"):  # fmt: skip
+        assert heading not in text
 
 
 def test_the_diagnosis_and_the_cox_models_are_summarized_when_their_files_exist(
@@ -401,3 +406,220 @@ def test_a_result_of_a_locked_origin_is_refused(tmp_path: Path) -> None:
         results_dev.load_results(root)
     with pytest.raises(RefusedError, match="no development result"):
         results_dev.load_results(tmp_path / "empty")
+
+
+# Step 10: the ladder, the differences, the ablation, calibration, run time, tuning ---------------
+
+
+def _ladder_result(
+    model: str, auc: float, brier: float = 0.03, slope: float = 1.1
+) -> dict[str, Any]:
+    """A model that scores landmark indices 0 and 1, with numbers of its own everywhere."""
+    result = _result(model, auc, tracking=_tracking(model))
+    boosted = model.startswith("m4")
+    for position, origin in enumerate(result["origins"]):
+        for months, by in origin["horizons"].items():
+            for s in (by["pooled"], *by["by_landmark_index"].values()):
+                s["brier"]["estimate"] = brier
+                s["calibration_slope"] = slope
+                later = 0.02 if months == "24" else 0.0
+                s["calibration_by_registration_year"] = [
+                    {"group": str(2015 + position), "n": 600, "censored_before_horizon": 0.05,
+                     "observed": 0.02 + later, "mean_predicted": auc / 20 + later},
+                    {"group": str(2016 + position), "n": 400, "censored_before_horizon": 0.0,
+                     "observed": 0.04 + later, "mean_predicted": auc / 10 + later},
+                ]  # fmt: skip
+        origin["model_summary"] = {
+            "features": {"m2": 31, "m3": 47, "m4": 123, "m4-design": 31, "m4-amendments": 47,
+                         "m4-sponsor": 54}.get(model),
+            "landmark_rows": 400_000 + 80_000 * position,
+            "person_period_rows": 1_000_000 + 200_000 * position,
+            "fit_seconds": 61.4 + position,
+            "predict_seconds": 3.2,
+            "model_bytes": 2_500_000 if boosted else 4_100,
+            **({"rounds": 250 + position} if boosted else {"iterations": 45}),
+        } if model != "m0" else None  # fmt: skip
+    return result
+
+
+def _pair(model: str, baseline: str, delta: float, indices: tuple[int, ...] = (0, 1),
+          by_index: bool = False) -> dict[str, Any]:  # fmt: skip
+    def interval(value: float) -> dict[str, float]:
+        return {"estimate": value, "ci_low": value - 0.004, "ci_high": value + 0.004}
+
+    def part(shift: float) -> dict[str, Any]:
+        return {"delta_auc": interval(delta + shift), "delta_brier": interval(-delta / 100 - shift)}
+
+    horizons = {}
+    for months, later in (("12", 0.0), ("24", 0.001)):
+        slices = {"0": part(later + 0.01)}
+        if len(indices) > 1:
+            slices["all"] = part(later)
+        if by_index:
+            slices["1"] = part(later + 0.02)
+        horizons[months] = slices
+    return {"model": model, "baseline": baseline, "what": f"what {model} adds",
+            "landmark_indices": list(indices), "horizons": horizons}  # fmt: skip
+
+
+@pytest.fixture
+def step10(tmp_path: Path) -> tuple[Path, Path]:
+    root, tuned = tmp_path / "results", tmp_path / "tuned"
+    aucs = {"m0": 0.54, "m2": 0.60, "m3": 0.66, "m4": 0.70, "m4-design": 0.61,
+            "m4-amendments": 0.67, "m4-sponsor": 0.69}  # fmt: skip
+    for model, auc in aucs.items():
+        _write(root, model, _ladder_result(model, auc))
+    _write(root, "m1", _result("m1", 0.62, landmarks=[0], tracking=_tracking("m1")))
+    (root / "compare").mkdir()
+    (root / "compare" / "dev.json").write_text(
+        json.dumps(
+            {
+                "bootstrap_resamples": 1000,
+                "pairs": [
+                    _pair("m2", "m0", 0.06, by_index=True),
+                    _pair("m3", "m2", 0.05, by_index=True),
+                    _pair("m4", "m1", 0.03, indices=(0,)),
+                    _pair("m4-amendments", "m4-design", 0.055),
+                    _pair("m4", "m4-sponsor", 0.0005),
+                ],
+                "tracking": {**_tracking("m4"), "run_name": "compare-dev"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tuned.mkdir()
+    (tuned / "m4.json").write_text(
+        json.dumps({"trials": 40, "trial_sample_share": 0.25, "default_auc": 0.6812,
+                    "auc": 0.6904, "settings": {"learning_rate": 0.03125, "num_leaves": 63}}),
+        encoding="utf-8",
+    )  # fmt: skip
+    (tuned / "m2.json").write_text(
+        json.dumps({"trials": 40, "trial_sample_share": 0.25, "default_auc": 0.5911,
+                    "auc": 0.5913, "settings": {"C": 0.0123456}}),
+        encoding="utf-8",
+    )  # fmt: skip
+    (root / "tuning").mkdir()
+    (root / "tuning" / "m4.json").write_text(
+        json.dumps({"tracking": {**_tracking("m4", store="local"), "run_name": "tune-m4"}}),
+        encoding="utf-8",
+    )
+    return root, tuned
+
+
+def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, Path]) -> None:
+    root, tuned = step10
+    cfg = load_project_config()
+    results = results_dev.load_results(root)
+    text = results_dev.document(cfg, results, root, tuned)
+    ladder = _section(text, "## The ladder and the champion")
+    assert (
+        "| Model | AUC, 12 months, all landmark indices | AUC, 24 months, all landmark indices "
+        "| AUC, 12 months, landmark 0 | AUC, 24 months, landmark 0 | Brier score, 12 months, all "
+        "| Calibration slope, 12 months, all |"
+    ) in ladder
+    # Means over the two origins: 0.70 and 0.71 at 12 months, 0.1 lower at 24, 0.05 higher
+    # at landmark 0.
+    assert "| M4 | 0.7050 | 0.6050 | 0.7550 | 0.6550 | 0.03000 | 1.100 |" in ladder
+    assert "| M0 | 0.5450 | 0.4450 | 0.5950 | 0.4950 | 0.03000 | 1.100 |" in ladder
+    assert "| M1 | n/a | n/a | 0.6750 | 0.5750 | n/a | n/a |" in ladder  # landmark 0 only
+    assert "M4-DESIGN" not in ladder  # the ablation rungs are not rungs of the ladder
+    assert "the champion is **M4**" in ladder
+    assert results_dev.champion(results) == "m4"
+    # Ties in AUC go to the lower Brier score, then to the slope closest to 1; a model of
+    # landmark 0 only is no candidate, whatever its AUC.
+    tied = {
+        "m2": _ladder_result("m2", 0.70, brier=0.031, slope=1.0),
+        "m3": _ladder_result("m3", 0.70, brier=0.030, slope=1.4),
+        "m4": _ladder_result("m4", 0.70, brier=0.030, slope=0.9),
+        "m1": _result("m1", 0.99, landmarks=[0]),
+    }
+    assert results_dev.champion(tied) == "m4"
+    del tied["m4"]
+    assert results_dev.champion(tied) == "m3"
+    assert results_dev.champion({"m0": tied["m2"]}) is None  # nothing to choose between
+
+
+def test_differences_ablation_and_calibration_tables_read_their_cells(
+    step10: tuple[Path, Path],
+) -> None:
+    root, tuned = step10
+    cfg = load_project_config()
+    text = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+    differences = _section(text, "## Differences between models, with paired intervals")
+    assert "1,000 resamples" in differences
+    assert (
+        "| M3 minus M2 | what m3 adds | +0.0500 (+0.0460 to +0.0540) | +0.0600 (+0.0560 to "
+        "+0.0640) | +0.0510 (+0.0470 to +0.0550) | +0.0610 (+0.0570 to +0.0650) | -0.00050 "
+        "(-0.00450 to +0.00350) |"
+    ) in differences
+    # M4 against M1 exists at landmark 0 only: the other cells stay empty.
+    assert (
+        "| M4 minus M1 | what m4 adds |  | +0.0400 (+0.0360 to +0.0440) |  | +0.0410 ("
+        in differences
+    )
+    by_index = differences.split("Difference in AUC at 12 months, by landmark index:")[1]
+    assert "| Landmark index | M2 minus M0 | M3 minus M2 |" in by_index
+    assert "| 1 | +0.0800 (+0.0760 to +0.0840) | +0.0700 (+0.0660 to +0.0740) |" in by_index
+    assert "| 0 | +0.0700 (+0.0660 to +0.0740) | +0.0600 (+0.0560 to +0.0640) |" in by_index
+    assert "M4 minus M1" not in by_index
+    later = differences.split("Difference in AUC at 24 months, by landmark index:")[1]
+    assert "| 1 | +0.0810 (+0.0770 to +0.0850) | +0.0710 (+0.0670 to +0.0750) |" in later
+    ablation = _section(text, "## Ablation of M4")
+    rows = [line for line in ablation.splitlines() if line.startswith("| M4")]
+    assert [row.split(" | ")[0] for row in rows] == [
+        "| M4-DESIGN", "| M4-AMENDMENTS", "| M4-SPONSOR", "| M4",
+    ]  # fmt: skip
+    assert rows[0].endswith("| 31 | 0.6150 | 0.5150 | 0.03000 |  |")
+    assert rows[1].endswith("| 47 | 0.6750 | 0.5750 | 0.03000 | +0.0550 (+0.0510 to +0.0590) |")
+    assert rows[2].endswith("| 54 | 0.6950 | 0.5950 | 0.03000 |  |")  # that pair was not compared
+    assert rows[3].endswith("| 123 | 0.7050 | 0.6050 | 0.03000 | +0.0005 (-0.0035 to +0.0045) |")
+    # Calibration over all landmark indices, by sponsor class and by registration year: the
+    # models of every landmark index only, each with its own prediction.
+    pooled = _section(
+        text, "## Predicted against observed risk by sponsor class, all landmark indices"
+    )
+    assert (
+        "| Sponsor class | Rows | Observed (IPCW) | Censored before the horizon | Predicted, M0 "
+        "| Predicted, M2 | Predicted, M3 | Predicted, M4 |"
+    ) in pooled
+    assert "M1" not in pooled
+    by_year = _section(
+        text, "## Predicted against observed risk by registration year, all landmark indices"
+    )
+    block = _block(by_year, "Origin 2016, 12 months:")
+    assert (
+        "| Registration year | Rows | Observed (IPCW) | Censored before the horizon | "
+        "Predicted, M0 | Predicted, M2 | Predicted, M3 | Predicted, M4 |"
+    ) in block
+    assert "| 2015 | 600 | 2.00% | 5.0% | 2.70% | 3.00% | 3.30% | 3.50% |" in block
+    assert "| 2016 | 400 | 4.00% | 0.0% | 5.40% | 6.00% | 6.60% | 7.00% |" in block
+    assert "| 2017 | 400 | 6.00% | 0.0% | 7.40% | 8.00% | 8.60% | 9.00% |" in _block(
+        by_year, "Origin 2017, 24 months:"
+    )
+    assert "Origin 2016, 24 months:" in by_year
+
+
+def test_run_time_tuning_and_runs_are_listed(step10: tuple[Path, Path]) -> None:
+    root, tuned = step10
+    cfg = load_project_config()
+    text = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+    runtime = _section(text, "## Run time and size")
+    assert "| M4 | 2017 | 123 | 480,000 | 1,200,000 | 62 | 3 | 2.5 MB | 251 |" in runtime
+    assert "| M2 | 2016 | 31 | 400,000 | 1,000,000 | 61 | 3 | 4 kB | 45 |" in runtime
+    assert "| M0 |" not in runtime  # M0 and M1 report no fit of this kind
+    assert "| M1 |" not in runtime
+    tuning = _section(text, "## Tuning")
+    assert (
+        "| M4 | 40 | 25% | 0.6812 | 0.6904 | `learning_rate` 0.03125, `num_leaves` 63 |" in tuning
+    )
+    assert "| M2 | 40 | 25% | 0.5911 | 0.5913 | `C` 0.01235 |" in tuning
+    assert "| M3 |" not in tuning  # not tuned yet: no file
+    runs = _section(text, "## Runs")
+    assert f"| Paired differences between models | {REMOTE} | `compare-dev` in " in runs
+    assert f"| Tuning of M4 | {LOCAL} | `tune-m4` in " in runs
+    assert "| Tuning of M2 |" not in runs  # no study file for it
+    assert "| M4-SPONSOR, development origins |" in runs
+    assert NOT_EVERY_RUN in runs
+    # Without the ladder there is nothing to write.
+    with pytest.raises(RefusedError, match="no development result of a model of the ladder"):
+        results_dev.document(cfg, {"m4-design": _ladder_result("m4-design", 0.6)}, root, tuned)
