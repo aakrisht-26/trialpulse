@@ -140,18 +140,26 @@ def test_the_intervals_of_a_training_row_end_within_the_observation_window(
     """Origin 2016-01-01 (ADR 0015). A: stopped in its second interval. B: open on the
     origin, two full intervals behind it (the second ends on the origin itself). C: its
     record lapsed in the first interval, so no interval was followed to its end. D: posted
-    three months before the origin, no interval has ended. E: completed in its first."""
+    three months before the origin, no interval has ended. E: completed in its first. F:
+    stopped on the last day of its first interval, which belongs to that interval, as an
+    event on exactly L + 12 months counts within 12 months. G: censored on that day, so it
+    was followed through the first interval and no further."""
     rows, time, event = _rows(
-        ["2015-01-01", "2015-01-01", "2015-01-01", "2015-10-01", "2014-01-01"],
-        [1, 0, 0, 0, 2],
-        ["2015-09-01", "2016-01-01", "2015-05-01", "2016-01-01", "2014-03-01"],
-    )
+        ["2015-01-01", "2015-01-01", "2015-01-01", "2015-10-01", "2014-01-01", "2015-01-01",
+         "2015-01-01"],
+        [1, 0, 0, 0, 2, 1, 0],
+        ["2015-09-01", "2016-01-01", "2015-05-01", "2016-01-01", "2014-03-01", "2015-07-01",
+         "2015-07-01"],
+    )  # fmt: skip
     periods = person_period(rows, time, event, dt.date(2016, 1, 1), cfg)
     got = list(zip(periods.row.tolist(), periods.interval.tolist(), periods.outcome.tolist(),
                    strict=True))  # fmt: skip
-    assert got == [(0, 1, 0), (0, 2, 1), (1, 1, 0), (1, 2, 0), (4, 1, 2)]
+    assert got == [
+        (0, 1, 0), (0, 2, 1), (1, 1, 0), (1, 2, 0), (4, 1, 2), (5, 1, 1), (6, 1, 0),
+    ]  # fmt: skip
     assert periods.interval_end.astype(str).tolist() == [
-        "2015-07-01", "2016-01-01", "2015-07-01", "2016-01-01", "2014-07-01",
+        "2015-07-01", "2016-01-01", "2015-07-01", "2016-01-01", "2014-07-01", "2015-07-01",
+        "2015-07-01",
     ]  # fmt: skip
     # It is the expansion of the cohort build, row for row.
     rules = CohortRules.from_config(cfg, cutoff=dt.date(2016, 1, 1))
@@ -332,6 +340,81 @@ def test_two_fits_give_the_same_predictions(
         )
 
 
+# Scoring -----------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["m2", "m4"])
+def test_scoring_uses_what_was_fitted_on_the_training_rows(cfg: ProjectConfig, name: str) -> None:
+    """Section 6: the centers, scales, fill values and category levels are those of the
+    training rows. So a row scored alone gets the prediction it gets among other rows, also
+    a row with a missing number and a sponsor class the training rows never showed. And the
+    hazards a model keeps belong to the rows object they were computed for and to the fit
+    that computed them."""
+    rows, time, event = simulated_rows(4_000, seed=11)
+    model = build(name, cfg).fit_rows(rows, time, event, ORIGIN)
+    later, _, _ = simulated_rows(400, seed=12, first=ORIGIN, last=dt.date(2017, 1, 1), end=None)
+    features = {key: values.copy() for key, values in later.features.items()}
+    features["sponsor_class"][:3] = "NETWORK"  # first seen after training
+    features["enrollment_count"][1:5] = np.nan
+    features["masking"][2] = None
+    later = later.with_features(features)
+    together = model.predict_months(later, 24).copy()
+    position = np.arange(len(later))
+    for i in range(8):
+        alone = model.predict_months(later.subset(position == i), 24)
+        # (the linear models multiply in single precision, hence the tolerance)
+        assert alone[0] == pytest.approx(together[i], rel=1e-6), i
+    assert len(set(np.round(together[:8], 5))) == 8  # eight rows, eight predictions
+    # Two sets of rows of the same size are two sets of rows.
+    first, second = later.subset(position < 200), later.subset(position >= 200)
+    assert model.predict_months(first, 12) == pytest.approx(model.predict_months(later, 12)[:200])
+    assert model.predict_months(second, 12) == pytest.approx(model.predict_months(later, 12)[200:])
+    # A second fit of the same object forgets the hazards of the first.
+    before = model.predict_months(later, 12).copy()
+    others = simulated_rows(4_000, seed=13)
+    model.fit_rows(*others, ORIGIN)
+    fresh = build(name, cfg).fit_rows(*others, ORIGIN)
+    after = model.predict_months(later, 12)
+    assert np.array_equal(after, fresh.predict_months(later, 12))
+    assert not np.array_equal(after, before)
+
+
+def test_the_trees_are_asked_about_each_interval_by_its_number(cfg: ProjectConfig) -> None:
+    """In these rows no trial stops early in its first six months (those stops are turned
+    into completions), so the hazard depends on the interval and the trees must be asked
+    with the right one."""
+    rows, time, event = simulated_rows(9_000, seed=15)
+    event = np.where((event == 1) & (time <= 185), 2, event).astype(np.int64)
+    model = build("m4-design", cfg).fit_rows(rows, time, event, ORIGIN)
+    assert isinstance(model, DiscreteTimeBoosting)
+    assert model.booster is not None
+    probe, _, _ = simulated_rows(300, seed=16)
+    stop, complete = model.hazards(probe)
+    landmark = tree_matrix(probe.features, model.features, model.levels)
+    for j in range(1, cfg.discrete_time.n_intervals + 1):
+        asked = np.column_stack([landmark, np.full(len(probe), float(j), dtype=np.float32)])
+        p = np.asarray(model.booster.predict(asked))
+        assert np.array_equal(stop[:, j - 1], p[:, 1]), j
+        assert np.array_equal(complete[:, j - 1], p[:, 2]), j
+    assert np.median(stop[:, 0]) < 0.3 * np.median(stop[:, 1])  # the trees learned it
+    assert np.median(stop[:, 0]) < 0.3 * np.median(stop[:, 3])
+
+
+def test_an_outcome_the_training_rows_never_show_gets_probability_zero(
+    cfg: ProjectConfig,
+) -> None:
+    """A fit on rows where no trial stops early has two classes, continue and completion.
+    Their probabilities must go to their own columns, and an early stop gets none."""
+    rows, time, event = simulated_rows(1_500, seed=14)
+    no_stop = np.where(event == 1, 2, event).astype(np.int64)
+    model = build("m2", cfg).fit_rows(rows, time, no_stop, ORIGIN)
+    stop, complete = model.hazards(rows)
+    assert (stop == 0.0).all()
+    assert ((complete > 0.0) & (complete < 1.0)).all()
+    assert (model.predict_months(rows, 24) == 0.0).all()
+    assert model.summary["outcomes"]["early stop"] == 0
+
+
 # What the learners are handed --------------------------------------------------------------------
 
 
@@ -464,6 +547,18 @@ def test_the_linear_design_follows_its_rules_value_by_value() -> None:
     del later["masking"]
     with pytest.raises(ValueError, match="lack 1 model features"):
         design.matrix(later)
+
+
+def test_a_missing_number_takes_the_median_of_the_training_rows() -> None:
+    """Two small trials and one of 99,999 participants: the median is 9, far from the mean
+    on any scale."""
+    features: dict[str, Any] = {"enrollment_count": np.array([9.0, 9.0, 99_999.0, np.nan])}
+    design = LinearDesign.fit(features, ("enrollment_count",))
+    assert design.columns == ["enrollment_count", "enrollment_count not given"]
+    x = design.matrix(features)
+    assert x[3, 0] == pytest.approx(x[0, 0])
+    assert x[2, 0] - x[3, 0] > 1.0
+    assert x[:, 1].tolist() == [0.0, 0.0, 0.0, 1.0]
 
 
 def test_the_trees_get_codes_and_missing_values() -> None:

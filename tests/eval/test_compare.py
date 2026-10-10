@@ -15,7 +15,12 @@ from trialpulse import tracking
 from trialpulse.cli import RefusedError
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import compare
-from trialpulse.eval.bootstrap import cluster_bootstrap, cluster_bootstrap_many
+from trialpulse.eval.bootstrap import (
+    BootstrapError,
+    cluster_bootstrap,
+    cluster_bootstrap_many,
+    resamples,
+)
 from trialpulse.eval.metrics import ipcw_auc, ipcw_brier
 from trialpulse.eval.walkforward import predictions_path
 
@@ -112,24 +117,41 @@ def test_the_difference_is_the_mean_over_the_origins_of_the_difference_at_each(
     assert set(result["horizons"]) == {"12", "24"}
     part = result["horizons"]["12"][compare.ALL]
     assert set(result["horizons"]["12"]) == {compare.ALL, "0", "1"}
-    deltas, briers = [], []
-    for origin, frame in frames.items():
-        time, event = frame["time"].to_numpy(), frame["event"].to_numpy()
-        groups = frame["censoring_group"].to_numpy()
-        landmark = frame["landmark_date"].to_numpy().astype("datetime64[D]")
-        horizon = (landmark + np.timedelta64(366 if origin.year == 2016 else 365, "D")
-                   - landmark).astype(float)  # fmt: skip
-        good, noise = frame["good_12"].to_numpy(), frame["noise_12"].to_numpy()
-        here = part["by_origin"][origin.isoformat()]
-        assert here["n_rows"] == len(frame)
-        assert here["auc_model"] == pytest.approx(ipcw_auc(time, event, good, horizon, groups))
-        assert here["auc_baseline"] == pytest.approx(ipcw_auc(time, event, noise, horizon, groups))
-        assert here["brier_model"] == pytest.approx(ipcw_brier(time, event, good, horizon, groups))
-        assert here["delta_auc"] == pytest.approx(here["auc_model"] - here["auc_baseline"])
-        deltas.append(here["delta_auc"])
-        briers.append(here["brier_model"] - here["brier_baseline"])
-    assert part["delta_auc"]["estimate"] == pytest.approx(np.mean(deltas))
-    assert part["delta_brier"]["estimate"] == pytest.approx(np.mean(briers))
+    aucs: dict[int, list[float]] = {12: [], 24: []}
+    for months in (12, 24):  # each horizon with its own labels, weights and scores
+        slice_ = result["horizons"][str(months)][compare.ALL]
+        deltas, briers = [], []
+        for origin, frame in frames.items():
+            time, event = frame["time"].to_numpy(), frame["event"].to_numpy()
+            groups = frame["censoring_group"].to_numpy()
+            # Each row's horizon in days, by the calendar and without the project's helpers.
+            landmark = pd.DatetimeIndex(frame["landmark_date"])
+            horizon = np.asarray(
+                ((landmark + pd.DateOffset(months=months)) - landmark).days, dtype=float
+            )
+            assert set(horizon.tolist()) <= {365.0, 366.0, 730.0, 731.0}
+            good = frame[f"good_{months}"].to_numpy()
+            noise = frame[f"noise_{months}"].to_numpy()
+            here = slice_["by_origin"][origin.isoformat()]
+            assert here["n_rows"] == len(frame)
+            assert here["auc_model"] == pytest.approx(ipcw_auc(time, event, good, horizon, groups))
+            assert here["auc_baseline"] == pytest.approx(
+                ipcw_auc(time, event, noise, horizon, groups)
+            )
+            assert here["brier_model"] == pytest.approx(
+                ipcw_brier(time, event, good, horizon, groups)
+            )
+            assert here["brier_baseline"] == pytest.approx(
+                ipcw_brier(time, event, noise, horizon, groups)
+            )
+            assert here["delta_auc"] == pytest.approx(here["auc_model"] - here["auc_baseline"])
+            deltas.append(here["delta_auc"])
+            briers.append(here["brier_model"] - here["brier_baseline"])
+            aucs[months].append(here["auc_model"])
+        assert slice_["delta_auc"]["estimate"] == pytest.approx(np.mean(deltas))
+        assert slice_["delta_brier"]["estimate"] == pytest.approx(np.mean(briers))
+    # The two horizons are two questions: the made-up rows give them different answers.
+    assert all(abs(a - b) > 1e-3 for a, b in zip(aucs[12], aucs[24], strict=True))
     assert part["n_rows"] == sum(len(f) for f in frames.values())
     # A model that follows the risk beats one that knows nothing, and the interval says so.
     assert part["delta_auc"]["estimate"] > 0.1
@@ -140,6 +162,33 @@ def test_the_difference_is_the_mean_over_the_origins_of_the_difference_at_each(
     assert part["delta_auc"]["resamples"] == 60
     first = result["horizons"]["12"]["0"]
     assert first["n_rows"] == sum(int((f["landmark_index"] == 0).sum()) for f in frames.values())
+
+
+def test_a_trial_evaluated_at_two_origins_is_one_cluster(
+    cfg: ProjectConfig,
+    folder: Path,
+    frames: dict[dt.date, pd.DataFrame],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR 0025, decision 6: the origins are resampled together. A trial with evaluation
+    rows at both origins is drawn, or left out, with all of them."""
+    handed: list[np.ndarray[Any, Any]] = []
+    real = compare.cluster_bootstrap_many
+
+    def recording(clusters: Any, *args: Any) -> Any:
+        handed.append(np.asarray(clusters))
+        return real(clusters, *args)
+
+    monkeypatch.setattr(compare, "cluster_bootstrap_many", recording)
+    rows = compare.load_pair(folder, "m4", "m3", ORIGINS, (12, 24))
+    part = compare.compare_slice(rows, 12, ORIGINS, cfg, 20)
+    (clusters,) = handed
+    first, second = (set(frame["trial_id"]) for frame in frames.values())
+    assert len(first & second) > 400  # the trials the two made-up origins share
+    assert clusters.tolist() == rows.trial_id.tolist()
+    assert set(clusters.tolist()) == first | second
+    assert len(set(clusters.tolist())) == len(first) + len(second) - len(first & second)
+    assert part["n_trials"] == len(first | second)
 
 
 def test_a_model_against_itself_differs_by_nothing(
@@ -194,6 +243,33 @@ def test_several_statistics_share_the_resamples_of_one(cfg: ProjectConfig) -> No
         assert many[name] == alone  # the same draws, the same interval
 
 
+def test_a_statistic_that_is_not_finite_is_left_out_of_its_own_interval_only() -> None:
+    """Fifty clusters of one row. "rare" is not finite in a resample that draws none of the
+    first five clusters (about one resample in 200), "steady" is always finite, and "often"
+    is not finite whenever cluster 0 is missing (about one in three)."""
+    clusters = np.arange(50)
+    n, seed = 600, 3
+    missing = sum(1 for idx in resamples(clusters, n, seed) if idx.min() >= 5)
+    assert 1 <= missing <= 6  # some resamples, and under the 1% limit
+
+    def statistics(idx: Any) -> dict[str, float]:
+        return {"steady": float(idx.mean()), "rare": float("nan") if idx.min() >= 5 else 1.0}
+
+    out = cluster_bootstrap_many(clusters, statistics, n, seed, 0.9)
+    assert (out["rare"]["valid_resamples"], out["rare"]["invalid_resamples"]) == (
+        n - missing, missing,
+    )  # fmt: skip
+    assert (out["rare"]["ci_low"], out["rare"]["ci_high"]) == (1.0, 1.0)
+    assert (out["steady"]["valid_resamples"], out["steady"]["invalid_resamples"]) == (n, 0)
+    assert out["steady"]["ci_low"] < out["steady"]["estimate"] < out["steady"]["ci_high"]
+    with pytest.raises(BootstrapError, match="not finite"):
+        cluster_bootstrap_many(
+            clusters,
+            lambda idx: {"often": float("inf") if idx.min() > 0 else 1.0},
+            n, seed, 0.9,
+        )  # fmt: skip
+
+
 def test_a_model_of_landmark_0_is_compared_at_landmark_0(cfg: ProjectConfig, folder: Path) -> None:
     result = compare.compare_pair(cfg, folder, "m4", "m1", False, ORIGINS, 40)
     assert result["landmark_indices"] == [0]
@@ -223,6 +299,23 @@ def test_files_that_do_not_hold_the_same_rows_are_refused(
     _save(tmp_path, "m3", origin, other, "fair")
     with pytest.raises(RefusedError, match="not scored on the same evaluation rows"):
         compare.load_pair(tmp_path, "m4", "m3", (origin,), (12, 24))
+    # Another event for one row, with the same follow-up: a completion where the other
+    # file holds a censoring.
+    other = frame.copy()
+    censored = other.index[other["event"] == 0][0]
+    other.loc[censored, "event"] = 2
+    _save(tmp_path, "m3", origin, other, "fair")
+    with pytest.raises(RefusedError, match="not scored on the same evaluation rows"):
+        compare.load_pair(tmp_path, "m4", "m3", (origin,), (12, 24))
+    # Another landmark date for one row: its horizon would be another day.
+    other = frame.copy()
+    other.loc[11, "landmark_date"] += np.timedelta64(1, "D")
+    _save(tmp_path, "m3", origin, other, "fair")
+    with pytest.raises(RefusedError, match="not scored on the same evaluation rows"):
+        compare.load_pair(tmp_path, "m4", "m3", (origin,), (12, 24))
+    # The same rows again: accepted.
+    _save(tmp_path, "m3", origin, frame, "fair")
+    assert len(compare.load_pair(tmp_path, "m4", "m3", (origin,), (12, 24))) == len(frame)
     with pytest.raises(FileNotFoundError, match=r"--model m2 --origins dev"):
         compare.load_pair(tmp_path, "m4", "m2", (origin,), (12, 24))
 
