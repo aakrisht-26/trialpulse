@@ -44,6 +44,7 @@ from trialpulse import tracking
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.eval.ipcw import FloatArray, IntArray, censoring_groups
+from trialpulse.eval.lock import require_unlock
 from trialpulse.eval.metrics import calibration_slope_intercept, ipcw_auc, ipcw_brier
 from trialpulse.eval.rows import (
     LANDMARKS_PATH,
@@ -62,6 +63,7 @@ from trialpulse.eval.walkforward import (
     attach_features,
     evaluation_rows,
     feature_loader,
+    select_origins,
     training_rows,
 )
 from trialpulse.models import discrete_time
@@ -144,9 +146,13 @@ def prepare(
     load_features: FeatureLoader,
     share: float,
 ) -> list[OriginData]:
-    """The rows of every development origin, with their features, as the harness joins them."""
+    """The rows of every development origin, with their features, as the harness joins them.
+    The origins pass the test lock, as they do in the harness: a locked origin is refused
+    here before any of its rows is read, and the tuning has no way to unlock one."""
+    origins = select_origins(cfg, DEV_ROLE)
+    require_unlock({o.role for o in origins}, REPO_ROOT, unlock_flag=False)
     out = []
-    for origin in (o.date for o in cfg.walk_forward.origins if o.role == DEV_ROLE):
+    for origin in (o.date for o in origins):
         t = np.datetime64(origin, "D")
         train, time, event = training_rows(load_training(origin), t)
         train = attach_features(train, load_features(origin, TRAINING, None), "training rows")
