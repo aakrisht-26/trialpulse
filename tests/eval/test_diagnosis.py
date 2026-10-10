@@ -13,6 +13,7 @@ import pytest
 
 from trialpulse import tracking
 from trialpulse.cli import RefusedError
+from trialpulse.cohort.audit import MODELING_EDA_BEFORE
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import diagnosis as dg
 from trialpulse.eval.ipcw import censoring_groups, horizon_labels_and_weights
@@ -197,10 +198,12 @@ def test_the_two_plain_mixes_are_the_two_cohorts(hand_cohort: dict[str, Path]) -
 
 
 def test_what_became_of_the_trials_censored_on_the_origin(hand_cohort: dict[str, Path]) -> None:
+    """The fate is read from a later cohort handed in (in the command: the cohort as of the
+    end of the development period)."""
     fates = dg.later_fate(hand_cohort["final_outcomes"], hand_cohort["as_of_outcomes"], T)
     assert {(f["state"], f["fate"]): f["trials"] for f in fates} == {
         ("lapsed on the origin", "completed"): 1,  # A
-        ("open on the origin", "lapsed at the data cutoff"): 1,  # B
+        ("open on the origin", "lapsed at the end of the window"): 1,  # B
     }
     completed = next(f for f in fates if f["fate"] == "completed")
     assert completed["share"] == 1.0
@@ -223,7 +226,19 @@ def test_what_became_of_the_trials_censored_on_the_origin(hand_cohort: dict[str,
     again = dg.later_fate(hand_cohort["final_outcomes"], with_reversal, T)
     assert {(f["state"], f["fate"]): f["trials"] for f in again} == {
         ("lapsed on the origin", "completed"): 1,
-        ("open on the origin", "lapsed at the data cutoff"): 1,
+        ("open on the origin", "lapsed at the end of the window"): 1,
+    }
+    # In a cohort cut before A completed, A is open at the end of the window, and a trial
+    # that the later cohort does not hold at all is said to be missing from it.
+    cut = _write(
+        hand_cohort["as_of_outcomes"].parent / "cut.parquet",
+        [_outcome("A", D(2016, 12, 31))],
+        OUTCOME_COLUMNS,
+    )
+    early = dg.later_fate(cut, hand_cohort["as_of_outcomes"], T)
+    assert {(f["state"], f["fate"]): f["trials"] for f in early} == {
+        ("lapsed on the origin", "open at the end of the window"): 1,
+        ("open on the origin", "not in the later cohort"): 1,
     }
 
 
@@ -287,6 +302,19 @@ def _simulated(root: Path, cfg: ProjectConfig, n_trials: int = 3000, seed: int =
                           "event": event, "event_date": end, "stratum": stratum})  # fmt: skip
     _write(root / "landmarks.parquet", final, LANDMARK_COLUMNS)
     _write(root / "outcomes.parquet", outcomes, OUTCOME_COLUMNS)
+    # The cohort as of the end of the development period: outcomes known before that day.
+    end = MODELING_EDA_BEFORE
+    _write(
+        training_path(root / "training", end).parent / "outcomes.parquet",
+        [
+            _outcome(o["trial_id"], o["event_date"], event=o["event"],
+                     censor_reason=o["censor_reason"])
+            if o["event_date"] < end
+            else _outcome(o["trial_id"], end)
+            for o in outcomes
+        ],
+        OUTCOME_COLUMNS,
+    )  # fmt: skip
     for origin in (o.date for o in cfg.walk_forward.origins if o.role == "dev"):
         lapsed = {
             o["trial_id"]: o["event_date"]
@@ -352,10 +380,39 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
     assert "—" not in text
     for origin in dev:
         assert f"## Origin {origin}" in text
-    assert "2018-01-01" not in text
-    # The table that follows trials past the development period says what it is (Section 10).
-    assert text.count("Descriptive only") + text.count("descriptive only") >= len(dev) + 1
+    # The later-fate table ends with the development period (Section 10): it reads the
+    # cohort as of that day, and no later outcome appears in it.
+    assert f"cohort as of {MODELING_EDA_BEFORE}" in text
+    assert "data cutoff" not in text.split("## Summary")[1]
     first = results[0]
+    with duckdb.connect() as con:
+        ended = dict(
+            con.execute(
+                f"""SELECT CASE WHEN e.event = 1 THEN 'stopped early'
+                  WHEN e.event = 2 THEN 'completed'
+                  WHEN e.censor_reason = 'unknown' THEN 'lapsed at the end of the window'
+                  ELSE 'open at the end of the window' END, count(*)
+                FROM '{
+                    (
+                        training_path(root / "training", dt.date.fromisoformat(dev[0])).parent
+                        / "outcomes.parquet"
+                    ).as_posix()
+                }' a
+                JOIN '{
+                    (
+                        training_path(root / "training", MODELING_EDA_BEFORE).parent
+                        / "outcomes.parquet"
+                    ).as_posix()
+                }' e USING (trial_id)
+                WHERE a.event = 0 AND a.censor_reason = 'unknown' GROUP BY 1"""
+            ).fetchall()
+        )
+    lapsed_fates = {
+        f["fate"]: f["trials"] for f in first["later_fate"] if f["state"] == "lapsed on the origin"
+    }
+    assert lapsed_fates == ended
+    assert sum(ended.values()) > 100
+    assert ended["open at the end of the window"] > 0  # what the data cutoff would have resolved
     # The simulation only made trials lapse on the origin; nothing lapses later.
     assert first["categories"][dg.LAPSED_AS_OF_ORIGIN]["rows"] > 100
     assert first["categories"][dg.LAPSED_LATER]["rows"] == 0

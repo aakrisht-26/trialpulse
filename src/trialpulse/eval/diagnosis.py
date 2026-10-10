@@ -33,10 +33,10 @@ explains.
 The command writes docs/calibration_diagnosis.md and data/results/diagnosis/m0_calibration.json,
 and logs the run to MLflow like the model commands (`trialpulse.tracking`).
 
-**Descriptive only.** One table follows the trials censored on an origin to the data
-cutoff, to say what became of them. Those outcomes lie past the development period
-(Section 10), so the table is labeled descriptive only: no label, feature or model is
-built from it.
+**Within the development period.** One table says what became of the trials censored on
+an origin. It informs the choice of a remedy, so it stays inside the development period
+(Section 10): it follows them to 2018-01-01 only, in the cohort built from versions posted
+before that day (the cohort the EDA of Step 5 uses), and reads nothing later.
 """
 
 import argparse
@@ -54,6 +54,7 @@ import numpy.typing as npt
 
 from trialpulse import tracking
 from trialpulse.cli import RefusedError, run
+from trialpulse.cohort.audit import MODELING_EDA_BEFORE
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.dates import days_between
 from trialpulse.eval import EVENT_COMPLETE, EVENT_STOP
@@ -97,7 +98,8 @@ HINDSIGHT, AS_OF = MIXES[0][0], MIXES[-1][0]
 MIX_KEYS: tuple[str, ...] = (
     "hindsight", "lapsed_on_origin_swapped", "lapsed_later_swapped", "both_swapped", "as_of",
 )  # fmt: skip
-STILL_LAPSED = "lapsed at the data cutoff"
+STILL_LAPSED = "lapsed at the end of the window"
+STILL_OPEN = "open at the end of the window"
 BOOTSTRAP_RESAMPLES = 200
 
 
@@ -241,11 +243,13 @@ def followup_years(table: LabelTable, category: str) -> dict[str, float]:
     }
 
 
-def later_fate(final_outcomes: Path, as_of_outcomes: Path, origin: dt.date) -> list[dict[str, Any]]:
+def later_fate(end_outcomes: Path, as_of_outcomes: Path, origin: dt.date) -> list[dict[str, Any]]:
     """What became of the trials that the as-of cohort censors: those lapsed on the origin
     (censored under the UNKNOWN rule at their status-verified date) and those still open on
-    the origin (censored at the origin). The fate is the trial's outcome in the final
-    cohort, with the median days from the origin to a later stop or completion."""
+    the origin (censored at the origin). The fate is the trial's outcome in a later cohort,
+    `end_outcomes`: the cohort as of the end of the development period, so that nothing
+    after it is read (Section 10). With it, the median days from the origin to a stop or
+    completion inside that window."""
     day = f"DATE '{origin.isoformat()}'"
     with duckdb.connect() as con:
         rows = con.execute(
@@ -261,11 +265,11 @@ def later_fate(final_outcomes: Path, as_of_outcomes: Path, origin: dt.date) -> l
                 WHEN event = {EVENT_STOP} THEN 'stopped early'
                 WHEN event = {EVENT_COMPLETE} THEN 'completed'
                 WHEN censor_reason = 'unknown' THEN '{STILL_LAPSED}'
-                ELSE 'open at the data cutoff' END AS fate,
+                ELSE '{STILL_OPEN}' END AS fate,
                 event, event_date
-              FROM read_parquet('{final_outcomes.as_posix()}')
+              FROM read_parquet('{end_outcomes.as_posix()}')
             )
-            SELECT ao.state, coalesce(fo.fate, 'not in the final cohort') AS fate, count(*) AS n,
+            SELECT ao.state, coalesce(fo.fate, 'not in the later cohort') AS fate, count(*) AS n,
               median(date_diff('day', {day}, fo.event_date))
                 FILTER (WHERE fo.event IN ({EVENT_STOP}, {EVENT_COMPLETE})) AS median_days
             FROM ao LEFT JOIN fo USING (trial_id) GROUP BY 1, 2 ORDER BY 1, 3 DESC"""
@@ -484,10 +488,10 @@ def _origin_section(cfg: ProjectConfig, r: dict[str, Any]) -> list[str]:
         )  # fmt: skip
     lines += [
         "",
-        "**What became of the trials that were censored on the origin** (their outcome in the "
-        "final cohort). Descriptive only: these outcomes run to the data cutoff, past the "
-        "development period, and nothing is built from them. A record that is lapsed at the "
-        "data cutoff may have been resolved after the origin and have lapsed again.",
+        f"**What became, by {MODELING_EDA_BEFORE}, of the trials that were censored on the "
+        f"origin** (their outcome in the cohort as of {MODELING_EDA_BEFORE}, the end of the "
+        "development period; nothing later is read). A record that is lapsed at the end of "
+        "the window may have been resolved after the origin and have lapsed again.",
         "",
     ]
     lines += markdown_table(
@@ -537,9 +541,10 @@ def _summary_section(cfg: ProjectConfig, results: list[dict[str, Any]]) -> list[
         "is left between it and the last row comes from trials that hindsight excludes for a "
         "later reversal.",
         "",
-        "Trials censored on the origin, by their state there, and what the final cohort shows "
-        "for them (descriptive only: these outcomes run to the data cutoff, past the "
-        "development period, Section 10):",
+        "Trials censored on the origin, by their state there, and what the cohort as of "
+        f"{MODELING_EDA_BEFORE} shows for them. That day ends the development period (Section "
+        "10), so the window is two years for the first origin and one year for the second, "
+        "and nothing later is read:",
         "",
     ]
     fate_rows = []
@@ -559,11 +564,12 @@ def _summary_section(cfg: ProjectConfig, results: list[dict[str, Any]]) -> list[
                     share("stopped early"),
                     share("completed"),
                     share(STILL_LAPSED),
+                    share(STILL_OPEN),
                 ]
             )
     lines += markdown_table(
-        ["Origin", "State on the origin", "Trials", "Stopped early later", "Completed later",
-         "Lapsed at the data cutoff"],
+        ["Origin", "State on the origin", "Trials", "Stopped early in the window",
+         "Completed in the window", "Lapsed at its end", "Open at its end"],
         fate_rows,
     )  # fmt: skip
     return [*lines, ""]
@@ -577,7 +583,7 @@ def document(cfg: ProjectConfig, results: list[dict[str, Any]]) -> str:
         "",
         "This file is generated by `uv run python -m trialpulse.eval.diagnosis` (CLAUDE.md "
         "Step 9, first task). Do not edit it by hand. It is a diagnosis on the development "
-        "origins: nothing is changed by it, and no locked origin is read.",
+        "origins: nothing is changed by it, and no evaluation row of a locked origin is read.",
         "",
         "- **Source:** ClinicalTrials.gov registry records, through the version-history "
         f"dataset `{cfg.dataset.repo_id}` (license CC-BY-NC-4.0), revision "
@@ -640,6 +646,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RefusedError("config/project.yaml names no development origin")
     final_landmarks: Path = args.input
     final_outcomes = final_landmarks.parent / OUTCOMES_NAME
+    # The later-fate table ends with the development period: it reads the cohort built
+    # from versions posted before that day, as the EDA does (Section 10).
+    end_outcomes = training_path(args.training_dir, MODELING_EDA_BEFORE).parent / OUTCOMES_NAME
+    if not end_outcomes.is_file():
+        raise RefusedError(
+            f"{end_outcomes} is missing. Create it with: uv run python -m trialpulse.cohort.build"
+        )
+    if max(origins) >= MODELING_EDA_BEFORE:
+        raise RefusedError(
+            f"a development origin on or after {MODELING_EDA_BEFORE} leaves no window for the "
+            "later-fate table (Section 10)"
+        )
     final = load_landmark_rows(final_landmarks)
     results = []
     for origin in origins:
@@ -648,7 +666,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         table = label_table(
             final_landmarks, final_outcomes, as_of_landmarks, as_of_outcomes, origin
         )
-        fates = later_fate(final_outcomes, as_of_outcomes, origin)
+        fates = later_fate(end_outcomes, as_of_outcomes, origin)
         results.append(diagnose_origin(cfg, origin, final, table, fates, args.resamples))
         slopes = results[-1]["horizons"][str(max(cfg.horizons_months))]
         print(
