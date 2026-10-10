@@ -9,7 +9,9 @@ cannot touch a locked origin; it refuses a result file that holds one.
 
 Models are compared at two levels. Pooled over all landmark indices, where only models of
 every landmark are comparable; and at landmark 0, registration, where M1 lives and where
-every model can be read (Step 11's "M4 beats M1 at L0").
+every model can be read (Step 11's "M4 beats M1 at L0"). Section 6 asks for the metrics
+per horizon, per landmark index and pooled, and for calibration by risk decile: the
+document holds all of them.
 """
 
 import argparse
@@ -115,6 +117,68 @@ METRIC_HEADERS = [
 ]  # fmt: skip
 
 
+def _by_index_section(results: dict[str, dict[str, Any]], months: str) -> list[str]:
+    """Every landmark index of the models that score them all."""
+    rows = []
+    for model, result in results.items():
+        for origin in result["origins"]:
+            if origin.get("landmark_indices", "all") != "all":
+                continue
+            by_index = origin["horizons"][months]["by_landmark_index"]
+            for index in sorted(by_index, key=int):
+                s = by_index[index]
+                rows.append(
+                    [
+                        model.upper(),
+                        origin["origin"][:4],
+                        index,
+                        f"{s['n_rows']:,}",
+                        _interval(s["auc"]),
+                        _interval(s["brier"], 4),
+                        _interval(s["lift"], 2),
+                        _f(s["calibration_slope"]),
+                        _f(s["calibration_intercept"]),
+                    ]
+                )
+    if not rows:
+        return []
+    headers = [METRIC_HEADERS[0], METRIC_HEADERS[1], "Landmark index", *METRIC_HEADERS[2:8]]
+    return [f"## By landmark index, {months} months", "", *markdown_table(headers, rows), ""]
+
+
+def _decile_section(results: dict[str, dict[str, Any]], months: str) -> list[str]:
+    """Predicted against observed risk by decile of each model's own predictions, at
+    landmark 0."""
+    lines: list[str] = []
+    origins = [o["origin"] for o in next(iter(results.values()))["origins"]]
+    for day in origins:
+        tables = {}
+        for model, result in results.items():
+            origin = next(o for o in result["origins"] if o["origin"] == day)
+            s = _slice(origin, months, FIRST_LANDMARK)
+            if s is not None and s.get("calibration_table"):
+                tables[model] = {row["bin"]: row for row in s["calibration_table"]}
+        if not tables:
+            continue
+        headers = ["Decile of predicted risk"]
+        for model in tables:
+            name = model.upper()
+            headers += [f"Rows, {name}", f"Predicted, {name}", f"Observed, {name}"]
+        rows = []
+        for decile in sorted({b for table in tables.values() for b in table}):
+            row = [str(decile)]
+            for table in tables.values():
+                b = table.get(decile)
+                row += (
+                    ["", "", ""]
+                    if b is None
+                    else [f"{b['n']:,}", _pct(b["mean_predicted"]), _pct(b["observed_cif"])]
+                )
+            rows.append(row)
+        lines += [f"Origin {day[:4]}, {months} months:", "", *markdown_table(headers, rows), ""]
+    return lines
+
+
 def _mean_auc(results: dict[str, dict[str, Any]], months: str, landmark: str | None) -> list[str]:
     lines = []
     for model, result in results.items():
@@ -205,7 +269,7 @@ def _m1_section(result: dict[str, Any]) -> list[str]:
 def _diagnosis_section(path: Path) -> list[str]:
     if not path.is_file():
         return []
-    results = json.loads(path.read_text(encoding="utf-8"))
+    results = json.loads(path.read_text(encoding="utf-8"))["origins"]
     lines = [
         "## Calibration of M0 and the training labels",
         "",
@@ -275,15 +339,20 @@ def _log(value: float) -> float:
     return math.log(value) if value > 0 else float("inf")
 
 
-def _runs_section(results: dict[str, dict[str, Any]], cox_path: Path) -> list[str]:
+def _runs_section(
+    results: dict[str, dict[str, Any]], cox_path: Path, diagnosis_path: Path
+) -> list[str]:
     rows = []
     entries: list[tuple[str, dict[str, Any] | None]] = [
         (f"{model.upper()}, development origins", result.get("tracking"))
         for model, result in results.items()
     ]
-    if cox_path.is_file():
-        cox = json.loads(cox_path.read_text(encoding="utf-8"))
-        entries.append(("Cox models at landmark 0", cox.get("tracking")))
+    for what, path in (
+        ("Cox models at landmark 0", cox_path),
+        ("Calibration diagnosis of M0", diagnosis_path),
+    ):
+        if path.is_file():
+            entries.append((what, json.loads(path.read_text(encoding="utf-8")).get("tracking")))
     for what, info in entries:
         if info is None:
             rows.append([what, "not logged", "", "", ""])
@@ -300,14 +369,24 @@ def _runs_section(results: dict[str, dict[str, Any]], cox_path: Path) -> list[st
     lines = [
         "## Runs",
         "",
-        "Every run is logged to MLflow with its commit, the dataset revision, the "
-        "configuration, its metrics and its result file (`trialpulse.tracking`).",
+        "A run is logged to MLflow with the commit it started from, the dataset revision, the "
+        "configuration, its metrics and its result files (`trialpulse.tracking`). The table "
+        "says where each run of this document went.",
         "",
         *markdown_table(
             ["Run", "Logged to", "MLflow run", "Commit", "Uncommitted changes at the time"], rows
         ),
         "",
     ]
+    stores = [info.get("store") if info else None for _, info in entries]
+    if any(store != "remote" for store in stores):
+        lines += [
+            "**Not every run above is on the project's MLflow server (DagsHub).** A run in a "
+            "local store exists only on the machine that produced it, and a run that is not "
+            "logged exists nowhere. The numbers of this document do not depend on where a "
+            "run is logged; the runs are logged to the server again once it takes them.",
+            "",
+        ]
     return lines
 
 
@@ -355,6 +434,8 @@ def document(cfg: ProjectConfig, results: dict[str, dict[str, Any]], root: Path)
         "",
     ]
     for months in (str(m) for m in cfg.horizons_months):
+        lines += _by_index_section(results, months)
+    for months in (str(m) for m in cfg.horizons_months):
         rows = _metric_rows(results, months, FIRST_LANDMARK)
         lines += [f"## Landmark 0 (registration), {months} months", ""]
         lines += markdown_table(METRIC_HEADERS, rows)
@@ -374,12 +455,24 @@ def document(cfg: ProjectConfig, results: dict[str, dict[str, Any]], root: Path)
     ]
     for months in (str(m) for m in cfg.horizons_months):
         lines += _by_group_section(results, months)
+    lines += [
+        "## Predicted against observed risk by decile, landmark 0",
+        "",
+        "The rows of each model are sorted by its own predicted risk and cut into ten groups "
+        "of equal size; the observed risk of a group is its Aalen-Johansen cumulative "
+        "incidence at the horizon (Section 6). A model with few distinct predictions (M0 has "
+        "one per sponsor class) puts equal predictions in neighboring groups.",
+        "",
+    ]
+    for months in (str(m) for m in cfg.horizons_months):
+        lines += _decile_section(results, months)
     if "m1" in results:
         lines += _m1_section(results["m1"])
-    lines += _diagnosis_section(root / "diagnosis" / "m0_calibration.json")
+    diagnosis_path = root / "diagnosis" / "m0_calibration.json"
+    lines += _diagnosis_section(diagnosis_path)
     cox_path = root / "cox" / "cox_l0.json"
     lines += _cox_section(cox_path)
-    lines += _runs_section(results, cox_path)
+    lines += _runs_section(results, cox_path, diagnosis_path)
     return "\n".join(lines).rstrip("\n") + "\n"
 
 

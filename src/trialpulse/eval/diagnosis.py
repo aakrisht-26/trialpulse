@@ -30,12 +30,19 @@ for one category at a time) and scored on the same evaluation rows with the harn
 metrics. The step from one mix to the next is the share of the move that the category
 explains.
 
-The command writes docs/calibration_diagnosis.md and data/results/diagnosis/m0_calibration.json.
+The command writes docs/calibration_diagnosis.md and data/results/diagnosis/m0_calibration.json,
+and logs the run to MLflow like the model commands (`trialpulse.tracking`).
+
+**Descriptive only.** One table follows the trials censored on an origin to the data
+cutoff, to say what became of them. Those outcomes lie past the development period
+(Section 10), so the table is labeled descriptive only: no label, feature or model is
+built from it.
 """
 
 import argparse
 import datetime as dt
 import json
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +52,7 @@ import duckdb
 import numpy as np
 import numpy.typing as npt
 
+from trialpulse import tracking
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.dates import days_between
@@ -85,6 +93,11 @@ MIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("as of the origin", CATEGORIES),
 )
 HINDSIGHT, AS_OF = MIXES[0][0], MIXES[-1][0]
+# Short names of the mixes, in the same order, for the metric names of the logged run.
+MIX_KEYS: tuple[str, ...] = (
+    "hindsight", "lapsed_on_origin_swapped", "lapsed_later_swapped", "both_swapped", "as_of",
+)  # fmt: skip
+STILL_LAPSED = "lapsed at the data cutoff"
 BOOTSTRAP_RESAMPLES = 200
 
 
@@ -247,7 +260,7 @@ def later_fate(final_outcomes: Path, as_of_outcomes: Path, origin: dt.date) -> l
                 WHEN reversal THEN 'excluded for a later reversal'
                 WHEN event = {EVENT_STOP} THEN 'stopped early'
                 WHEN event = {EVENT_COMPLETE} THEN 'completed'
-                WHEN censor_reason = 'unknown' THEN 'lapsed, never resolved'
+                WHEN censor_reason = 'unknown' THEN '{STILL_LAPSED}'
                 ELSE 'open at the data cutoff' END AS fate,
                 event, event_date
               FROM read_parquet('{final_outcomes.as_posix()}')
@@ -472,7 +485,9 @@ def _origin_section(cfg: ProjectConfig, r: dict[str, Any]) -> list[str]:
     lines += [
         "",
         "**What became of the trials that were censored on the origin** (their outcome in the "
-        "final cohort):",
+        "final cohort). Descriptive only: these outcomes run to the data cutoff, past the "
+        "development period, and nothing is built from them. A record that is lapsed at the "
+        "data cutoff may have been resolved after the origin and have lapsed again.",
         "",
     ]
     lines += markdown_table(
@@ -523,7 +538,8 @@ def _summary_section(cfg: ProjectConfig, results: list[dict[str, Any]]) -> list[
         "later reversal.",
         "",
         "Trials censored on the origin, by their state there, and what the final cohort shows "
-        "for them:",
+        "for them (descriptive only: these outcomes run to the data cutoff, past the "
+        "development period, Section 10):",
         "",
     ]
     fate_rows = []
@@ -542,12 +558,12 @@ def _summary_section(cfg: ProjectConfig, results: list[dict[str, Any]]) -> list[
                     f"{total:,}",
                     share("stopped early"),
                     share("completed"),
-                    share("lapsed, never resolved"),
+                    share(STILL_LAPSED),
                 ]
             )
     lines += markdown_table(
         ["Origin", "State on the origin", "Trials", "Stopped early later", "Completed later",
-         "Lapsed, never resolved"],
+         "Lapsed at the data cutoff"],
         fate_rows,
     )  # fmt: skip
     return [*lines, ""]
@@ -592,6 +608,21 @@ def document(cfg: ProjectConfig, results: list[dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def run_metrics(results: list[dict[str, Any]]) -> dict[str, float]:
+    """The calibration slope of every label set, and the move from hindsight to as-of
+    labels, per horizon and origin, as flat metric names."""
+    out: dict[str, float] = {}
+    for r in results:
+        year = r["origin"][:4]
+        for months, by_mix in r["horizons"].items():
+            for key, (name, _) in zip(MIX_KEYS, MIXES, strict=True):
+                out[f"calibration_slope_{months}m_{year}_{key}"] = float(
+                    by_mix[name]["calibration_slope"]
+                )
+            out[f"slope_move_{months}m_{year}"] = float(r["slope_move"][months]["estimate"])
+    return out
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Diagnose M0's calibration slope (dev origins).")
     parser.add_argument("--input", type=Path, default=LANDMARKS_PATH)
@@ -599,8 +630,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--doc", type=Path, default=DOC_PATH)
     parser.add_argument("--out", type=Path, default=RESULTS_PATH)
     parser.add_argument("--resamples", type=int, default=BOOTSTRAP_RESAMPLES)
+    tracking.add_arguments(parser)
     args = parser.parse_args(argv)
     cfg = load_project_config()
+    started = tracking.git_state()
     # Development origins only: the locked origins are never read here (Section 10).
     origins = [o.date for o in cfg.walk_forward.origins if o.role == DEV_ROLE]
     if not origins:
@@ -623,11 +656,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{slopes[HINDSIGHT]['calibration_slope']:.3f} with hindsight labels, "
             f"{slopes[AS_OF]['calibration_slope']:.3f} with as-of labels"
         )
+    saved: dict[str, Any] = {"origins": results}
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    args.out.write_text(json.dumps(saved, indent=2), encoding="utf-8")
     changed = write_text_if_changed(args.doc, document(cfg, results))
     print(f"wrote {args.out}")
     print(f"{args.doc}: {'written' if changed else 'up to date'}")
+    if not args.no_track:
+        try:
+            saved["tracking"] = tracking.log_run(
+                "m0-calibration-diagnosis",
+                {"model": "m0", "origins": ",".join(o.isoformat() for o in origins),
+                 "bootstrap_resamples": args.resamples, "label_sets": len(MIXES)},
+                run_metrics(results),
+                [args.out, args.doc],
+                cfg,
+                tags={"step": "9", "kind": "diagnosis", "roles": DEV_ROLE},
+                local=args.local_tracking,
+                state=started,
+            )  # fmt: skip
+        except tracking.TrackingError as exc:  # both files are written: say so and fail
+            print(f"failed: the run was not logged to MLflow ({exc}); its results are in "
+                  f"{args.out}", file=sys.stderr)  # fmt: skip
+            return tracking.FAILED_EXIT_CODE
+        args.out.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+        print(f"logged to {saved['tracking']['store_description']}")
     return 0
 
 

@@ -14,7 +14,8 @@ import pytest
 from trialpulse.cli import RefusedError
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import diagnosis as dg
-from trialpulse.eval.metrics import calibration_slope_intercept
+from trialpulse.eval.ipcw import censoring_groups, horizon_labels_and_weights
+from trialpulse.eval.metrics import calibration_slope_intercept, ipcw_auc
 from trialpulse.eval.walkforward import (
     evaluation_rows,
     horizon_days,
@@ -198,11 +199,30 @@ def test_what_became_of_the_trials_censored_on_the_origin(hand_cohort: dict[str,
     fates = dg.later_fate(hand_cohort["final_outcomes"], hand_cohort["as_of_outcomes"], T)
     assert {(f["state"], f["fate"]): f["trials"] for f in fates} == {
         ("lapsed on the origin", "completed"): 1,  # A
-        ("open on the origin", "lapsed, never resolved"): 1,  # B
+        ("open on the origin", "lapsed at the data cutoff"): 1,  # B
     }
     completed = next(f for f in fates if f["fate"] == "completed")
     assert completed["share"] == 1.0
     assert completed["median_days_after_origin"] == (D(2017, 5, 1) - T).days
+
+
+def test_an_event_dated_on_the_origin_is_not_known_in_hindsight(tmp_path: Path) -> None:
+    """ADR 0015: what is dated on the origin is not known on the origin. A trial that
+    stopped on the origin itself is open in the hindsight form, as it is in the cohort built
+    as of the origin, so the two forms of its rows are the same."""
+    final = _landmarks("E", [D(2015, 1, 1), D(2015, 7, 1)], 1, T)
+    as_of = _landmarks("E", [D(2015, 1, 1), D(2015, 7, 1)], 0, T)
+    folder = tmp_path / "training" / "origin_2016-01-01"
+    table = dg.label_table(
+        _write(tmp_path / "landmarks.parquet", final, LANDMARK_COLUMNS),
+        _write(tmp_path / "outcomes.parquet", [_outcome("E", T, event=1)], OUTCOME_COLUMNS),
+        _write(folder / "landmarks.parquet", as_of, LANDMARK_COLUMNS),
+        _write(folder / "outcomes.parquet", [_outcome("E", T)], OUTCOME_COLUMNS),
+        T,
+    )
+    assert table.hindsight_event.tolist() == [0, 0]
+    assert table.hindsight_date.astype(str).tolist() == ["2016-01-01", "2016-01-01"]
+    assert table.category.tolist() == [dg.SAME, dg.SAME]
 
 
 def test_a_missing_cohort_file_names_the_command(tmp_path: Path) -> None:
@@ -224,13 +244,20 @@ def _simulated(root: Path, cfg: ProjectConfig, n_trials: int = 3000, seed: int =
     outcomes: list[dict[str, Any]] = []
     for i in range(n_trials):
         trial = f"NCT{i:08d}"
-        stratum = str(classes[i % 3])
+        # One class in forty trials is FED: too few evaluation rows for a censoring curve
+        # of its own, so the harness pools it.
+        stratum = "FED" if i % 40 == 7 else str(classes[i % 3])
         t0 = D(2010, 1, 1) + dt.timedelta(days=int(rng.integers(0, 2900)))
-        rate = {"INDUSTRY": 0.30, "OTHER": 0.12, "NIH": 0.20}[stratum]
+        rate = {"INDUSTRY": 0.30, "OTHER": 0.12, "NIH": 0.20, "FED": 0.20}[stratum]
         days = int(rng.exponential(900)) + 30
         event = 1 if rng.random() < rate else 2
+        reason = "cutoff"
+        # A third of the trials of class OTHER lapse for good before they end: censored in
+        # the final cohort too, so the censoring weights differ by class in the evaluation.
+        if stratum == "OTHER" and rng.random() < 0.33:
+            days, event, reason = max(30, int(days * rng.uniform(0.2, 0.9))), 0, "unknown"
         end = t0 + dt.timedelta(days=days)
-        outcomes.append(_outcome(trial, end, event=event, stratum=stratum))
+        outcomes.append(_outcome(trial, end, event=event, stratum=stratum, censor_reason=reason))
         for k in range(7):
             landmark = (pd.Timestamp(t0) + pd.DateOffset(months=6 * k)).date()
             if landmark >= end:
@@ -273,15 +300,26 @@ def _simulated(root: Path, cfg: ProjectConfig, n_trials: int = 3000, seed: int =
 
 
 def test_the_command_writes_the_diagnosis_for_the_development_origins(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], tracked_runs: list[Any]
 ) -> None:
     cfg = load_project_config()
     root = _simulated(tmp_path / "cohort", cfg)
     doc, out = tmp_path / "diagnosis.md", tmp_path / "m0.json"
     args = ["--input", str(root / "landmarks.parquet"), "--training-dir", str(root / "training"),
             "--doc", str(doc), "--out", str(out), "--resamples", "20"]  # fmt: skip
+    assert dg.main([*args, "--no-track"]) == 0
+    assert "tracking" not in json.loads(out.read_text(encoding="utf-8"))
+    assert tracked_runs == []
     assert dg.main(args) == 0
-    results = json.loads(out.read_text(encoding="utf-8"))
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    results = saved["origins"]
+    # The run is logged like a model run, with both files and one slope per label set.
+    (logged,) = tracked_runs
+    assert saved["tracking"]["run_name"] == logged["name"] == "m0-calibration-diagnosis"
+    assert logged["artifacts"] == [str(out), str(doc)]
+    assert logged["tags"] == {"step": "9", "kind": "diagnosis", "roles": "dev"}
+    assert logged["local"] is False
+    assert logged["metrics"] == dg.run_metrics(results)
     dev = [o.date.isoformat() for o in cfg.walk_forward.origins if o.role == "dev"]
     assert [r["origin"] for r in results] == dev  # the locked origins are never read
     text = doc.read_text(encoding="utf-8")
@@ -292,6 +330,8 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
     for origin in dev:
         assert f"## Origin {origin}" in text
     assert "2018-01-01" not in text
+    # The table that follows trials past the development period says what it is (Section 10).
+    assert text.count("Descriptive only") + text.count("descriptive only") >= len(dev) + 1
     first = results[0]
     # The simulation only made trials lapse on the origin; nothing lapses later.
     assert first["categories"][dg.LAPSED_AS_OF_ORIGIN]["rows"] > 100
@@ -313,12 +353,72 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
     model = AalenJohansenModel().fit(time, event, train.features)
     months = max(cfg.horizons_months)
     h = horizon_days(ev.landmark_date, months)
-    groups = np.asarray(ev.features["stratum"]).astype(str)
-    slope, _ = calibration_slope_intercept(
-        ev_time, ev_event, model.predict_cif(h, ev.features), h, groups
-    )
+    classes = np.asarray(ev.features["stratum"]).astype(str)
+    groups = censoring_groups(classes, cfg.evaluation.censoring_min_rows)
+    # FED is too small among the evaluation rows for a curve of its own: the harness pools
+    # it, and so must the diagnosis.
+    assert first["group_of_class"] == {
+        "FED": "POOLED", "INDUSTRY": "INDUSTRY", "NIH": "NIH", "OTHER": "OTHER",
+    }  # fmt: skip
+    assert set(first["observed_by_group"][str(months)]) == {"INDUSTRY", "NIH", "OTHER", "POOLED"}
+    as_of_score = model.predict_cif(h, ev.features)
+    slope, _ = calibration_slope_intercept(ev_time, ev_event, as_of_score, h, groups)
     reported = first["horizons"][str(months)]
     assert reported[dg.AS_OF]["calibration_slope"] == pytest.approx(slope)
+    # Every other column of the report, recomputed here from the files. The hindsight fit:
+    table = dg.label_table(
+        root / "landmarks.parquet", root / "outcomes.parquet",
+        training_path(root / "training", origin),
+        training_path(root / "training", origin).parent / "outcomes.parquet", origin,
+    )  # fmt: skip
+    h_time, h_event, h_stratum = table.mix(())
+    hindsight_score = (
+        AalenJohansenModel()
+        .fit(h_time, h_event, {"stratum": h_stratum})
+        .predict_cif(h, ev.features)
+    )
+    hindsight = reported[dg.HINDSIGHT]
+    grouped, _ = calibration_slope_intercept(ev_time, ev_event, hindsight_score, h, groups)
+    single, _ = calibration_slope_intercept(ev_time, ev_event, hindsight_score, h)
+    assert hindsight["calibration_slope"] == pytest.approx(grouped)
+    assert hindsight["calibration_slope_single_curve"] == pytest.approx(single)
+    assert abs(grouped - single) > 1e-4  # the two are different numbers on these rows
+    assert hindsight["auc"] == pytest.approx(
+        ipcw_auc(ev_time, ev_event, hindsight_score, h, groups)
+    )
+    assert abs(hindsight["auc"] - ipcw_auc(ev_time, ev_event, hindsight_score, h)) > 1e-6
+    # Predicted by class: the mean prediction of the rows of that class, not of all rows.
+    predicted = first["predicted_by_class"][str(months)]
+    for label in ("INDUSTRY", "OTHER", "NIH", "FED"):
+        member = classes == label
+        assert predicted[dg.HINDSIGHT][label] == pytest.approx(hindsight_score[member].mean())
+        assert predicted[dg.AS_OF][label] == pytest.approx(as_of_score[member].mean())
+    assert predicted[dg.HINDSIGHT]["INDUSTRY"] > predicted[dg.HINDSIGHT]["OTHER"] + 0.02
+    # Observed by group: the IPCW rate, which is not the plain share of early stops when a
+    # group has rows censored before the horizon.
+    y, w = horizon_labels_and_weights(ev_time, ev_event, h, groups)
+    for group, values in first["observed_by_group"][str(months)].items():
+        member = groups == group
+        assert values["rows"] == int(member.sum())
+        assert values["observed"] == pytest.approx((w[member] * y[member]).sum() / w[member].sum())
+        assert values["censored_before_horizon"] == pytest.approx((w[member] == 0).mean())
+    other = first["observed_by_group"][str(months)]["OTHER"]
+    assert other["censored_before_horizon"] > 0.05
+    assert other["observed"] > y[groups == "OTHER"].mean() + 1e-3
+    # Which class carries the move: the hindsight predictions with the rows of one class
+    # taking the as-of prediction. Only OTHER has lapsed records here, so only it moves.
+    one_class = first["slope_with_one_class_from_as_of"][str(months)]
+    for label in ("INDUSTRY", "OTHER"):
+        mixed = np.where(classes == label, as_of_score, hindsight_score)
+        expected, _ = calibration_slope_intercept(ev_time, ev_event, mixed, h, groups)
+        assert one_class[label] == pytest.approx(expected)
+    assert abs(one_class["OTHER"] - grouped) > 10 * abs(one_class["INDUSTRY"] - grouped)
+    assert one_class["OTHER"] == pytest.approx(reported[dg.AS_OF]["calibration_slope"], abs=0.02)
+    # The summary table prints each slope with its difference from hindsight, signed.
+    move_text = f"{slope:.3f} ({slope - grouped:+.3f})"
+    assert abs(slope - grouped) > 0.005
+    assert f"| {dg.AS_OF} | " in text
+    assert move_text in text.split("## Summary")[1].split("## Origin")[0]
     assert reported[dg.AS_OF]["training_rows"] == len(train)
     # Swapping in the one category that differs gives the as-of labels exactly.
     one = reported["hindsight, lapsed as of the origin from as-of"]
@@ -332,3 +432,50 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
     # A second run changes nothing.
     assert dg.main(args) == 0
     assert "up to date" in capsys.readouterr().out
+
+
+def test_the_metrics_of_the_logged_run_name_each_label_set() -> None:
+    results = [
+        {
+            "origin": "2016-01-01",
+            "horizons": {
+                "24": {
+                    name: {"calibration_slope": 1.0 + i / 10}
+                    for i, (name, _) in enumerate(dg.MIXES)
+                }
+            },
+            "slope_move": {"24": {"estimate": 0.4}},
+        }
+    ]
+    assert dg.run_metrics(results) == {
+        "calibration_slope_24m_2016_hindsight": 1.0,
+        "calibration_slope_24m_2016_lapsed_on_origin_swapped": 1.1,
+        "calibration_slope_24m_2016_lapsed_later_swapped": 1.2,
+        "calibration_slope_24m_2016_both_swapped": 1.3,
+        "calibration_slope_24m_2016_as_of": 1.4,
+        "slope_move_24m_2016": 0.4,
+    }
+    assert len(dg.MIX_KEYS) == len(dg.MIXES)
+
+
+def test_a_tracking_failure_keeps_the_diagnosis_and_fails_the_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from trialpulse import tracking
+
+    def refused(*args: object, **kwargs: object) -> dict[str, str]:
+        raise tracking.TrackingError("the server answered 404")
+
+    cfg = load_project_config()
+    root = _simulated(tmp_path / "cohort", cfg, n_trials=1200)
+    monkeypatch.setattr(tracking, "log_run", refused)
+    doc, out = tmp_path / "diagnosis.md", tmp_path / "m0.json"
+    code = dg.main(["--input", str(root / "landmarks.parquet"), "--training-dir",
+                    str(root / "training"), "--doc", str(doc), "--out", str(out),
+                    "--resamples", "5"])  # fmt: skip
+    assert code == tracking.FAILED_EXIT_CODE
+    assert "not logged to MLflow (the server answered 404)" in capsys.readouterr().err
+    assert "## Summary" in doc.read_text(encoding="utf-8")
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert len(saved["origins"]) == 2
+    assert "tracking" not in saved
