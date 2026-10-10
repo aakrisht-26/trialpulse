@@ -2,13 +2,13 @@
 
 - Date: 2026-10-10
 - Status: **Proposed.** Built in Step 9 without asking, and waiting for Aakrisht's review. Decision 2 (the censoring weights by sponsor class) is his own instruction from the review of Step 7 and is recorded here for completeness.
-- Refines CLAUDE.md Section 9 (M1, "static IPCW LightGBM binary classifier at L0 only, one per horizon") and how M1 reads the training rows of Section 6. No locked definition changes: the training rows of an origin, their labels (ADR 0016), the evaluation rows and the metrics are untouched. This is ADR 0015 applied to a horizon instead of an interval.
+- Refines CLAUDE.md Section 9 (M1, "static IPCW LightGBM binary classifier at L0 only, one per horizon") and how M1 reads the training rows of Section 6. No locked definition changes: the training rows of an origin, their labels (ADR 0016), the evaluation rows and the metrics are untouched. It follows the idea of ADR 0015 (a period counts only if it ended within the observation window) for a horizon instead of an interval, and is stricter at the boundary (decision 1).
 
 ## Context
 
 Section 6 gives the training rows of origin T: the landmarks before T, with every outcome censored at T. Section 9 makes M1 a binary classifier on the landmark 0 rows, weighted for censoring. Read literally, M1 trains on every landmark 0 row before T: a row is a case if the trial stopped early within the horizon, a control if it did not, and a row censored before the horizon has no label and passes its weight to the labeled rows (IPCW).
 
-For the registrations of the last H months before T, that label exists only if the trial ended before T. A trial that was still open on T is censored before its horizon. So among the newest registrations, the rows with a label are the ones that stopped early or completed within months, and the share of early stops among them is two and a half to six times the share among the older rows:
+For the registrations of the last H months before T, that label exists only if the trial ended before T. A trial that was still open on T is censored before its horizon. So among the newest registrations, the rows with a label are the ones that stopped early or completed within months, and the share of early stops among them is 2.5 to 6.4 times the share among the older rows:
 
 | Origin, horizon | Labeled rows whose horizon had passed (early stops) | Labeled rows whose horizon had not passed (early stops) |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Measured on the development origins, at landmark 0, with the same settings and t
 | Origin, horizon | Observed early-stop rate | Mean predicted, as built | Mean predicted, literal reading | AUC, as built | AUC, literal reading |
 | --- | --- | --- | --- | --- | --- |
 | 2016, 12 months | 1.91% | 1.74% | 24.85% | 0.677 | 0.599 |
-| 2016, 24 months | 4.86% | 4.91% | 32.45% | 0.668 | 0.595 |
+| 2016, 24 months | 4.86% | 4.91% | 32.45% | 0.667 | 0.595 |
 | 2017, 12 months | 1.96% | 1.81% | 27.85% | 0.700 | 0.624 |
 | 2017, 24 months | 4.81% | 4.88% | 37.19% | 0.669 | 0.586 |
 
@@ -32,16 +32,16 @@ About 1% of the 12-month rows and 6% of the 24-month rows are enough to do this,
 
 ## Decision
 
-1. **For a horizon of H months, M1 trains on the landmark 0 rows first posted more than H months before the origin** (L + H before T; an outcome dated on the origin is not known on the origin, ADR 0015, so a registration exactly H months before T is left out too). A later registration is not a training row for that horizon, whatever happened to it.
+1. **For a horizon of H months, M1 trains on the landmark 0 rows first posted more than H months before the origin** (L + H before T). A later registration is not a training row for that horizon, whatever happened to it. A registration exactly H months before T is left out too (34 and 49 rows for origin 2016, 57 and 33 for 2017). Here M1 differs from ADR 0015, which keeps the interval that ends on T as a continuation: an outcome dated on the origin is not known on the origin, so such a row is censored on its horizon day and has weight 0 unless the trial ended earlier, and keeping these registrations would keep only the ones that ended.
 2. **Censoring weights by sponsor class.** Among those rows, a row can still be censored before the horizon under the lapse rule (ADR 0014). It gets weight 0, and the labeled rows are weighted by the inverse probability of staying uncensored, from Kaplan-Meier censoring curves within each lead sponsor class, fitted on these training rows, with the pooling threshold of ADR 0017. Training and evaluation then make one assumption about censoring.
 3. **The number of trees comes from the last training year that has labels:** the latest 12 months of those registrations (first posted from T minus H minus 12 months to T minus H). A model fitted on the earlier registrations chooses the number of boosting rounds by early stopping on that year; the final model runs that many rounds on every labeled row. Section 9 says "early stopping on the last training year"; the calendar year before T has no usable labels, for the reason above.
-4. **Fixed settings in Step 9** (`trialpulse.models.static_clf.PARAMS`: learning rate 0.05, 31 leaves, at least 100 rows per leaf, feature and row subsampling 0.8, L2 penalty 1, fixed seed, deterministic). Tuning belongs to Step 10 (Section 9).
+4. **Fixed settings in Step 9** (`trialpulse.models.static_clf.PARAMS`: learning rate 0.05, 31 leaves, at least 100 rows per leaf, feature and row subsampling 0.8, L2 penalty 1, fixed seed, deterministic). Early stopping waits 50 rounds for an improvement of the weighted log loss, within at most 2,000 rounds. If the last training year has fewer than 200 labeled rows, or it or the earlier rows hold one class only, the model runs 200 rounds (small synthetic registries in the tests; never the real data). Tuning belongs to Step 10 (Section 9).
 5. **M1 is scored on the landmark 0 rows of an origin's evaluation rows.** The censoring groups are decided on all evaluation rows of the origin, before the landmark filter, so a row carries the same weight under M1 as under M0, and the two can be compared row for row at landmark 0.
 
 ## Evidence
 
 - The two tables above (the second from a one-off run on the development origins with 20 resamples; the variant is `StaticClassifier` with decision 1 switched off and the tree counts of the built model).
-- `tests/models/test_static_clf.py`: `test_only_registrations_whose_horizon_has_passed_are_trained_on`, `test_the_rounds_come_from_the_last_training_year`, `test_a_row_censored_before_the_horizon_has_no_say` (labels and weights equal those of the evaluation metrics), `test_m1_separates_trials_that_stop_from_trials_that_do_not` (on simulated trials posted after the origin the mean predicted risk equals the observed rate within 3 points; the literal reading overpredicted them by 40%), `test_m1_runs_through_the_walk_forward_harness` (trained before the origin and scored after it, end to end).
+- `tests/models/test_static_clf.py`: `test_only_registrations_whose_horizon_has_passed_are_trained_on`, `test_the_rounds_come_from_the_last_training_year`, `test_each_fit_gets_the_rows_labels_and_weights_of_the_rule` (what LightGBM is handed, read at the call: the rows, the labels, the weights by sponsor class, the validation year and the number of trees), `test_a_row_censored_before_the_horizon_has_no_say` (changing a row without a label changes nothing), `test_m1_separates_trials_that_stop_from_trials_that_do_not` (on simulated trials posted after the origin the mean predicted risk equals the observed rate within 3 points; the literal reading overpredicted them by 40%), `test_m1_runs_through_the_walk_forward_harness` (trained before the origin and scored after it, end to end).
 - As built, on the development origins: calibration slopes of 0.906 and 1.120 at 12 months and 1.002 and 0.967 at 24 months, intercepts within 0.09 of 0 (docs/results_dev.md).
 
 ## Alternatives
@@ -53,5 +53,6 @@ About 1% of the 12-month rows and 6% of the 24-month rows are enough to do this,
 ## Consequences
 
 - M1 at 24 months trains on 66,996 of the 99,828 landmark 0 rows of origin 2016, and its newest training registration is two years old on the origin (one year at 12 months). That is the price of a classifier with a fixed horizon, and one reason for the discrete-time models of Step 10: an interval is 6 months long, so they lose the last 6 months only (ADR 0015).
+- **A smaller selection by registration date remains, and nothing available on the origin removes it** (found in the independent review of Step 9). The lapse rule (ADR 0014) needs 24 months without a verified status. As of the origin it has therefore thinned the older registration years (a record that lapsed is censored at its last verified date, often before its first landmark, and then has no row), but not yet the last two. The 2014 registrations, the last training year at 12 months for origin 2016, hold 15,718 landmark 0 rows as of 2016 and 14,106 as of 2017 (14,456 in the final cohort), and 1.71% of them are early stops within 12 months as of 2016 against 1.90% a year later. The evaluation rows come from the final cohort, where the thinning has happened. The reviewer refitted M1 on training rows thinned as a later cohort thins them, a diagnostic that cannot be run on the origin: the mean prediction moved by 1% to 7% of its value, not always in the same direction (I verified the row counts, not those refits). The person-period rows of Step 10 carry the same pattern, so calibration by registration year belongs on the watch list there.
 - Step 11's hypothesis "M4 beats M1 at L0" compares M4 with this M1.
 - If accepted, CLAUDE.md gains through the Amendments: "ADR 0023, M1's training rows: for a horizon of H months, M1 trains on the landmark 0 rows first posted more than H months before the origin, weighted for lapse censoring by sponsor class on those rows; early stopping uses the latest 12 months of them."
