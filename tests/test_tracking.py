@@ -108,6 +108,32 @@ def test_a_failure_is_explained_on_one_line_without_the_password(
     # address in the short form git uses.
     for plain in ("https://host?mail=a@b.test", "https://host#part@x", "git@host.test:o/r.git"):
         assert tracking.explain(RuntimeError(plain), server) == plain
+    # The address of the server is not shown: whole, or as the path of the request that
+    # failed (the request library quotes both when the server cannot be reached).
+    unreachable = RuntimeError(
+        "API request to https://tracking.example.test/owner/repo.mlflow/api/2.0/mlflow/runs/"
+        "create failed with exception HTTPSConnectionPool(host='tracking.example.test', "
+        "port=443): Max retries exceeded with url: /owner/repo.mlflow/api/2.0/mlflow/runs/create"
+    )
+    text = tracking.explain(unreachable, server)
+    assert "owner" not in text
+    assert "repo.mlflow" not in text
+    assert text.startswith("API request to [MLFLOW_TRACKING_URI]/api/2.0/mlflow/runs/create ")
+    assert text.endswith("with url: [its path]/api/2.0/mlflow/runs/create")
+    private = tracking.Target(
+        tracking.REMOTE, "https://someone:a-token@tracking.example.test/owner/repo.mlflow/"
+    )
+    for shown in (
+        "https://someone:a-token@tracking.example.test/owner/repo.mlflow/x",
+        "https://tracking.example.test/owner/repo.mlflow/x",
+    ):
+        assert tracking.explain(RuntimeError(f"no route to {shown}"), private) == (
+            "no route to [MLFLOW_TRACKING_URI]/x"
+        )
+    # Another server's address is not this server's: only its credentials go.
+    assert tracking.explain(RuntimeError("see https://other.test/owner/x"), server) == (
+        "see https://other.test/owner/x"
+    )
     # Before a target exists (the store could not even be chosen) there is no hint to add.
     assert tracking.explain(RuntimeError("error 404"), None) == "error 404"
     # The hint is about a server; a local store that fails gets its own message only.

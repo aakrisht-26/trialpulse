@@ -45,6 +45,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from trialpulse.config import PROJECT_CONFIG_PATH, REPO_ROOT, ProjectConfig, Secrets
 
@@ -121,14 +122,27 @@ def local_target(store: Path, why: str = NOT_SET) -> Target:
     )
 
 
+def without_address(text: str, uri: str) -> str:
+    """A message without the address of the server: the address as configured, the same
+    without the credentials it may hold, and its path alone (the request library names the
+    address and the path of a request that failed)."""
+    for address in (uri.rstrip("/"), CREDENTIALS_IN_ADDRESS.sub("://", uri).rstrip("/")):
+        if address:
+            text = text.replace(address, "[MLFLOW_TRACKING_URI]")
+    path = urlsplit(uri).path.rstrip("/")
+    return text.replace(path, "[its path]") if len(path) > 1 else text
+
+
 def explain(exc: BaseException, target: Target | None) -> str:
-    """What went wrong, on one line, without the password of the server and without
-    credentials written inside an address. A 404 from a server gets the usual cause: MLflow
-    reports it as a failed request and says no more."""
+    """What went wrong, on one line, without the password of the server, without its
+    address and without credentials written inside any address. A 404 from a server gets
+    the usual cause: MLflow reports it as a failed request and says no more."""
     text = " ".join(str(exc).split()) or type(exc).__name__
     password = os.environ.get("MLFLOW_TRACKING_PASSWORD")
     if password:
         text = text.replace(password, "[password]")
+    if target is not None and target.kind == REMOTE:
+        text = without_address(text, target.uri)
     text = CREDENTIALS_IN_ADDRESS.sub("://[credentials]@", text)
     if target is not None and target.kind == REMOTE and "404" in text:
         text += (
