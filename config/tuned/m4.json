@@ -1,0 +1,69 @@
+{
+  "model": "m4",
+  "settings": {
+    "learning_rate": 0.04349150302046186,
+    "num_leaves": 21,
+    "min_data_in_leaf": 348,
+    "feature_fraction": 0.6599643213110283,
+    "bagging_fraction": 0.7017732658996392,
+    "lambda_l2": 1.2059237765439792
+  },
+  "objective": "mean over the development origins of the IPCW AUC at 12 months, all landmark indices; ties by the Brier score, then by the calibration slope closest to 1",
+  "auc": 0.6827389520524381,
+  "brier": 0.03129268676629316,
+  "calibration_slope": 0.7967885647022526,
+  "by_origin": {
+    "2016-01-01": 0.6787062443765064,
+    "2017-01-01": 0.6867716597283697
+  },
+  "default_settings": {
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 100,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "lambda_l2": 1.0
+  },
+  "default_auc": 0.6745347085085629,
+  "chosen_trial": 17,
+  "trials": 40,
+  "trial_sample_share": 0.1,
+  "sampled_training_trials": {
+    "2016-01-01": 9942,
+    "2017-01-01": 11715
+  },
+  "seed": 42,
+  "search_space": {
+    "learning_rate": [
+      0.03,
+      0.2,
+      "log"
+    ],
+    "num_leaves": [
+      15,
+      255,
+      "log-int"
+    ],
+    "min_data_in_leaf": [
+      20,
+      500,
+      "log-int"
+    ],
+    "feature_fraction": [
+      0.4,
+      1.0,
+      "linear"
+    ],
+    "bagging_fraction": [
+      0.5,
+      1.0,
+      "linear"
+    ],
+    "lambda_l2": [
+      0.001,
+      30.0,
+      "log"
+    ]
+  },
+  "dataset_revision": "v2026.09.26"
+}
