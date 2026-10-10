@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 9 (baselines and Cox analysis)**, started on 2026-10-10 after Aakrisht approved Step 7 (see "Review of Step 7"). It begins with the calibration diagnosis ("Guidance for later steps", item 12). **Step 6** is in progress: 5,250 of 10,000 sample texts are labeled (2026-10-10; LLM test result: macro-F1 0.842); the final distilled model waits for the sample. Since 2026-10-10 the daily labeling batch is run by Claude, once per session.
+Current step: **Step 9 (baselines and Cox analysis)**, built and independently reviewed on 2026-10-10, waiting for Aakrisht's review. One acceptance criterion is open: the runs are logged to a local MLflow store, not to DagsHub, because the DagsHub repository named in `.env` does not exist yet (see "Blocked, skipped or deferred" in the Step 9 section). Step 10 is not started. **Step 6** is in progress: 5,250 of 10,000 sample texts are labeled (2026-10-10; LLM test result: macro-F1 0.842); the final distilled model waits for the sample. Since 2026-10-10 the daily labeling batch is run by Claude, once per session.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -85,7 +85,7 @@ Current step: **Step 9 (baselines and Cox analysis)**, started on 2026-10-10 aft
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); the sample is labeled in daily batches, by Claude since 2026-10-10 (5,250 of 10,000 on 2026-10-10); distilled model provisional |
 | 7 | Point-in-time features | Approved 2026-10-10 (ADRs 0018 to 0021 accepted). Personal-title sponsor names no longer stored (ADR 0022, warehouse schema version 3), decided in the same review |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
-| 9 | Baselines and Cox analysis | In progress since 2026-10-10 |
+| 9 | Baselines and Cox analysis | Built and independently reviewed 2026-10-10, waiting for review. Open: runs are in a local MLflow store until the DagsHub repository exists; ADR 0023 proposed |
 | 10 | Discrete-time models and tuning | Not started |
 | 11 | Pre-registration, locked test and results | Not started |
 | 12 | Explainability, model card, data card | Not started |
@@ -1250,7 +1250,7 @@ Commits: `6a76482` (stage 1), `6071b2e` (joblib and threadpoolctl), `15ee270` (s
 
 ## Step 9: Baselines and Cox analysis
 
-Date: 2026-10-10. Status: **in progress**. Started on Aakrisht's instruction in the review of Step 7. Development origins only; the test lock is untouched.
+Date: 2026-10-10. Status: **built and independently reviewed, waiting for Aakrisht's review**. Started on his instruction in the review of Step 7. Development origins only; the test lock is untouched. One criterion is not met: the runs are not on DagsHub yet (see "Blocked, skipped or deferred").
 
 ### Part 1: why M0's 24-month calibration slope moved (diagnosis only, reported before anything else was fitted)
 
@@ -1290,6 +1290,120 @@ The whole move is +0.208 (95% interval +0.144 to +0.270) and +0.127 (+0.087 to +
 - (c) **Weight training rows for lapse censoring by more than the sponsor class** (for example by how stale the record already is). Closer to the cause, and a modeling choice that belongs to Step 10.
 
 Decisions in this part that were mine: the five categories and the order of the swaps; scoring every label set with the harness's own metrics and censoring groups; 200 bootstrap resamples of the evaluation trials for the interval of the move, with the predictions held fixed (so the interval reflects the evaluation sample, not the training sample).
+
+### Part 2: what was built
+
+- **Experiment tracking** (`src/trialpulse/tracking.py`). Every model command logs one MLflow run: the commit it started from and whether tracked files had uncommitted changes, the dataset revision and data cutoff, the parameters of the run, its metrics, `config/project.yaml` and the result files. If `MLFLOW_TRACKING_URI` is set the run goes to that server, else to a SQLite store in `mlruns/` (gitignored), and the results file says which and that a local store is temporary. A command writes its results before it logs; if the run cannot be logged it says why and exits with code 5, and nothing is lost. `--no-track` logs nothing; `--local-tracking` uses the local store although a server is configured.
+- **The harness takes any model** (`src/trialpulse/eval/walkforward.py`). A model says whether it needs the Step 7 features and which landmark indices it is trained and scored on; the harness joins the features of the origin's own build, checks that they are the same rows, and scores. Each slice now also holds predicted against observed risk by sponsor class (`calibration_by_group`), the follow-up of the diagnosis in Part 1. M0 runs through the same path and gives the Step 8 numbers to six decimals (0.543942 and 0.551912).
+- **M1** (`src/trialpulse/models/static_clf.py`): one LightGBM binary classifier per horizon on landmark 0, all 123 features of the main model, IPCW weights by sponsor class fitted on its own training rows (your instruction), fixed settings, the number of trees by early stopping on the last training year. Which rows it trains on is a decision of mine with a measured reason: ADR 0023, proposed.
+- **Cause-specific Cox models at landmark 0** (`src/trialpulse/models/cox.py`, `docs/cox_report.md`): two models with the same 35 covariates, the hazard of an early stop and the hazard of completion, on the 117,742 landmark 0 rows of the cohort as of 2017-01-01. Hazard ratios with 95% intervals, the test on scaled Schoenfeld residuals per covariate, and the hazard ratio of the first year against later.
+- **`docs/results_dev.md`** (`src/trialpulse/eval/results_dev.py`): generated from the result files only. It refuses a result file that holds a locked origin or an unlock record.
+
+### Acceptance criteria
+
+| Criterion (CLAUDE.md Step 9 and your review of Step 7) | Met | Evidence |
+| --- | --- | --- |
+| The calibration diagnosis first, reported before anything else was fitted | Yes | Part 1, committed as `8ecf914` before the M1 commit `2a8f47b`; `docs/calibration_diagnosis.md` |
+| M0 and M1 on the development origins | Yes | `data/results/walkforward/m0_dev.json` and `m1_dev.json`, 1,000 resamples each, 0 invalid; origins 2016-01-01 and 2017-01-01 only |
+| Results table in `docs/results_dev.md` | Yes | Generated by `uv run python -m trialpulse.eval.results_dev`; a second run prints "up to date" |
+| Cause-specific Cox at L0 with hazard ratios, confidence intervals and Schoenfeld-residual checks | Yes | `docs/cox_report.md`: 35 covariates for each of the two causes |
+| M1's training weights by sponsor class | Yes | `StaticClassifier.fit_rows`; `test_a_row_censored_before_the_horizon_has_no_say` compares its labels and weights with those of the evaluation metrics |
+| Every run logged to MLflow with git commit, dataset revision, config, metrics and artifacts | Yes, in a local store | Three runs in `mlruns/` (experiment `trialpulse-development`): `m0-dev`, `m1-dev`, `cox-l0`, all from commit `d4e369d` with no uncommitted changes. `test_a_run_is_logged_with_its_commit_dataset_config_metrics_and_files` reads a run back from a store |
+| MLflow runs visible on DagsHub | **No** | `MLFLOW_TRACKING_URI` is set, its credentials are valid, and the address is well formed, but the DagsHub account has no repository, so the server answers 404. See "Blocked, skipped or deferred" |
+| Zero test-lock unlock events; development origins only | Yes | No command was run with `--unlock-test`; the result files hold `"unlock": null` and the roles `dev` only; no `prereg-v1` tag exists locally or on origin (`git tag -l`, `git ls-remote --tags origin`), and the lock cannot open without it |
+| A two-reviewer review before the report | Yes | "Independent review" below |
+| ruff, ruff format, mypy and pytest clean | Yes | In my shell on the final code: `ruff check`, `ruff format --check` and `mypy src` clean; the test counts are added after the independent review |
+
+### Results
+
+All of it is in [results_dev.md](results_dev.md) and [cox_report.md](cox_report.md). The headline, at landmark 0 (registration), where both models are scored on the same rows with the same censoring weights:
+
+| Horizon | Origin | Rows | AUC, M0 | AUC, M1 | Lift at 10%, M0 | Lift at 10%, M1 | Calibration slope, M0 | Calibration slope, M1 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 12 months | 2016 | 16,965 | 0.615 (0.585 to 0.642) | 0.677 (0.648 to 0.701) | 1.91 | 2.04 | 2.142 | 0.906 |
+| 12 months | 2017 | 17,538 | 0.602 (0.576 to 0.627) | 0.700 (0.675 to 0.724) | 2.03 | 2.49 | 2.137 | 1.120 |
+| 24 months | 2016 | 16,965 | 0.560 (0.542 to 0.579) | 0.667 (0.650 to 0.684) | 1.45 | 2.15 | 2.624 | 1.002 |
+| 24 months | 2017 | 17,538 | 0.562 (0.545 to 0.578) | 0.669 (0.651 to 0.687) | 1.53 | 2.21 | 2.626 | 0.967 |
+
+- **Mean AUC at 12 months over the development origins, landmark 0:** M0 0.6083, M1 0.6884. At 24 months: 0.5611 and 0.6681. The intervals are per model; the difference between two models has no interval of its own yet (open question 5).
+- **M0 over all landmark indices** is unchanged from Step 8: AUC 0.544 and 0.552 at 12 months, 0.534 and 0.535 at 24.
+- **Registration-time information carries real but modest signal.** The 10% of registrations M1 ranks highest stop early 2.0 to 2.5 times as often as the average. That is the bar for the dynamic models of Step 10 at landmark 0.
+- **M1 is calibrated where M0 is not.** M0 gives a trial at registration the average curve of its sponsor class over all landmark rows, which is too high for a new trial (2.89% predicted against 1.42% observed for class OTHER at 12 months, origin 2016). M1's slopes are 0.906 to 1.120 and its intercepts are within 0.09 of 0.
+- **The follow-up of Part 1: M1 does not run hot for class OTHER.** Predicted against observed at landmark 0: 1.31% against 1.42% and 1.41% against 1.52% at 12 months; 4.23% against 4.32% and 4.24% against 4.21% at 24. For INDUSTRY: 3.08% against 3.51% and 3.11% against 3.59% at 12 months (a little low), 6.98% against 6.95% and 6.99% against 7.11% at 24. The one class it overpredicts is NIH at 24 months (6.90% against 3.95%, 6.94% against 3.14%), on 152 and 191 rows. This supports remedy (a) of Part 1: leave the labels and keep watching the table.
+- **What the trees use.** No feature dominates: the largest share of gain is 6.3% (sponsor class). Sponsor class and organization class, the sponsor's smoothed early-stop rate, the number of open trials, the enrollment target, the planned duration and the registration lag come first, then text components.
+- **Cox models.** 9,592 early stops and 50,238 completions among 117,742 trials. For an early stop, the intervals of 22 of 35 covariates exclude 1. The largest: a behavioral intervention (hazard ratio 0.54, 0.49 to 0.61), sponsor class INDUSTRY against OTHER (1.64, 1.56 to 1.73), a drug intervention (1.46), a device intervention (1.32), and the sponsor's smoothed early-stop rate (1.25 per 10 points). INDUSTRY trials both stop early faster and complete faster (2.47): they resolve sooner either way.
+- **Proportional hazards does not hold for the main covariates, and the report says so.** The test rejects at 5% for 12 of 35 covariates for an early stop and 24 of 35 for completion. The INDUSTRY ratio for an early stop is 3.10 in the first year after registration and 1.31 afterwards: industry sponsors withdraw trials early. For 12 covariates the ratio is on different sides of 1 in the two windows (for example a phase 1 title: 1.11, then 0.66). A single hazard ratio there is an average over time. This is one more argument for the discrete-time models, where the interval is a feature.
+- **Run times, in my shell on the committed code, with the machine kept awake:** M1 170 seconds, Cox 15 seconds, M0 630 seconds, the diagnosis about 2.5 minutes. The first tracked runs of the night took 100 minutes for M0 and 7 for M1: the Windows event log shows the laptop in Modern Standby from 03:17 to 04:27 with one wake at 03:34, so those times say nothing about the code.
+
+### Independent review (2026-10-10)
+
+In progress: two reviewers, one on numbers and point-in-time rules, one on claims, tests and documents. Their findings and what was done about each are recorded here.
+
+### Decisions made without asking
+
+Each of these is mine. The one that refines CLAUDE.md is in a proposed ADR.
+
+1. **Which rows M1 trains on** (ADR 0023, proposed). For a horizon of H months, only the landmark 0 rows first posted more than H months before the origin. Section 6 read literally gives every landmark 0 row before the origin, with censoring weights. I measured that reading on the development origins: among the registrations of the last H months only the trials that already ended have a label, the model sees how recent a row is, and it predicts a mean risk of 24.9% against an observed 1.9% (2016, 12 months), with an AUC of 0.599 instead of 0.677. This is ADR 0015 applied to a horizon. The same ADR records the validation year (the latest 12 months of those registrations) and the fixed settings.
+2. **`mlflow-skinny` instead of `mlflow`** (commit `4da28f2`). MLflow is in the locked stack; the skinny distribution is its client without the server, the UI and their dependencies, which is all a project that logs to a hosted server needs. LightGBM and lifelines are in the locked stack as written.
+3. **The local store is SQLite.** MLflow 3.17 no longer accepts runs in its plain-file store.
+4. **A failed log is an error with exit code 5, not a silent fallback to the local store,** and `--local-tracking` is the explicit way to log locally while a server is configured. Your instruction covers "set" and "not set"; this is the third case, set but not usable. The three runs of this report used `--local-tracking`, and their result files say so.
+5. **The commit of a run is read when the command starts,** so a commit made during a long run is not credited with it.
+6. **To find the cause of the 404** I sent eight read-only requests to dagshub.com with the credentials of `.env`, read through the `Secrets` class, and printed status codes and yes or no answers only. Nothing was created or changed there, and no value from `.env` was printed.
+7. **The harness refactor:** the landmark rows moved to `eval/rows.py` so that models and harness can both import them; models implement one small protocol; the censoring groups of an origin are decided on all its evaluation rows before a model's landmark filter, so M1's rows carry the same weights as M0's rows at landmark 0.
+8. **Cox:** the cohort as of 2017-01-01, the later development origin (the most data that no locked origin's training set adds); 35 covariates from the registration-time features, categories against their most common level, numbers scaled to read per doubling, per year or per 10 points; sponsor classes under 500 rows merged; no text components (their ratios cannot be read). The Schoenfeld test is computed in the module, with the statistic lifelines uses, because the lifelines function takes close to a minute per 20,000 trials; a test compares the two on smaller data. The first-year and later ratios are my addition to the test, because with this many trials the test rejects for differences too small to matter.
+9. **`docs/results_dev.md` names the MLflow run and commit of each result,** so its "Runs" table changes whenever a model is run again. Every other table must come back identical.
+10. **I asked the app to keep the laptop awake** during the reruns (it holds off idle sleep for this session only and changes no setting), after the standby above.
+11. **Carried over from the review of Step 7 and still waiting for your word:** stage 2 of the personal-title fix (ADR 0022, decision 3: 48 more keys, 177 feature rows of 40 trials changed), and the decisions of Part 1.
+
+### Open questions
+
+1. **The DagsHub repository.** Create a repository named `trialpulse` in your DagsHub account (connecting the GitHub repository does it), or tell me to create an empty one through the DagsHub API with the token in `.env`. I did not create it: it is a new public resource under your account. Once it exists I run the three commands again without `--local-tracking` (about 15 minutes) and regenerate the "Runs" table.
+2. **ADR 0023** (M1's training rows, validation year and fixed settings): accept, or choose another reading? **Recommended: accept.**
+3. **The calibration remedies of Part 1.** **Recommended: (a),** leave the training labels as they are. M1 does not run hot for class OTHER, so a model with features absorbs what moved M0's slope.
+4. **Stage 2 of ADR 0022:** keep (recommended) or revert to the titles you named.
+5. **An interval for the difference between two models.** Step 11 plans "M4 beats M1 at L0". Today each model has its own interval; the comparison needs a paired bootstrap (the same resampled trials for both models). **Recommended:** add it to the harness in Step 10, when there are several models to compare.
+
+### Blocked, skipped or deferred
+
+- **MLflow on DagsHub: blocked on the repository.** What I found: `MLFLOW_TRACKING_URI` has the form `https://dagshub.com/<user>/trialpulse.mlflow`, the user in it is the tracking user name, the token is accepted (the account endpoint answers 200), and the account lists 0 repositories, so every MLflow request answers 404 with an empty body. The runs are complete in the local store, which is temporary and stays on this machine. Nothing else is blocked.
+- **Step 6:** 5,250 of 10,000 texts labeled. Today's batch ran earlier in this session and stopped at the provider's daily limit; the rule is one batch per session, so I did not start another. About 3 more days of batches.
+- **Tuning, M2 to M4 and the ablation** are Step 10. Not started.
+- **The test lock** was not touched. No locked origin was read by any command of this step.
+
+### Files touched
+
+- New: `src/trialpulse/tracking.py`, `src/trialpulse/eval/rows.py`, `src/trialpulse/eval/diagnosis.py`, `src/trialpulse/eval/results_dev.py`, `src/trialpulse/models/static_clf.py`, `src/trialpulse/models/cox.py`, `tests/test_tracking.py`, `tests/eval/test_diagnosis.py`, `tests/eval/test_results_dev.py`, `tests/models/conftest.py`, `tests/models/test_static_clf.py`, `tests/models/test_cox.py`, `docs/calibration_diagnosis.md`, `docs/cox_report.md`, `docs/results_dev.md`, `docs/adr/0023-m1-trains-on-registrations-whose-horizon-has-passed.md`.
+- Changed: `src/trialpulse/eval/walkforward.py`, `src/trialpulse/eval/metrics.py` (`calibration_by_group`), `src/trialpulse/features/frame.py`, `src/trialpulse/models/aalen_johansen.py`, `src/trialpulse/cohort/build.py` and `src/trialpulse/eda/report.py` (imports only), `tests/conftest.py` (no test logs to the project's server), `tests/eval/test_walkforward.py`, `tests/eval/test_metrics.py`, `tests/eval/test_censoring_groups.py`, `tests/cohort/test_build.py`, `pyproject.toml` and `uv.lock` (LightGBM, lifelines, mlflow-skinny), `.gitattributes`, `docs/progress.md`, `docs/interview_notes.md`.
+
+### Verify (PowerShell)
+
+What to expect:
+
+- Until the DagsHub repository exists, run the three model commands as written, with `--local-tracking`. Without it they still finish and keep their results, then print "failed: the run was not logged to MLflow" with the reason and exit with code 5.
+- The diagnosis takes about 2.5 minutes and must print a line that ends in "calibration_diagnosis.md: up to date".
+- M0 takes about 10 minutes, M1 about 3, Cox under 1. Keep the laptop awake: in standby the same runs took ten times as long.
+- M0 must reproduce Step 8: `docs\results_dev.md` shows 0.544 and 0.552 for M0 over all landmark indices at 12 months (0.543942 and 0.551912 in `data\results\walkforward\m0_dev.json`). The Cox command must print a line that ends in "cox_report.md: up to date".
+- `results_dev` rewrites `docs\results_dev.md`. `git diff` must show changes in the "Runs" table only (your run ids and commit); every other number must be identical.
+- The last command reads the labeling cache and makes no API call.
+
+```powershell
+git switch main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+uv run python -m trialpulse.eval.diagnosis
+uv run python -m trialpulse.eval.walkforward --model m0 --origins dev --local-tracking
+uv run python -m trialpulse.eval.walkforward --model m1 --origins dev --local-tracking
+uv run python -m trialpulse.models.cox --local-tracking
+uv run python -m trialpulse.eval.results_dev
+git status --short
+git diff docs/results_dev.md
+uv run python -m trialpulse.nlp.llm_labeler --status
+```
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
