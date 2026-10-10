@@ -73,5 +73,13 @@ features:
   text_hash_bits: 18            # the hashed vocabulary has 2^18 columns (ADR 0019)
   leakage_test_landmarks: 500   # landmarks sampled by the future-perturbation test
 
+# Hyperparameter tuning (CLAUDE.md Section 9): a fixed budget of Optuna trials per model,
+# on the development origins only. A trial is fitted on a seeded share of the training
+# trials (all landmark rows of a drawn trial), so that tuning a model stays under an hour;
+# the final fits use every row.
+tuning:
+  n_trials: 40
+  trial_sample_share: 0.25
+
 seeds:
   default: 42

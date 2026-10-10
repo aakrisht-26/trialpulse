@@ -173,6 +173,13 @@ class FeatureConfig(_Section):
     leakage_test_landmarks: PositiveInt
 
 
+class TuningConfig(_Section):
+    """The tuning budget (CLAUDE.md Section 9)."""
+
+    n_trials: PositiveInt
+    trial_sample_share: float = Field(gt=0.0, le=1.0)
+
+
 class SeedConfig(_Section):
     """Random seeds. Later steps add named seeds here."""
 
@@ -200,6 +207,7 @@ class ProjectConfig(BaseSettings):
     walk_forward: WalkForwardConfig
     evaluation: EvaluationConfig
     features: FeatureConfig
+    tuning: TuningConfig
     seeds: SeedConfig
 
     @classmethod
