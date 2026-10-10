@@ -694,10 +694,12 @@ def test_tuning_runs_before_the_model_when_asked(
     assert walkforward.main(args) == 0
     (first, argv), second = order
     assert (first, second) == ("tune", "run")
-    assert argv[:2] == ["--model", "m4"]
-    assert argv[argv.index("--features-dir") + 1] == str(tmp_path / "features")
-    assert "--local-tracking" in argv  # the tuning run is logged where the model run is
-    assert "--no-track" not in argv
+    # The tuning reads the rows the model run reads, and is logged where it is logged.
+    assert argv == [
+        "--model", "m4", "--input", str(walkforward.LANDMARKS_PATH),
+        "--training-dir", str(walkforward.TRAINING_DIR),
+        "--features-dir", str(tmp_path / "features"), "--local-tracking",
+    ]  # fmt: skip
     # A tuning that fails stops the command before the model runs.
     order.clear()
     assert walkforward.main(args) == tracking.FAILED_EXIT_CODE
@@ -706,3 +708,99 @@ def test_tuning_runs_before_the_model_when_asked(
     order.clear()
     assert walkforward.main([*args[:4], "--no-track"]) == 0
     assert order == ["run"]
+    # Other folders and "do not log" are passed on too.
+    order.clear()
+    codes = iter([0])
+    elsewhere = ["--model", "m3", "--origins", "2016", "--tune", "--no-track",
+                 "--input", str(tmp_path / "rows.parquet"),
+                 "--training-dir", str(tmp_path / "training"),
+                 "--features-dir", str(tmp_path / "features")]  # fmt: skip
+    assert walkforward.main(elsewhere) == 0
+    assert order[0] == (
+        "tune",
+        ["--model", "m3", "--input", str(tmp_path / "rows.parquet"),
+         "--training-dir", str(tmp_path / "training"),
+         "--features-dir", str(tmp_path / "features"), "--no-track"],
+    )  # fmt: skip
+
+
+def test_tune_refuses_before_an_hour_of_tuning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A model without settings of its own, a locked origin and an unknown origin are
+    refused before the tuning starts, and a refusal of the tuning itself is one line with
+    exit code 2, as every other refusal of this command is."""
+    from trialpulse.cli import RefusedError
+    from trialpulse.models import tuning
+
+    calls: list[Any] = []
+
+    def tune(argv: list[str]) -> int:
+        calls.append(argv)
+        return 0
+
+    def fake_run(*args: object, **kwargs: object) -> dict[str, object]:
+        calls.append("run")
+        return {"model": "m4", "origins_spec": "dev", "origins": []}
+
+    monkeypatch.setattr(tuning, "main", tune)
+    monkeypatch.setattr(walkforward, "run", fake_run)
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
+    for name in ("m4-design", "m0", "m1"):
+        assert walkforward.main(["--model", name, "--origins", "dev", "--tune", "--no-track"]) == 2
+        message = capsys.readouterr().err
+        assert message.startswith("refused: --tune is for m2, m3, m4")
+        assert f"{name} has no settings of its own" in message
+    # The lock is checked first, as it is before any data is read.
+    assert walkforward.main(["--model", "m4", "--origins", "test", "--tune", "--no-track"]) == 2
+    assert "refused: locked origins need the --unlock-test flag" in capsys.readouterr().err
+    assert walkforward.main(["--model", "m4", "--origins", "2016,2019", "--tune"]) == 2
+    assert "--unlock-test" in capsys.readouterr().err
+    assert walkforward.main(["--model", "m4", "--origins", "2031", "--tune", "--no-track"]) == 2
+    assert "unknown origin year" in capsys.readouterr().err
+    assert calls == []
+
+    def refusing(argv: list[str]) -> int:
+        raise RefusedError("the features of origin 2016-01-01\n are not built")
+
+    monkeypatch.setattr(tuning, "main", refusing)
+    assert walkforward.main(["--model", "m4", "--origins", "dev", "--tune", "--no-track"]) == 2
+    assert capsys.readouterr().err == ("refused: the features of origin 2016-01-01 are not built\n")
+    assert calls == []  # the model does not run after a refused tuning
+
+
+def test_a_tuned_run_is_credited_to_the_tree_it_read_its_settings_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
+) -> None:
+    """The tuning rewrites config/tuned/<model>.json and the model then reads it. So the git
+    state of the model run is read again after the tuning: settings that differ from the
+    committed ones show as uncommitted changes, not as a clean commit that does not hold
+    them."""
+    from trialpulse.models import tuning
+
+    order: list[str] = []
+    states = iter(
+        [{"git_commit": "c1", "git_dirty": "no"}, {"git_commit": "c1", "git_dirty": "yes"}]
+    )
+
+    def state() -> dict[str, str]:
+        order.append("state")
+        return next(states)
+
+    def tune(argv: list[str]) -> int:
+        order.append("tune")
+        return 0
+
+    def fake_run(*args: object, **kwargs: object) -> dict[str, object]:
+        order.append("run")
+        return {"model": "m4", "origins_spec": "dev", "origins": [], "bootstrap_resamples": 5,
+                "training_labels": "as of each origin (ADR 0016)"}  # fmt: skip
+
+    monkeypatch.setattr(tracking, "git_state", state)
+    monkeypatch.setattr(tuning, "main", tune)
+    monkeypatch.setattr(walkforward, "run", fake_run)
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
+    assert walkforward.main(["--model", "m4", "--origins", "dev", "--tune"]) == 0
+    assert order == ["state", "tune", "state", "run"]
+    (logged,) = tracked_runs
+    assert logged["state"] == {"git_commit": "c1", "git_dirty": "yes"}

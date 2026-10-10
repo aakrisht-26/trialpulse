@@ -65,6 +65,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from trialpulse import tracking
+from trialpulse.cli import RefusedError
 from trialpulse.config import REPO_ROOT, Origin, ProjectConfig, load_project_config
 from trialpulse.dates import add_months, days_between
 from trialpulse.eval import EVENT_CENSORED
@@ -500,16 +501,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg = load_project_config()
     started = tracking.git_state()
     if args.tune:
+        from trialpulse.models.tuning import TUNABLE
         from trialpulse.models.tuning import main as tune
 
-        code: int = tune(
-            ["--model", args.model, "--input", str(args.input),
-             "--training-dir", str(args.training_dir), "--features-dir", str(args.features_dir),
-             *(["--no-track"] if args.no_track else []),
-             *(["--local-tracking"] if args.local_tracking else [])]
-        )  # fmt: skip
+        if args.model not in TUNABLE:
+            print(
+                f"refused: --tune is for {', '.join(TUNABLE)}; {args.model} has no settings of "
+                "its own to tune (an ablation rung of M4 runs with M4's)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            # The lock first, as run() checks it before any data: not after an hour of tuning.
+            require_unlock(
+                {o.role for o in select_origins(cfg, args.origins)}, REPO_ROOT, args.unlock_test
+            )
+            code: int = tune(
+                ["--model", args.model, "--input", str(args.input),
+                 "--training-dir", str(args.training_dir),
+                 "--features-dir", str(args.features_dir),
+                 *(["--no-track"] if args.no_track else []),
+                 *(["--local-tracking"] if args.local_tracking else [])]
+            )  # fmt: skip
+        except (TestLockError, RefusedError, ValueError) as exc:
+            print(f"refused: {' '.join(str(exc).split())}", file=sys.stderr)
+            return 2
         if code != 0:
             return code
+        # The tuning may have rewritten config/tuned/<model>.json: the model run is credited
+        # to the tree it reads its settings from, with its uncommitted changes if any.
+        started = tracking.git_state()
     try:
         results = run(
             cfg,
