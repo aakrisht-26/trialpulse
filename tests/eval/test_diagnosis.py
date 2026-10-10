@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trialpulse import tracking
 from trialpulse.cli import RefusedError
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import diagnosis as dg
@@ -204,6 +205,22 @@ def test_what_became_of_the_trials_censored_on_the_origin(hand_cohort: dict[str,
     completed = next(f for f in fates if f["fate"] == "completed")
     assert completed["share"] == 1.0
     assert completed["median_days_after_origin"] == (D(2017, 5, 1) - T).days
+    # A trial the as-of cohort excludes for a reversal is not one of "the trials censored
+    # on the origin", even where its record shows no event.
+    with_reversal = _write(
+        hand_cohort["as_of_outcomes"].parent / "with_reversal.parquet",
+        [
+            _outcome("A", D(2013, 6, 1), censor_reason="unknown"),
+            _outcome("B", T),
+            _outcome("X", T, reversal=True),
+        ],
+        OUTCOME_COLUMNS,
+    )
+    again = dg.later_fate(hand_cohort["final_outcomes"], with_reversal, T)
+    assert {(f["state"], f["fate"]): f["trials"] for f in again} == {
+        ("lapsed on the origin", "completed"): 1,
+        ("open on the origin", "lapsed at the data cutoff"): 1,
+    }
 
 
 def test_an_event_dated_on_the_origin_is_not_known_in_hindsight(tmp_path: Path) -> None:
@@ -320,6 +337,8 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
     assert logged["tags"] == {"step": "9", "kind": "diagnosis", "roles": "dev"}
     assert logged["local"] is False
     assert logged["metrics"] == dg.run_metrics(results)
+    assert logged["params"]["bootstrap_resamples"] == 20
+    assert logged["state"] == tracking.git_state()  # read by the command, handed to the store
     dev = [o.date.isoformat() for o in cfg.walk_forward.origins if o.role == "dev"]
     assert [r["origin"] for r in results] == dev  # the locked origins are never read
     text = doc.read_text(encoding="utf-8")
@@ -429,9 +448,10 @@ def test_the_command_writes_the_diagnosis_for_the_development_origins(
         reported[dg.AS_OF]["calibration_slope"] - reported[dg.HINDSIGHT]["calibration_slope"]
     )
     assert move["ci_low"] <= move["estimate"] <= move["ci_high"]
-    # A second run changes nothing.
-    assert dg.main(args) == 0
+    # A second run changes nothing, and --local-tracking reaches the store.
+    assert dg.main([*args, "--local-tracking"]) == 0
     assert "up to date" in capsys.readouterr().out
+    assert [run["local"] for run in tracked_runs] == [False, True]
 
 
 def test_the_metrics_of_the_logged_run_name_each_label_set() -> None:
@@ -461,8 +481,6 @@ def test_the_metrics_of_the_logged_run_name_each_label_set() -> None:
 def test_a_tracking_failure_keeps_the_diagnosis_and_fails_the_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from trialpulse import tracking
-
     def refused(*args: object, **kwargs: object) -> dict[str, str]:
         raise tracking.TrackingError("the server answered 404")
 

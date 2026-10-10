@@ -279,6 +279,7 @@ def test_load_landmark_rows(tmp_path: Path) -> None:
     rows = load_landmark_rows(path)
     assert len(rows) == 1
     assert rows.features["stratum"].tolist() == ["phase2"]
+    assert set(rows.features) == {"stratum"}  # the keys and the label are not features
     with pytest.raises(FileNotFoundError, match="Step 4"):
         load_landmark_rows(tmp_path / "missing.parquet")
 
@@ -434,6 +435,15 @@ def test_a_feature_model_is_refused_without_features_or_with_those_of_other_rows
         run(cfg, "probe", "2016", lambda: rows, _training, n_resamples=5,
             load_features=other_order)  # fmt: skip
 
+    def other_landmark(origin: dt.date, role: str, only: Any) -> walkforward.FeatureRows:
+        """The same trials in the same order, but their features at the next landmark."""
+        full = _feature_loader(rows, [])(origin, role, only)
+        return walkforward.FeatureRows(full.trial_id, full.landmark_index + 1, full.features)
+
+    with pytest.raises(ValueError, match="or other keys"):
+        run(cfg, "probe", "2016", lambda: rows, _training, n_resamples=5,
+            load_features=other_landmark)  # fmt: skip
+
 
 def test_the_command_logs_each_run_unless_told_not_to(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
@@ -557,5 +567,8 @@ def test_rows_take_feature_columns_of_their_own_length_only() -> None:
     assert set(more.features) == {"stratum", "risk"}
     assert more.features["risk"][-1] == len(rows) - 1
     assert "risk" not in rows.features  # the rows handed in are not changed
+    # A loaded column replaces one of the same name: the feature build is the source.
+    renamed = rows.with_features({"stratum": np.full(len(rows), "from the feature build")})
+    assert set(renamed.features["stratum"].tolist()) == {"from the feature build"}
     with pytest.raises(ValueError, match=f"risk: {len(rows) - 1} values for {len(rows)} rows"):
         rows.with_features({"risk": np.zeros(len(rows) - 1)})
