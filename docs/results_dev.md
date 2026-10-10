@@ -32,6 +32,44 @@ Mean AUC over the development origins: M0 0.5346.
 
 A model of landmark 0 only (M1) has no row here: it does not score the later landmarks.
 
+## By landmark index, 12 months
+
+| Model | Origin | Landmark index | Rows | AUC (95% interval) | Brier score | Lift at 10% | Calibration slope | Intercept |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M0 | 2016 | 0 | 16,965 | 0.615 (0.585 to 0.642) | 0.0188 (0.0169 to 0.0206) | 1.91 (1.45 to 2.31) | 2.142 | -0.537 |
+| M0 | 2016 | 1 | 14,989 | 0.555 (0.532 to 0.580) | 0.0296 (0.0270 to 0.0321) | 1.32 (0.99 to 1.61) | 1.194 | -0.053 |
+| M0 | 2016 | 2 | 12,849 | 0.523 (0.500 to 0.546) | 0.0366 (0.0336 to 0.0397) | 1.15 (0.89 to 1.44) | 0.571 | 0.178 |
+| M0 | 2016 | 3 | 10,659 | 0.541 (0.514 to 0.565) | 0.0381 (0.0347 to 0.0414) | 1.11 (0.82 to 1.39) | 0.972 | 0.226 |
+| M0 | 2016 | 4 | 8,922 | 0.533 (0.508 to 0.560) | 0.0399 (0.0358 to 0.0439) | 1.03 (0.73 to 1.33) | 0.572 | 0.276 |
+| M0 | 2016 | 5 | 6,921 | 0.509 (0.478 to 0.539) | 0.0411 (0.0364 to 0.0456) | 1.32 (0.97 to 1.73) | 0.444 | 0.311 |
+| M0 | 2016 | 6 | 5,429 | 0.550 (0.513 to 0.588) | 0.0389 (0.0343 to 0.0439) | 1.37 (0.94 to 1.85) | 1.088 | 0.264 |
+| M0 | 2017 | 0 | 17,538 | 0.602 (0.576 to 0.627) | 0.0193 (0.0174 to 0.0213) | 2.03 (1.61 to 2.49) | 2.137 | -0.504 |
+| M0 | 2017 | 1 | 16,432 | 0.563 (0.540 to 0.586) | 0.0272 (0.0248 to 0.0296) | 1.51 (1.18 to 1.83) | 1.396 | -0.133 |
+| M0 | 2017 | 2 | 14,078 | 0.549 (0.529 to 0.569) | 0.0330 (0.0301 to 0.0358) | 1.31 (1.04 to 1.65) | 1.055 | 0.075 |
+| M0 | 2017 | 3 | 11,660 | 0.534 (0.512 to 0.556) | 0.0379 (0.0346 to 0.0411) | 1.30 (0.99 to 1.57) | 0.758 | 0.221 |
+| M0 | 2017 | 4 | 9,594 | 0.541 (0.518 to 0.566) | 0.0390 (0.0351 to 0.0426) | 1.31 (1.01 to 1.70) | 0.925 | 0.257 |
+| M0 | 2017 | 5 | 7,317 | 0.544 (0.518 to 0.574) | 0.0370 (0.0330 to 0.0415) | 1.53 (1.12 to 1.95) | 0.954 | 0.200 |
+| M0 | 2017 | 6 | 6,008 | 0.538 (0.506 to 0.570) | 0.0364 (0.0320 to 0.0407) | 1.28 (0.83 to 1.71) | 0.831 | 0.184 |
+
+## By landmark index, 24 months
+
+| Model | Origin | Landmark index | Rows | AUC (95% interval) | Brier score | Lift at 10% | Calibration slope | Intercept |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M0 | 2016 | 0 | 16,965 | 0.560 (0.542 to 0.579) | 0.0464 (0.0436 to 0.0493) | 1.45 (1.22 to 1.68) | 2.624 | -0.315 |
+| M0 | 2016 | 1 | 14,989 | 0.539 (0.523 to 0.557) | 0.0584 (0.0551 to 0.0617) | 1.19 (0.99 to 1.38) | 1.503 | -0.050 |
+| M0 | 2016 | 2 | 12,849 | 0.523 (0.506 to 0.540) | 0.0649 (0.0610 to 0.0689) | 1.22 (1.03 to 1.41) | 1.141 | 0.073 |
+| M0 | 2016 | 3 | 10,659 | 0.540 (0.521 to 0.560) | 0.0649 (0.0606 to 0.0689) | 1.22 (1.00 to 1.47) | 1.672 | 0.077 |
+| M0 | 2016 | 4 | 8,922 | 0.533 (0.513 to 0.553) | 0.0665 (0.0618 to 0.0716) | 1.06 (0.82 to 1.26) | 1.053 | 0.105 |
+| M0 | 2016 | 5 | 6,921 | 0.503 (0.480 to 0.527) | 0.0640 (0.0587 to 0.0694) | 1.20 (0.91 to 1.47) | 0.557 | 0.061 |
+| M0 | 2016 | 6 | 5,429 | 0.532 (0.506 to 0.560) | 0.0651 (0.0593 to 0.0705) | 1.26 (0.95 to 1.61) | 1.499 | 0.088 |
+| M0 | 2017 | 0 | 17,538 | 0.562 (0.545 to 0.578) | 0.0459 (0.0434 to 0.0487) | 1.53 (1.31 to 1.79) | 2.626 | -0.320 |
+| M0 | 2017 | 1 | 16,432 | 0.549 (0.535 to 0.565) | 0.0547 (0.0517 to 0.0581) | 1.31 (1.10 to 1.51) | 2.142 | -0.117 |
+| M0 | 2017 | 2 | 14,078 | 0.539 (0.524 to 0.554) | 0.0624 (0.0590 to 0.0663) | 1.29 (1.09 to 1.52) | 1.634 | 0.036 |
+| M0 | 2017 | 3 | 11,660 | 0.526 (0.510 to 0.541) | 0.0695 (0.0653 to 0.0735) | 1.16 (0.96 to 1.35) | 1.083 | 0.158 |
+| M0 | 2017 | 4 | 9,594 | 0.523 (0.507 to 0.540) | 0.0674 (0.0625 to 0.0718) | 1.01 (0.80 to 1.26) | 1.108 | 0.125 |
+| M0 | 2017 | 5 | 7,317 | 0.516 (0.495 to 0.537) | 0.0625 (0.0573 to 0.0677) | 1.19 (0.93 to 1.51) | 0.705 | 0.038 |
+| M0 | 2017 | 6 | 6,008 | 0.509 (0.485 to 0.533) | 0.0620 (0.0568 to 0.0675) | 1.03 (0.74 to 1.33) | 0.343 | 0.030 |
+
 ## Landmark 0 (registration), 12 months
 
 | Model | Origin | Rows | AUC (95% interval) | Brier score | Lift at 10% | Calibration slope | Intercept | AUC, single censoring curve |
@@ -108,6 +146,70 @@ Origin 2017, 24 months:
 | NETWORK | 66 | 1.56% | 3.0% | 4.74% | 5.11% |
 | POOLED | 12 | 0.00% | 25.0% | 5.96% | 6.66% |
 
+## Predicted against observed risk by decile, landmark 0
+
+The rows of each model are sorted by its own predicted risk and cut into ten groups of equal size; the observed risk of a group is its Aalen-Johansen cumulative incidence at the horizon (Section 6). A model with few distinct predictions (M0 has one per sponsor class) puts equal predictions in neighboring groups.
+
+Origin 2016, 12 months:
+
+| Decile of predicted risk | Rows, M0 | Predicted, M0 | Observed, M0 | Rows, M1 | Predicted, M1 | Observed, M1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1,697 | 2.61% | 1.09% | 1,697 | 0.64% | 0.18% |
+| 2 | 1,697 | 2.89% | 1.40% | 1,697 | 0.80% | 0.79% |
+| 3 | 1,697 | 2.89% | 1.46% | 1,697 | 0.92% | 0.98% |
+| 4 | 1,697 | 2.89% | 1.45% | 1,697 | 1.05% | 1.10% |
+| 5 | 1,697 | 2.89% | 1.02% | 1,697 | 1.20% | 2.00% |
+| 6 | 1,696 | 2.89% | 1.45% | 1,696 | 1.41% | 1.43% |
+| 7 | 1,696 | 2.89% | 1.82% | 1,696 | 1.70% | 2.09% |
+| 8 | 1,696 | 3.53% | 2.30% | 1,696 | 2.11% | 2.57% |
+| 9 | 1,696 | 4.35% | 3.88% | 1,696 | 2.76% | 3.94% |
+| 10 | 1,696 | 4.35% | 3.21% | 1,696 | 4.84% | 3.91% |
+
+Origin 2017, 12 months:
+
+| Decile of predicted risk | Rows, M0 | Predicted, M0 | Observed, M0 | Rows, M1 | Predicted, M1 | Observed, M1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1,754 | 2.64% | 1.29% | 1,754 | 0.75% | 0.23% |
+| 2 | 1,754 | 2.90% | 1.06% | 1,754 | 0.92% | 0.84% |
+| 3 | 1,754 | 2.90% | 1.41% | 1,754 | 1.03% | 0.78% |
+| 4 | 1,754 | 2.90% | 1.18% | 1,754 | 1.15% | 0.53% |
+| 5 | 1,754 | 2.90% | 1.78% | 1,754 | 1.30% | 2.13% |
+| 6 | 1,754 | 2.90% | 1.81% | 1,754 | 1.52% | 1.59% |
+| 7 | 1,754 | 2.90% | 1.78% | 1,754 | 1.81% | 2.32% |
+| 8 | 1,754 | 3.29% | 2.40% | 1,754 | 2.20% | 2.54% |
+| 9 | 1,753 | 4.34% | 3.79% | 1,753 | 2.79% | 3.67% |
+| 10 | 1,753 | 4.34% | 3.11% | 1,753 | 4.62% | 4.88% |
+
+Origin 2016, 24 months:
+
+| Decile of predicted risk | Rows, M0 | Predicted, M0 | Observed, M0 | Rows, M1 | Predicted, M1 | Observed, M1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1,697 | 5.67% | 3.40% | 1,697 | 1.69% | 1.17% |
+| 2 | 1,697 | 6.30% | 4.62% | 1,697 | 2.39% | 2.12% |
+| 3 | 1,697 | 6.30% | 4.15% | 1,697 | 2.91% | 2.37% |
+| 4 | 1,697 | 6.30% | 3.96% | 1,697 | 3.39% | 2.85% |
+| 5 | 1,697 | 6.30% | 3.87% | 1,697 | 3.92% | 4.58% |
+| 6 | 1,696 | 6.30% | 4.21% | 1,696 | 4.50% | 4.16% |
+| 7 | 1,696 | 6.30% | 5.44% | 1,696 | 5.23% | 5.98% |
+| 8 | 1,696 | 6.84% | 5.16% | 1,696 | 6.15% | 7.51% |
+| 9 | 1,696 | 7.53% | 7.83% | 1,696 | 7.59% | 7.13% |
+| 10 | 1,696 | 7.54% | 5.97% | 1,696 | 11.35% | 10.49% |
+
+Origin 2017, 24 months:
+
+| Decile of predicted risk | Rows, M0 | Predicted, M0 | Observed, M0 | Rows, M1 | Predicted, M1 | Observed, M1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1,754 | 5.72% | 3.71% | 1,754 | 1.50% | 1.43% |
+| 2 | 1,754 | 6.26% | 3.81% | 1,754 | 2.26% | 2.45% |
+| 3 | 1,754 | 6.26% | 4.04% | 1,754 | 2.82% | 1.48% |
+| 4 | 1,754 | 6.26% | 4.94% | 1,754 | 3.33% | 3.35% |
+| 5 | 1,754 | 6.26% | 4.24% | 1,754 | 3.85% | 3.71% |
+| 6 | 1,754 | 6.26% | 3.93% | 1,754 | 4.46% | 4.37% |
+| 7 | 1,754 | 6.26% | 4.18% | 1,754 | 5.22% | 6.60% |
+| 8 | 1,754 | 6.62% | 5.05% | 1,754 | 6.20% | 6.30% |
+| 9 | 1,753 | 7.54% | 7.34% | 1,753 | 7.66% | 7.45% |
+| 10 | 1,753 | 7.55% | 6.84% | 1,753 | 11.54% | 10.70% |
+
 ## M1 in detail
 
 | Origin | Horizon (months) | Landmark 0 rows as of the origin | Of those, horizon passed by the origin | With a label | Early stops among them | Last training year (first post from, before) | Labeled rows in that year | Trees |
@@ -155,10 +257,13 @@ On the 117,742 landmark 0 rows of the cohort as of 2017-01-01. The full tables, 
 
 ## Runs
 
-Every run is logged to MLflow with its commit, the dataset revision, the configuration, its metrics and its result file (`trialpulse.tracking`).
+A run is logged to MLflow with the commit it started from, the dataset revision, the configuration, its metrics and its result files (`trialpulse.tracking`). The table says where each run of this document went.
 
 | Run | Logged to | MLflow run | Commit | Uncommitted changes at the time |
 | --- | --- | --- | --- | --- |
-| M0, development origins | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `m0-dev` in `trialpulse-development`, id `d2f2667549a74a72a15a8b1686fb6527` | `d4e369d` | no |
-| M1, development origins | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `m1-dev` in `trialpulse-development`, id `b4e9e5a4607741bd842362eb6335686e` | `d4e369d` | no |
-| Cox models at landmark 0 | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `cox-l0` in `trialpulse-development`, id `fbe7158a2e8d41ab9a04452f9b82fd78` | `d4e369d` | no |
+| M0, development origins | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `m0-dev` in `trialpulse-development`, id `1d99b4a7c2124f049e63b0daaafd03b4` | `4c593a5` | no |
+| M1, development origins | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `m1-dev` in `trialpulse-development`, id `5d5bcc20943e41a4873bc171af5bdcc8` | `4c593a5` | no |
+| Cox models at landmark 0 | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `cox-l0` in `trialpulse-development`, id `6f9042f3dc6a4377bc0692d5a3b701f2` | `4c593a5` | no |
+| Calibration diagnosis of M0 | a local store in mlruns/ (temporary: --local-tracking was given, so the server named by MLFLOW_TRACKING_URI was not used) | `m0-calibration-diagnosis` in `trialpulse-development`, id `68fce2b42aed4189aefad5e42d361180` | `4c593a5` | no |
+
+**Not every run above is on the project's MLflow server (DagsHub).** A run in a local store exists only on the machine that produced it, and a run that is not logged exists nowhere. The numbers of this document do not depend on where a run is logged; the runs are logged to the server again once it takes them.
