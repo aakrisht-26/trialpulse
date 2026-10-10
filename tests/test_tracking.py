@@ -292,6 +292,10 @@ def test_a_run_carries_the_project_s_values_in_the_tags_mlflow_sets_by_itself(
     tags = mlflow.get_run(info["run_id"]).data.tags
     assert tags["mlflow.source.git.commit"] == "0123abcd" == tags["git_commit"]
     assert tags["mlflow.user"] == tracking.RUN_USER == "trialpulse"
+    # MLflow's own line at the end of a run on a server is switched off: it holds a
+    # character that a redirected output on Windows cannot encode, which once left a
+    # complete run open on the server and failed the command.
+    assert os.environ["MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT"] == "true"
     assert tags["mlflow.source.name"] == tracking.source_name()
     assert not Path(tags["mlflow.source.name"]).is_absolute()
     assert tags["mlflow.source.git.repoURL"] == tracking.remote_address()

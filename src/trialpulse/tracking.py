@@ -25,7 +25,14 @@ them are set here instead, because the defaults would be wrong or would publish 
 of that machine: the commit is the one the run started from (MLflow reads HEAD when the
 run is logged), the source is the command's path inside the repository (not its path on
 the disk), the user is the project's name (not a login name), and the address of the git
-remote is logged without any credentials it may hold. MLflow still adds the branch name.
+remote is logged without any credentials it may hold. MLflow still adds the branch name,
+and a server records the account that logged the run as its user, whatever the tag says.
+
+**Nothing is printed by MLflow.** At the end of a run on a server MLflow prints the address
+of the run, with an emoji in front. Where the output of a command goes to a file on
+Windows, that character cannot be encoded: the print raised, the run was left open on the
+server, and the command reported a failed log although everything had arrived. The print is
+switched off (it would also show the address of the server).
 """
 
 import argparse
@@ -195,6 +202,7 @@ def log_run(
     state is read now. Metrics that are not finite are left out (MLflow refuses them on some
     stores) and counted in a tag. Raises TrackingError if the store does not take the run."""
     os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")  # no advice lines in the output
+    os.environ["MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT"] = "true"  # see the module text
     state = dict(state) if state is not None else git_state(repo)
     finite = finite_metrics(metrics)
     own = {
