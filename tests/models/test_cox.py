@@ -118,7 +118,8 @@ def test_proportional_hazards_are_checked_two_ways(result: dict[str, Any]) -> No
 def test_the_schoenfeld_test_agrees_with_lifelines(whole_days: bool) -> None:
     """The test is computed in this project because lifelines' own is too slow for every
     trial. On times without ties the two give the same statistic; with whole days, where
-    lifelines handles tied events another way (Efron), they stay close."""
+    lifelines handles tied events another way (Efron, and ranks in row order), they stay
+    close."""
     from lifelines import CoxPHFitter
     from lifelines.statistics import proportional_hazard_test
 
@@ -218,6 +219,8 @@ def test_the_command_writes_the_report_for_the_later_development_origin(
     assert saved["tracking"]["run_name"] == "cox-l0"
     assert [run["name"] for run in tracked_runs] == ["cox-l0"]
     logged = tracked_runs[0]
+    assert logged["local"] is False
+    assert logged["state"] == tracking.git_state()  # read by the command, handed to the store
     assert logged["artifacts"] == [str(out), str(doc)]
     assert logged["metrics"]["early_stop_events"] == saved["causes"]["early stop"]["events"]
     for term in saved["terms"]:
@@ -226,6 +229,11 @@ def test_the_command_writes_the_report_for_the_later_development_origin(
     assert cox.main([*args, "--no-track"]) == 0
     assert "up to date" in capsys.readouterr().out
     assert len(tracked_runs) == 1
+    # --local-tracking reaches the store too, with the state read when the command started.
+    started = {"git_commit": "started-here", "git_dirty": "yes"}
+    monkeypatch.setattr(tracking, "git_state", lambda: dict(started))
+    assert cox.main([*args, "--local-tracking"]) == 0
+    assert (tracked_runs[-1]["local"], tracked_runs[-1]["state"]) == (True, started)
 
 
 def test_a_tracking_failure_keeps_the_report_and_the_results_and_fails_the_command(
@@ -248,3 +256,197 @@ def test_a_tracking_failure_keeps_the_report_and_the_results_and_fails_the_comma
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["causes"]["early stop"]["events"] > 0
     assert "tracking" not in saved
+
+
+# The design, value by value --------------------------------------------------------------------
+
+
+def _hand_features(n: int = 2_000) -> dict[str, Any]:
+    """Features with a known value in every row, for the rules of `covariates`."""
+    rng = np.random.default_rng(31)
+    rows, _, _ = simulated_rows(n, seed=31)
+    features = dict(rows.features)
+    # Sponsor classes: two large ones beside OTHER, and two under the 500-row threshold.
+    features["sponsor_class"] = np.array(
+        ["OTHER"] * 700 + ["INDUSTRY"] * 600 + ["NIH"] * 500 + ["FED"] * 120 + ["NETWORK"] * 80,
+        dtype=object,
+    )
+    features["title_phase"] = np.array(
+        ["EARLY_PHASE1", "PHASE1", "PHASE1_PHASE2", "PHASE2", "PHASE2_PHASE3", "PHASE3", "PHASE4",
+         "NONE", None, "NOT_A_PHASE"] * (n // 10), dtype=object,
+    )  # fmt: skip
+    features["allocation"] = np.array(
+        ["RANDOMIZED", "NON_RANDOMIZED", "NA", None] * (n // 4), dtype=object
+    )
+    features["status"] = np.array(
+        ["RECRUITING", "NOT_YET_RECRUITING", "ENROLLING_BY_INVITATION", "SUSPENDED"] * (n // 4),
+        dtype=object,
+    )
+    features["minimum_age_years"] = np.array([18.0, 17.0, 0.0, np.nan, 65.0] * (n // 5))
+    duration = rng.uniform(6.0, 60.0, n)
+    duration[:100] = np.nan  # 5% without a planned duration
+    duration[100:110] = -6.0  # a completion date before the start date
+    duration[110:130] = 400.0  # more than 33 years
+    features["planned_duration_months"] = duration
+    enrollment = rng.integers(10, 1000, n).astype(np.float64)
+    enrollment[:400] = np.nan  # 20% without a target
+    features["enrollment_count"] = enrollment
+    return features
+
+
+def test_the_design_follows_its_rules_row_by_row() -> None:
+    features = _hand_features()
+    design, terms = cox.covariates(features)
+    labels = {t.column: t.label for t in terms}
+    # Classes with at least 500 rows get a column; the smaller ones share one.
+    assert labels["sponsor_class_industry"] == "sponsor class INDUSTRY"
+    assert "sponsor_class_nih" in design
+    assert "sponsor_class_fed" not in design
+    assert "sponsor_class_network" not in design
+    assert design["sponsor_class_rest"].sum() == 120 + 80
+    assert cox.MIN_LEVEL_ROWS == 500
+    # A combined phase counts as its later phase; anything else is "no phase in the title".
+    phase = features["title_phase"]
+    for column, levels in (
+        ("title_phase1", ("EARLY_PHASE1", "PHASE1")),
+        ("title_phase2", ("PHASE1_PHASE2", "PHASE2")),
+        ("title_phase3", ("PHASE2_PHASE3", "PHASE3")),
+        ("title_phase4", ("PHASE4",)),
+    ):
+        assert design[column].to_numpy().tolist() == np.isin(phase, levels).astype(float).tolist()
+    # Allocation: the registry's "not applicable" and a missing value share one column.
+    assert labels["allocation_rest"] == "allocation not applicable or not given"
+    assert design["allocation_rest"].sum() == len(design) // 2
+    assert design["allocation_non_randomized"].sum() == len(design) // 4
+    # Status: RECRUITING is the reference although it is not the most common level.
+    reference = {t.column: t.reference for t in terms}
+    assert reference["status_not_yet_recruiting"] == "RECRUITING"
+    assert design["status_rest"].sum() == len(design) // 2
+    # No minimum age given means no lower age limit: open to participants under 18.
+    assert design["children_eligible"].to_numpy()[:5].tolist() == [0.0, 1.0, 1.0, 1.0, 0.0]
+    # A number: a missing value takes the median of the others and gets a "not given" flag
+    # when more than 1% are missing; the planned duration is held between 0 and 15 years.
+    years = design["planned_years"].to_numpy()
+    given = features["planned_duration_months"][130:] / 12.0
+    assert years[130:] == pytest.approx(given)
+    assert (years[100:110] == 0.0).all()
+    assert (years[110:130] == 15.0).all()
+    clipped = np.clip(features["planned_duration_months"][100:] / 12.0, 0.0, 15.0)
+    assert years[:100] == pytest.approx(np.full(100, np.median(clipped)))
+    assert design["planned_years_not_given"].to_numpy().tolist() == [1.0] * 100 + [0.0] * 1900
+    assert labels["planned_years_not_given"] == "planned duration not given"
+    doublings = np.log2(features["enrollment_count"] + 1.0)
+    assert design["enrollment_log2"].to_numpy()[400:] == pytest.approx(doublings[400:])
+    assert design["enrollment_log2"].to_numpy()[:400] == pytest.approx(
+        np.full(400, np.median(doublings[400:]))
+    )
+    assert design["enrollment_log2_not_given"].sum() == 400
+    # A number that is never missing gets no flag; a column without variation is dropped.
+    assert "registration_year_not_given" not in design
+    constant = dict(features)
+    constant["healthy_volunteers"] = np.zeros(len(design))
+    assert "healthy_volunteers" not in cox.covariates(constant)[0]
+
+
+def _reference_statistic(
+    x: np.ndarray, time: np.ndarray, event: np.ndarray, coef: np.ndarray, variance: np.ndarray
+) -> np.ndarray:
+    """The Schoenfeld-residual statistic, one event at a time: the trials at risk on the day
+    of an event are all those whose follow-up ends on that day or later, and events of one
+    day share the mean of their ranks."""
+    risk = np.exp(x @ coef)
+    events = np.flatnonzero(event)
+    events = events[np.argsort(time[events], kind="stable")]
+    residual = np.empty((len(events), x.shape[1]))
+    for i, row in enumerate(events):
+        at_risk = time >= time[row]
+        residual[i] = x[row] - (risk[at_risk] @ x[at_risk]) / risk[at_risk].sum()
+    days = time[events]
+    position = np.arange(1, len(events) + 1, dtype=float)
+    rank = np.array([position[days == d].mean() for d in days])
+    scaled = len(events) * residual @ variance
+    centered = rank - rank.mean()
+    return np.asarray(
+        (centered @ scaled) ** 2 / (len(events) * np.diag(variance) * (centered**2).sum())
+    )
+
+
+def test_the_schoenfeld_test_with_tied_days_matches_a_computation_event_by_event() -> None:
+    """Follow-up is in whole days, so many trials end on the same day. They share one risk
+    set and one rank, and the order of the rows cannot move the statistic."""
+    rng = np.random.default_rng(22)
+    n = 600
+    x = np.column_stack([rng.normal(size=n), rng.random(n) < 0.5]).astype(float)
+    raw = rng.exponential(1.0 / (0.05 * np.exp(0.5 * x[:, 0] + 0.8 * x[:, 1])))
+    censor = rng.exponential(40.0, n)
+    time = np.floor(np.minimum(raw, censor)) + 1.0  # a few dozen distinct days
+    event = raw <= censor
+    assert len(np.unique(time[event])) < event.sum() / 3  # heavily tied
+    coef = np.array([0.45, 0.7])
+    variance = np.array([[0.004, 0.0005], [0.0005, 0.012]])
+    statistic, p_value = cox.schoenfeld_test(x, time, event, coef, variance)
+    assert statistic == pytest.approx(_reference_statistic(x, time, event, coef, variance))
+    assert ((p_value >= 0) & (p_value <= 1)).all()
+    # The first covariate is sorted within each day: with ranks in row order the statistic
+    # would follow that order. With one rank per day it does not move.
+    order = np.lexsort((x[:, 0], time))
+    again, _ = cox.schoenfeld_test(x[order], time[order], event[order], coef, variance)
+    assert again == pytest.approx(statistic, rel=1e-9)
+    back, _ = cox.schoenfeld_test(
+        x[order[::-1]], time[order[::-1]], event[order[::-1]], coef, variance
+    )
+    assert back == pytest.approx(statistic, rel=1e-9)
+
+
+def test_the_report_puts_every_number_in_its_own_column() -> None:
+    cfg = load_project_config()
+    ratio = {"hazard_ratio": 1.64, "ci_low": 1.56, "ci_high": 1.73, "p": 0.0004,
+             "hazard_ratio_first_year": 3.1, "hazard_ratio_later": 1.31,
+             "schoenfeld_statistic": 274.84, "schoenfeld_p": 0.0321}  # fmt: skip
+    other = {"hazard_ratio": 0.9, "ci_low": 0.82, "ci_high": 1.0, "p": 0.041,
+             "hazard_ratio_first_year": 0.88, "hazard_ratio_later": 0.93,
+             "schoenfeld_statistic": 0.96, "schoenfeld_p": 0.325}  # fmt: skip
+    result = {
+        "rows": 117_742,
+        "censored": 57_912,
+        "terms": [
+            {"column": "a", "label": "sponsor class INDUSTRY", "reference": "OTHER"},
+            {"column": "b", "label": "planned duration, per year", "reference": ""},
+        ],
+        "causes": {
+            "early stop": {"rows": 117_742, "events": 9_592, "events_first_year": 2_118,
+                           "events_later": 7_474, "concordance": 0.6507,
+                           "ratios": {"a": ratio, "b": other}},
+            "completion": {"rows": 117_742, "events": 50_238, "events_first_year": 13_412,
+                           "events_later": 36_826, "concordance": 0.7841,
+                           "ratios": {"a": other, "b": ratio}},
+        },
+    }  # fmt: skip
+    text = cox.document(cfg, dt.date(2017, 1, 1), result)
+    stop, complete = text.split("## Hazard of early stop")[1].split("## Hazard of completion")
+    assert (
+        "9,592 trials reached this end among 117,742: 2,118 in the first year after "
+        "registration and 7,474 later. Concordance on the same rows: 0.651"
+    ) in stop
+    assert "50,238 trials reached this end among 117,742: 13,412 in the first year" in complete
+    assert (
+        "| Characteristic | Compared with | Hazard ratio | 95% interval | p | Hazard ratio, "
+        "first year | Hazard ratio, later | Schoenfeld statistic | Schoenfeld p |"
+    ) in stop
+    row = (
+        "| sponsor class INDUSTRY | OTHER | 1.64 | 1.56 to 1.73 | <0.001 | 3.10 | 1.31 | 274.8 "
+        "| 0.032 |"
+    )
+    assert row in stop
+    assert row not in complete
+    assert "| sponsor class INDUSTRY | OTHER | 0.90 | 0.82 to 1.00 | 0.041 |" in complete
+    assert (
+        "| planned duration, per year | (a number) | 0.90 | 0.82 to 1.00 | 0.041 | 0.88 | 0.93 "
+        "| 1.0 | 0.325 |"
+    ) in stop
+    assert "the 117,742 interventional trials" in text
+    assert "57,912 of them had reached neither end" in text
+    assert "cohort as of 2017-01-01" in text
+    # The wording stays on the side of association.
+    assert "an association in registry records, not a cause" in text
+    assert "raises the share" not in text

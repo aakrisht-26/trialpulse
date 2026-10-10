@@ -13,7 +13,14 @@ registration has a known outcome at H only if the trial ended early, so among th
 registrations the rows with a label are selected on the outcome. Censoring weights repair
 that on average, but not for a model that can see how recent a row is (the registration
 year, or any feature that grows with calendar time): it would learn that recent means
-risky. Leaving those rows out removes the selection instead of weighting it.
+risky. Leaving those rows out removes that selection instead of weighting it (ADR 0023).
+
+A smaller selection by registration date remains, and nothing available on the origin
+removes it. The lapse rule needs 24 months without a verified status, so as of the origin
+it has thinned the older registration years (a record that lapsed is censored at its last
+verified date, often the day it was posted) but not yet the last two. A later build of the
+cohort drops about a tenth of the rows of the last training year. The evaluation rows
+come from the final cohort, where that thinning has happened.
 
 **Labels and weights.** At a horizon, a row is a case if the trial stopped early within it
 and a control if it did not (it completed, or was still open at the horizon). Among the

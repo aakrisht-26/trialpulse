@@ -21,8 +21,16 @@ first year after registration and on the time after it. A ratio that changes sid
 between the two windows is an average over time, not a constant.
 
 The test is computed here (`schoenfeld_test`), with the statistic lifelines uses, because
-`lifelines.statistics.proportional_hazard_test` takes close to a minute per 20,000 trials
-and this analysis has eight times as many. The tests compare the two on smaller data.
+the run time of `lifelines.statistics.proportional_hazard_test` grows about with the
+square of the number of trials: seconds for 20,000, minutes per cause for the 118,000 of
+this analysis, against a fraction of a second here. The tests compare the two on smaller
+data. One difference: follow-up is in whole days, so many trials end on the same day, and
+here they share one rank (lifelines ranks them in row order, which lets the order of the
+rows move the statistic).
+
+The three hazard ratios of a covariate (whole follow-up, first year, later) come from
+three fits with all covariates. With correlated covariates the overall ratio need not lie
+between the two window ratios.
 
 The command writes docs/cox_report.md and data/results/cox/cox_l0.json, then logs the run
 to MLflow (`trialpulse.tracking`). If the run cannot be logged, both files stay and the
@@ -99,8 +107,9 @@ def _flag(values: npt.NDArray[Any]) -> FloatArray:
 
 def covariates(features: Mapping[str, npt.NDArray[Any]]) -> tuple[pd.DataFrame, list[Term]]:
     """The design matrix of the Cox models from the features at landmark 0, and what each
-    column means. Categories are compared with their most common level; numbers are scaled
-    so that a hazard ratio reads per doubling, per year or per 10 points."""
+    column means. Categories are compared with a fixed reference level (the most common
+    one, except for status, where RECRUITING is the reference); numbers are scaled so that a
+    hazard ratio reads per doubling, per year or per 10 points."""
     columns: dict[str, FloatArray] = {}
     terms: list[Term] = []
 
@@ -132,7 +141,7 @@ def covariates(features: Mapping[str, npt.NDArray[Any]]) -> tuple[pd.DataFrame, 
         add(f"title_{group.replace(' ', '')}", phase == group, f"title states {group}",
             "no phase in the title")  # fmt: skip
     levels("allocation", features["allocation"], {"NON_RANDOMIZED": "not randomized"},
-           "RANDOMIZED", "allocation not given")  # fmt: skip
+           "RANDOMIZED", "allocation not applicable or not given")  # fmt: skip
     masking = _text(features["masking"])
     add("masked", np.isin(masking, ["SINGLE", "DOUBLE", "TRIPLE", "QUADRUPLE"]),
         "masked (single to quadruple)", "open label")  # fmt: skip
@@ -206,7 +215,8 @@ def schoenfeld_test(
     trend over time. The statistic is the squared covariance of the scaled residuals with
     the rank of the event among all events, standardized: chi-squared with one degree of
     freedom per covariate (Grambsch and Therneau; the form lifelines uses with its "rank"
-    transform). Trials that end on the same day share one risk set (Breslow)."""
+    transform). Trials that end on the same day share one risk set (Breslow) and one rank,
+    the mean of their positions, so the order of the rows cannot move the statistic."""
     order = np.argsort(time, kind="stable")
     xs, ts, es = x[order], time[order], np.asarray(event, dtype=bool)[order]
     score = xs @ coef
@@ -218,7 +228,9 @@ def schoenfeld_test(
     residual = (xs - at_risk_x[first] / at_risk[first][:, None])[es]
     n_events = len(residual)
     scaled = n_events * residual @ variance
-    rank = np.cumsum(es)[es].astype(np.float64)
+    position = np.arange(1, n_events + 1, dtype=np.float64)
+    _, day, per_day = np.unique(ts[es], return_inverse=True, return_counts=True)
+    rank = (np.bincount(day, weights=position) / per_day)[day]
     centered = rank - rank.mean()
     statistic: FloatArray = (centered @ scaled) ** 2 / (
         n_events * np.diag(variance) * (centered**2).sum()
@@ -365,8 +377,8 @@ def document(cfg: ProjectConfig, origin: dt.date, result: dict[str, Any]) -> str
         "records, not a cause, and says nothing about whether a treatment works.",
         "- **Two models, one set of covariates.** The first table is the hazard of an early "
         "stop, with completion as censoring; the second the hazard of completion, with an "
-        "early stop as censoring. A characteristic raises the share of trials that stop early "
-        "if it raises the first hazard or lowers the second.",
+        "early stop as censoring. The two are read together: the share of trials that stop "
+        "early is higher where the first hazard is higher or the second is lower.",
         "- **Reading a row.** A hazard ratio of 1.25 means that end is reached at 1.25 times "
         "the rate of the comparison group, the other characteristics equal. Numbers are scaled "
         "as the row says (per doubling, per year, per 10 points).",
@@ -374,8 +386,10 @@ def document(cfg: ProjectConfig, origin: dt.date, result: dict[str, Any]) -> str
         f"assumption that a ratio is constant over time: the ratio in the first {SPLIT_DAYS} "
         "days after registration against the ratio afterwards, and the test on scaled "
         "Schoenfeld residuals. With this many trials the test rejects for small differences, "
-        "so the two ratios are the practical reading: where they differ, the single ratio is "
-        "an average over time.",
+        "so the two ratios are the practical reading: where they differ, the single ratio "
+        "summarizes a ratio that changes over time. The three ratios of a row come from three "
+        "fits with all characteristics, so the overall ratio can lie slightly outside the two "
+        "others. Trials that end on the same day share one rank in the test.",
         "",
     ]
     for _, label in CAUSES:

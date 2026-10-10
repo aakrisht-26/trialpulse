@@ -15,6 +15,7 @@ from trialpulse.features import registry
 from trialpulse.models import static_clf
 from trialpulse.models.static_clf import (
     CATEGORICAL,
+    MIN_VALIDATION_ROWS,
     MODEL_FEATURES,
     StaticClassifier,
     category_levels,
@@ -67,9 +68,10 @@ def test_m1_separates_trials_that_stop_from_trials_that_do_not(
     drive the simulation carry the ranking, and the mean predicted risk is the observed one.
     The second part is what fails if the latest registrations are trained on: among them
     only the trials that ended early have a label, and a model that sees the registration
-    year learns that recent means risky (it overpredicted these rows by 40%). It also fails
-    if the censoring weights are left out, because a third of one sponsor class is censored
-    early in the training rows."""
+    year learns that recent means risky (it overpredicted these rows by 40%). The censoring
+    weights are not what this test checks (leaving them out moves the mean prediction by
+    less than its tolerance): `test_each_fit_gets_the_rows_labels_and_weights_of_the_rule`
+    reads them."""
     rows, time, event = simulated_rows(
         6_000, seed=3, first=ORIGIN, last=dt.date(2017, 1, 1), end=None
     )
@@ -225,5 +227,96 @@ def test_m1_runs_through_the_walk_forward_harness(cfg: ProjectConfig) -> None:
     for months in cfg.horizons_months:
         pooled = result["horizons"][str(months)]["pooled"]
         assert pooled["auc"]["estimate"] > 0.62
-        assert 0.6 < pooled["calibration_slope"] < 1.6
+        # A coarse bound on purpose. Other seeds of these simulated rows give slopes from
+        # 1.0 to 1.7, so a narrow one would test the seed. What it must catch is a model
+        # trained on the latest registrations: its slope is 0.2 to 0.3.
+        assert 0.5 < pooled["calibration_slope"] < 2.5
+        assert abs(pooled["calibration_intercept"]) < 1.0
         assert summary[str(months)]["training_rows"] < result["n_train_rows"]
+
+
+def test_each_fit_gets_the_rows_labels_and_weights_of_the_rule(
+    cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What LightGBM is handed, read at the call. Per horizon there are two fits. The first
+    chooses the number of trees: fitted on the labeled registrations before the last
+    training year, stopped early on that year. The second is the model: every labeled
+    registration, for the number of trees the first found best. Labels and weights are
+    those of the evaluation metrics, with one censoring curve per sponsor class fitted on
+    the rows whose horizon had passed (ADR 0017, ADR 0023)."""
+    rows, time, event = simulated_rows(12_000, seed=4, lapse_share=0.3)
+    calls: list[dict[str, Any]] = []
+    real = static_clf.lgb.train
+
+    def recording(params: Any, train_set: Any, **kwargs: Any) -> Any:
+        booster = real(params, train_set, **kwargs)
+        valid = kwargs.get("valid_sets")
+        calls.append(
+            {
+                "x": np.asarray(train_set.data),
+                "y": np.asarray(train_set.get_label(), dtype=np.int64),
+                "w": np.asarray(train_set.get_weight(), dtype=np.float64),
+                "valid_y": None if not valid else np.asarray(valid[0].get_label(), dtype=np.int64),
+                "valid_w": None
+                if not valid
+                else np.asarray(valid[0].get_weight(), dtype=np.float64),
+                "rounds": kwargs["num_boost_round"],
+                "best": booster.best_iteration,
+                "ran": booster.current_iteration(),
+            }
+        )
+        return booster
+
+    monkeypatch.setattr(static_clf.lgb, "train", recording)
+    model = StaticClassifier(cfg).fit_rows(rows, time, event, ORIGIN)
+    assert len(calls) == 2 * len(cfg.horizons_months)
+    day = np.datetime64(ORIGIN, "D")
+    x = design_matrix(rows.features, model.levels)
+    for i, months in enumerate(cfg.horizons_months):
+        choosing, final = calls[2 * i], calls[2 * i + 1]
+        complete = add_months(rows.landmark_date, months) < day
+        horizon = horizon_days(rows.landmark_date[complete], months)
+        classes = rows.features["stratum"][complete]
+        groups = censoring_groups(classes, cfg.evaluation.censoring_min_rows)
+        label, weight = np.zeros(len(rows), dtype=np.int64), np.zeros(len(rows))
+        label[complete], weight[complete] = horizon_labels_and_weights(
+            time[complete], event[complete], horizon, groups
+        )
+        labeled = weight > 0
+        # The model: every labeled row whose horizon had passed, weighted by sponsor class.
+        assert np.array_equal(final["y"], label[labeled])
+        np.testing.assert_allclose(final["w"], weight[labeled], rtol=1e-6)  # stored as float32
+        assert np.array_equal(final["x"], x[labeled], equal_nan=True)
+        assert final["valid_y"] is None
+        # Those weights are not the weights of one curve for all rows, nor all equal to 1:
+        # a third of class OTHER is censored early, so its labeled rows weigh more.
+        single = np.zeros(len(rows))
+        _, single[complete] = horizon_labels_and_weights(time[complete], event[complete], horizon)
+        assert np.abs(final["w"] - single[labeled]).max() > 0.02
+        assert final["w"].max() > 1.05
+        assert final["w"][rows.features["stratum"][labeled] != "OTHER"].max() < 1.01
+        # The fit that chooses the trees: the registrations before the last training year,
+        # stopped on that year, which is the latest 12 months whose horizon had passed.
+        year_start = add_months(np.array([day]), -(months + 12))[0]
+        year_end = add_months(np.array([day]), -months)[0]
+        valid = labeled & (rows.landmark_date >= year_start)
+        early = labeled & (rows.landmark_date < year_start)
+        assert np.array_equal(choosing["y"], label[early])
+        np.testing.assert_allclose(choosing["w"], weight[early], rtol=1e-6)
+        assert np.array_equal(choosing["valid_y"], label[valid])
+        np.testing.assert_allclose(choosing["valid_w"], weight[valid], rtol=1e-6)
+        dates = rows.landmark_date[valid]
+        assert year_start <= dates.min() < year_start + np.timedelta64(40, "D")
+        assert year_end - np.timedelta64(40, "D") < dates.max() < year_end
+        info = model.summary["horizons"][str(months)]
+        assert info["validation_rows"] == int(valid.sum()) > MIN_VALIDATION_ROWS
+        assert info["labeled_rows"] == int(labeled.sum())
+        assert info["cases"] == int(label[labeled].sum())
+        assert info["weighted_case_share"] == pytest.approx(
+            float((weight * label).sum() / weight.sum())
+        )
+        # The trees of the model are the best round of the first fit. (LightGBM hands that
+        # fit back cut to its best round, so its last round is the same number.)
+        assert 1 <= choosing["best"] == choosing["ran"] < static_clf.MAX_ROUNDS
+        assert final["rounds"] == choosing["best"] == info["rounds"]
+        assert model.boosters[months].num_trees() == choosing["best"]
