@@ -24,13 +24,16 @@ The test is computed here (`schoenfeld_test`), with the statistic lifelines uses
 `lifelines.statistics.proportional_hazard_test` takes close to a minute per 20,000 trials
 and this analysis has eight times as many. The tests compare the two on smaller data.
 
-The command writes docs/cox_report.md and data/results/cox/cox_l0.json.
+The command writes docs/cox_report.md and data/results/cox/cox_l0.json, then logs the run
+to MLflow (`trialpulse.tracking`). If the run cannot be logged, both files stay and the
+command exits with code 5.
 """
 
 import argparse
 import datetime as dt
 import json
 import math
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -404,9 +407,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cohort-dir", type=Path, default=COHORT_DIR)
     parser.add_argument("--doc", type=Path, default=DOC_PATH)
     parser.add_argument("--out", type=Path, default=RESULTS_PATH)
-    parser.add_argument("--no-track", action="store_true", help="do not log the run to MLflow")
+    tracking.add_arguments(parser)
     args = parser.parse_args(argv)
     cfg = load_project_config()
+    started = tracking.git_state()
     # The later development origin: the most data that no locked origin's training set adds.
     dev = [o.date for o in cfg.walk_forward.origins if o.role == DEV_ROLE]
     if not dev:
@@ -415,22 +419,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     features, time, event = load_rows(cfg, origin, args.features_dir, args.cohort_dir)
     result = {"origin": origin.isoformat(), **analyze(features, time, event)}
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    if not args.no_track:
-        metrics = {
-            f"{label.replace(' ', '_')}_{name}": float(result["causes"][label][name])
-            for _, label in CAUSES
-            for name in ("concordance", "events")
-        }
-        args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        result["tracking"] = tracking.log_run(
-            "cox-l0",
-            {"model": "cause-specific Cox at landmark 0", "origin": origin.isoformat(),
-             "rows": result["rows"], "covariates": len(result["terms"])},
-            metrics,
-            [args.out],
-            cfg,
-            tags={"step": "9", "kind": "interpretation"},
-        )  # fmt: skip
     args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     changed = write_text_if_changed(args.doc, document(cfg, origin, result))
     for _, label in CAUSES:
@@ -438,6 +426,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{label}: {cause['events']:,} events among {cause['rows']:,} rows")
     print(f"wrote {args.out}")
     print(f"{args.doc}: {'written' if changed else 'up to date'}")
+    if not args.no_track:
+        metrics = {
+            f"{label.replace(' ', '_')}_{name}": float(result["causes"][label][name])
+            for _, label in CAUSES
+            for name in ("concordance", "events")
+        }
+        try:
+            result["tracking"] = tracking.log_run(
+                "cox-l0",
+                {"model": "cause-specific Cox at landmark 0", "origin": origin.isoformat(),
+                 "rows": result["rows"], "covariates": len(result["terms"])},
+                metrics,
+                [args.out, args.doc],
+                cfg,
+                tags={"step": "9", "kind": "interpretation"},
+                local=args.local_tracking,
+                state=started,
+            )  # fmt: skip
+        except tracking.TrackingError as exc:  # both files are written: say so and fail
+            print(f"failed: the run was not logged to MLflow ({exc}); its results are in "
+                  f"{args.out}", file=sys.stderr)  # fmt: skip
+            return tracking.FAILED_EXIT_CODE
+        args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(f"logged to {result['tracking']['store_description']}")
     return 0
 
 

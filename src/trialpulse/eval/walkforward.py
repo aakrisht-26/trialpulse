@@ -35,8 +35,10 @@ early stop at each horizon (`predict_months`). Two attributes say what it needs:
   landmark 0 only. Its censoring groups are still decided on all the evaluation rows of
   the origin, so its rows carry the same weights as M0's rows at that landmark index.
 
-**Tracking.** The command logs each run to MLflow (`trialpulse.tracking`): the commit, the
-dataset revision, the configuration, the pooled metrics and the results file.
+**Tracking.** The command logs each run to MLflow (`trialpulse.tracking`): the commit it
+started from, the dataset revision, the configuration, the pooled metrics and the results
+file. The results file is written first. If the run cannot be logged, the command says so
+and exits with code 5, and the results stay on disk.
 """
 
 import argparse
@@ -371,7 +373,13 @@ def feature_loader(cfg: ProjectConfig, features_dir: Path, cohort_dir: Path) -> 
     return load
 
 
-def track(results: dict[str, Any], cfg: ProjectConfig, out: Path) -> dict[str, str]:
+def track(
+    results: dict[str, Any],
+    cfg: ProjectConfig,
+    out: Path,
+    local: bool = False,
+    state: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     """Log one walk-forward result to MLflow and return where it went."""
     unlock = results.get("unlock") or {}
     first = results["origins"][0] if results["origins"] else {}
@@ -396,6 +404,8 @@ def track(results: dict[str, Any], cfg: ProjectConfig, out: Path) -> dict[str, s
             "test_lock": "unlocked" if unlock else "locked",
             **{f"unlock_{key}": str(value) for key, value in unlock.items()},
         },
+        local=local,
+        state=state,
     )
 
 
@@ -408,9 +418,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--training-dir", type=Path, default=TRAINING_DIR)
     parser.add_argument("--features-dir", type=Path, default=FEATURES_DIR)
     parser.add_argument("--resamples", type=int, default=None)
-    parser.add_argument("--no-track", action="store_true", help="do not log the run to MLflow")
+    tracking.add_arguments(parser)
     args = parser.parse_args(argv)
     cfg = load_project_config()
+    started = tracking.git_state()
     try:
         results = run(
             cfg,
@@ -434,11 +445,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"wrote {out}")
     if not args.no_track:
         try:
-            results["tracking"] = track(results, cfg, out)
-        except Exception as exc:  # the results are on disk; say so and fail, do not lose them
+            results["tracking"] = track(results, cfg, out, args.local_tracking, started)
+        except tracking.TrackingError as exc:  # the results are on disk: say so and fail
             print(f"failed: the run was not logged to MLflow ({exc}); its results are in {out}",
                   file=sys.stderr)  # fmt: skip
-            return 5
+            return tracking.FAILED_EXIT_CODE
         out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"logged to {results['tracking']['store_description']}")
     return 0

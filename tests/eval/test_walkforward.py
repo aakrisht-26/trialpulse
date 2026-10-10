@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trialpulse import tracking
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.eval import walkforward
 from trialpulse.eval.bootstrap import BootstrapError
@@ -443,7 +444,7 @@ def test_a_tracking_failure_keeps_the_results_and_fails_the_command(
     results = {"model": "m0", "origins_spec": "2016", "origins": []}
 
     def broken(*args: object, **kwargs: object) -> dict[str, str]:
-        raise ConnectionError("the server did not answer")
+        raise tracking.TrackingError("the server did not answer")
 
     monkeypatch.setattr(walkforward, "run", lambda *a, **k: dict(results))
     monkeypatch.setattr(walkforward, "track", broken)
@@ -453,3 +454,36 @@ def test_a_tracking_failure_keeps_the_results_and_fails_the_command(
     assert "not logged to MLflow" in message
     assert "the server did not answer" in message
     assert json.loads((tmp_path / "m0_2016.json").read_text(encoding="utf-8")) == results
+
+
+def test_the_run_is_credited_to_the_commit_it_started_from_and_can_go_to_the_local_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The git state is read before the work, not when the run is logged: a commit made
+    during a 40-minute run must not be named as the code that produced it."""
+    order: list[str] = []
+    seen: dict[str, object] = {}
+
+    def state() -> dict[str, str]:
+        order.append("state")
+        return {"git_commit": "started-here", "git_dirty": "no"}
+
+    def run(*args: object, **kwargs: object) -> dict[str, object]:
+        order.append("run")
+        return {"model": "m0", "origins_spec": "2016", "origins": []}
+
+    def track(results: object, cfg: object, out: object, local: bool, started: object) -> object:
+        seen.update(local=local, state=started)
+        return {"store_description": "a list kept by the test"}
+
+    monkeypatch.setattr(tracking, "git_state", state)
+    monkeypatch.setattr(walkforward, "run", run)
+    monkeypatch.setattr(walkforward, "track", track)
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
+    assert walkforward.main(["--model", "m0", "--origins", "2016", "--local-tracking"]) == 0
+    assert order == ["state", "run"]
+    assert seen == {"local": True, "state": {"git_commit": "started-here", "git_dirty": "no"}}
+    assert walkforward.main(["--model", "m0", "--origins", "2016"]) == 0
+    assert seen["local"] is False
+    with pytest.raises(SystemExit):  # one or the other, not both
+        walkforward.main(["--model", "m0", "--origins", "2016", "--no-track", "--local-tracking"])

@@ -2,6 +2,7 @@
 credentials of the server never show."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -54,8 +55,50 @@ def test_without_a_server_runs_go_to_a_local_store(tmp_path: Path) -> None:
     assert target.kind == tracking.LOCAL
     assert target.uri == "sqlite:///" + (tmp_path / "mlruns" / "mlflow.db").resolve().as_posix()
     assert target.artifacts == (tmp_path / "mlruns" / "artifacts").resolve().as_uri()
-    assert "temporary" in target.description
+    assert target.description == (
+        "a local store in mlruns/ (temporary: MLFLOW_TRACKING_URI is not set)"
+    )
     assert (tmp_path / "mlruns").is_dir()
+
+
+def test_the_local_store_can_be_asked_for_although_a_server_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """For the time a configured server cannot take runs. The description says why the
+    run is local, so a results file never passes a stand-in off as the record."""
+    monkeypatch.delenv("MLFLOW_TRACKING_PASSWORD", raising=False)
+    secrets = Secrets(
+        _env_file=None,  # type: ignore[call-arg]
+        mlflow_tracking_uri="https://tracking.example.test/owner/repo.mlflow",
+        mlflow_tracking_password="not-a-real-password",  # type: ignore[arg-type]
+    )
+    target = tracking.tracking_target(secrets, tmp_path / "mlruns", local=True)
+    assert target.kind == tracking.LOCAL
+    assert target.uri.startswith("sqlite:///")
+    assert "temporary: --local-tracking was given" in target.description
+    assert "MLFLOW_TRACKING_PASSWORD" not in os.environ  # the server is not prepared at all
+
+
+def test_a_failure_is_explained_on_one_line_without_the_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "not-a-real-password")
+    server = tracking.Target(tracking.REMOTE, "https://tracking.example.test/owner/repo.mlflow")
+    refused = RuntimeError(
+        "API request to endpoint /api/2.0/mlflow/experiments/get-by-name failed with error "
+        "code 404 != 200.\nResponse body: ''"
+    )
+    text = tracking.explain(refused, server)
+    assert "\n" not in text
+    assert text.startswith("API request to endpoint")
+    assert "the repository named in MLFLOW_TRACKING_URI does not exist there" in text
+    leaked = RuntimeError("could not reach https://someone:not-a-real-password@host/x")
+    assert "not-a-real-password" not in tracking.explain(leaked, server)
+    assert "[password]" in tracking.explain(leaked, server)
+    # The hint is about a server; a local store that fails gets its own message only.
+    local = tracking.Target(tracking.LOCAL, "sqlite:///x.db")
+    assert tracking.explain(RuntimeError("error 404"), local) == "error 404"
+    assert tracking.explain(RuntimeError(""), local) == "RuntimeError"
 
 
 def test_a_configured_server_is_used_and_its_password_is_never_shown(
@@ -74,8 +117,6 @@ def test_a_configured_server_is_used_and_its_password_is_never_shown(
     assert target.uri == "https://tracking.example.test/owner/repo.mlflow"
     assert not (tmp_path / "mlruns").exists()  # no local store beside a server
     # MLflow reads the credentials from the environment of this process.
-    import os
-
     assert os.environ["MLFLOW_TRACKING_USERNAME"] == "someone"
     assert os.environ["MLFLOW_TRACKING_PASSWORD"] == "not-a-real-password"
     for shown in (repr(target), str(target), target.description, repr(secrets)):
@@ -146,3 +187,23 @@ def test_a_run_is_logged_with_its_commit_dataset_config_metrics_and_files(
     again = tracking.log_run("m0-dev", {}, {"auc_12m_mean": 0.56}, [], cfg, target=target)
     assert again["run_id"] != info["run_id"]
     assert mlflow.get_run(again["run_id"]).info.experiment_id == run.info.experiment_id
+
+
+@pytest.mark.slow
+def test_a_store_that_refuses_a_run_raises_a_tracking_error_with_the_state_it_was_given(
+    tmp_path: Path, real_tracking: None
+) -> None:
+    """The real client: a run is credited to the state handed in, and a store that cannot
+    be opened gives a TrackingError, not whatever the client raises."""
+    import mlflow
+
+    cfg = load_project_config()
+    target = tracking.local_target(tmp_path / "store")
+    started = {"git_commit": "0123abcd", "git_dirty": "yes"}
+    info = tracking.log_run("m1-dev", {}, {"auc": 0.6}, [], cfg, target=target, state=started)
+    assert (info["git_commit"], info["git_dirty"]) == ("0123abcd", "yes")
+    mlflow.set_tracking_uri(target.uri)
+    assert mlflow.get_run(info["run_id"]).data.tags["git_commit"] == "0123abcd"
+    broken = tracking.Target(tracking.LOCAL, "no-such-scheme://nowhere")
+    with pytest.raises(tracking.TrackingError):
+        tracking.log_run("m1-dev", {}, {"auc": 0.6}, [], cfg, target=broken)

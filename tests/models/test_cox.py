@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from trialpulse import tracking
 from trialpulse.config import ProjectConfig, load_project_config
 from trialpulse.models import cox
 
@@ -217,7 +218,7 @@ def test_the_command_writes_the_report_for_the_later_development_origin(
     assert saved["tracking"]["run_name"] == "cox-l0"
     assert [run["name"] for run in tracked_runs] == ["cox-l0"]
     logged = tracked_runs[0]
-    assert logged["artifacts"] == [str(out)]
+    assert logged["artifacts"] == [str(out), str(doc)]
     assert logged["metrics"]["early_stop_events"] == saved["causes"]["early stop"]["events"]
     for term in saved["terms"]:
         assert term["label"] in text
@@ -225,3 +226,25 @@ def test_the_command_writes_the_report_for_the_later_development_origin(
     assert cox.main([*args, "--no-track"]) == 0
     assert "up to date" in capsys.readouterr().out
     assert len(tracked_runs) == 1
+
+
+def test_a_tracking_failure_keeps_the_report_and_the_results_and_fails_the_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def load_rows(cfg: ProjectConfig, origin: dt.date, features_dir: Path, cohort_dir: Path) -> Any:
+        rows, time, event = simulated_rows(4_000, seed=15)
+        return dict(rows.features), time, event
+
+    def refused(*args: object, **kwargs: object) -> dict[str, str]:
+        raise tracking.TrackingError("the server answered 404")
+
+    monkeypatch.setattr(cox, "load_rows", load_rows)
+    monkeypatch.setattr(tracking, "log_run", refused)
+    doc, out = tmp_path / "cox_report.md", tmp_path / "cox.json"
+    assert cox.main(["--doc", str(doc), "--out", str(out)]) == tracking.FAILED_EXIT_CODE
+    captured = capsys.readouterr()
+    assert "not logged to MLflow (the server answered 404)" in captured.err
+    assert "## Hazard of early stop" in doc.read_text(encoding="utf-8")
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved["causes"]["early stop"]["events"] > 0
+    assert "tracking" not in saved
