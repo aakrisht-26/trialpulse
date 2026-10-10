@@ -1312,7 +1312,7 @@ Decisions in this part that were mine: the five categories and the order of the 
 | MLflow runs visible on DagsHub | **No** | `MLFLOW_TRACKING_URI` is set, its credentials are valid, and the address is well formed, but the DagsHub account has no repository, so the server answers 404. See "Blocked, skipped or deferred" |
 | Zero test-lock unlock events; development origins only | Yes | No command was run with `--unlock-test`; the result files hold `"unlock": null` and the roles `dev` only; no `prereg-v1` tag exists locally or on origin (`git tag -l`, `git ls-remote --tags origin`), and the lock cannot open without it |
 | A two-reviewer review before the report | Yes | "Independent review" below: 29 findings, none of high severity, each verified and acted on; then two more reviewers on the fixes themselves (16 findings, none of high severity) |
-| ruff, ruff format, mypy and pytest clean | Yes | In my shell on the final code: `ruff check`, `ruff format --check` and `mypy src` clean; 783 passed and 16 deselected by default; 799 passed with the slow tests |
+| ruff, ruff format, mypy and pytest clean | Yes | In my shell on the final code: `ruff check`, `ruff format --check` and `mypy src` clean; 783 passed and 16 deselected by default; 799 passed with the slow tests. CI on GitHub is green for commit `467f28c`: lint, types, and 796 tests passed with 3 skipped (the three that need the real data files) |
 
 ### Results
 
