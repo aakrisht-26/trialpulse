@@ -167,3 +167,28 @@ def test_calibration_by_group_is_the_weighted_rate_of_each_group() -> None:
     assert calibration_by_group(time, event, score, 5.0, groups)[0]["observed"] == pytest.approx(
         0.5
     )
+
+
+def test_calibration_can_be_reported_by_another_label_than_the_censoring_group() -> None:
+    """By registration year, say. The weights still come from the censoring groups: here
+    group "a" has a censored row, so its other rows weigh more, whatever their year."""
+    from trialpulse.eval.metrics import calibration_by_group
+
+    time = np.array([1.0, 2.0, 4.0, 9.0, 3.0, 9.0, 9.0, 9.0])
+    event = np.array([1, 2, 0, 0, 1, 0, 0, 0])
+    score = np.array([0.5, 0.1, 0.2, 0.2, 0.8, 0.4, 0.3, 0.3])
+    groups = np.array(["a", "a", "a", "a", "b", "b", "b", "b"])
+    years = np.array([2016, 2015, 2015, 2016, 2016, 2015, 2015, 2016])
+    table = calibration_by_group(time, event, score, 5.0, groups, by=years)
+    assert [row["group"] for row in table] == ["2015", "2016"]  # in the order of the labels
+    assert [row["n"] for row in table] == [4, 4]
+    assert table[0]["mean_predicted"] == pytest.approx((0.1 + 0.2 + 0.4 + 0.3) / 4)
+    assert table[0]["censored_before_horizon"] == pytest.approx(0.25)
+    # 2016 holds two early stops among four rows, none censored. In group "a" one row is
+    # censored on day 4, when two of its rows are still followed, so its control of 2016
+    # (still open at the horizon) weighs 2 and its early stop on day 1 weighs 1. The rows
+    # of group "b" weigh 1. Observed: (1 + 1) / (1 + 2 + 1 + 1).
+    assert table[1]["observed"] == pytest.approx(2 / 5)
+    assert table[1]["censored_before_horizon"] == 0.0
+    by_group = calibration_by_group(time, event, score, 5.0, groups)
+    assert [row["group"] for row in by_group] == ["a", "b"]  # unchanged without `by`

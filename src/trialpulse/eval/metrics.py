@@ -136,16 +136,25 @@ def calibration_by_group(
     score: FloatArray,
     horizon: FloatArray | float,
     groups: npt.NDArray[Any],
+    by: npt.NDArray[Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Mean predicted risk against the IPCW early-stop rate at the horizon, within each
     censoring group (the sponsor classes of ADR 0017), largest group first. A slope pooled
-    over groups cannot say which group a model overpredicts; this table can."""
+    over groups cannot say which group a model overpredicts; this table can.
+
+    With `by` (one label per row, for example the registration year), the table is by those
+    labels instead, in their order; the weights still come from the censoring groups."""
     y, w = horizon_labels_and_weights(time, event, horizon, groups)
     p = np.asarray(score, dtype=np.float64)
-    labels = np.asarray(groups).astype(str)
+    labels = np.asarray(groups if by is None else by).astype(str)
     names, counts = np.unique(labels, return_counts=True)
     table: list[dict[str, Any]] = []
-    for name, count in sorted(zip(names, counts, strict=True), key=lambda nc: (-nc[1], nc[0])):
+    ordered = (
+        sorted(zip(names, counts, strict=True), key=lambda nc: (-nc[1], nc[0]))
+        if by is None
+        else list(zip(names, counts, strict=True))
+    )
+    for name, count in ordered:
         member = labels == name
         weight = float(w[member].sum())
         table.append(
