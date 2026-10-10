@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from trialpulse.cli import RefusedError
 from trialpulse.cohort import build as cohort_build
 from trialpulse.config import ProjectConfig
 from trialpulse.features import build as features_build
@@ -426,3 +427,131 @@ def test_the_build_names_the_command_for_a_missing_input(built: Built, tmp_path:
         features_build.main(args)
     with pytest.raises(RefusedError, match=r"trialpulse\.features\.build"):
         frame.load(None, ORIGIN, "training", tmp_path / "no_features", built.cohort_dir)  # type: ignore[arg-type]
+
+
+# What a model reads ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("role", ["training", "evaluation"])
+def test_the_matrix_can_be_cut_to_some_landmark_indices(
+    built: Built, cfg: ProjectConfig, role: frame.Role
+) -> None:
+    """M1 reads landmark 0 only: the same rows, in the same order, as the full matrix cut
+    to that landmark index."""
+    full = frame.load(cfg, ORIGIN, role, built.features_dir, built.cohort_dir)
+    first = frame.load(cfg, ORIGIN, role, built.features_dir, built.cohort_dir, (0,))
+    assert 10 < len(first) < len(full)
+    expected = full[full["landmark_index"] == 0].reset_index(drop=True)
+    pd.testing.assert_frame_equal(first.reset_index(drop=True), expected)
+    two = frame.load(cfg, ORIGIN, role, built.features_dir, built.cohort_dir, (0, 2))
+    assert set(two["landmark_index"].tolist()) == {0, 2}
+    assert len(two) == int(full["landmark_index"].isin([0, 2]).sum())
+
+
+def test_arrays_for_a_model_keep_a_missing_value_missing() -> None:
+    """A missing number is NaN, never 0; a missing category is None, never a level; a flag
+    is 1.0 or 0.0; the keys stay out, except the landmark index, which is a feature too."""
+    matrix = pd.DataFrame(
+        {
+            "trial_id": ["NCT1", "NCT2", "NCT3"],
+            "landmark_index": pd.array([0, 1, 2], dtype="Int64"),
+            "landmark_date": pd.to_datetime(["2016-01-01", "2016-07-01", "2017-01-01"]),
+            "enrollment_count": pd.array([100, None, 0], dtype="Int64"),
+            "healthy_volunteers": pd.array([True, None, False], dtype="boolean"),
+            "masking": ["NONE", None, "DOUBLE"],
+        }
+    )
+    arrays = frame.as_arrays(matrix)
+    assert set(arrays) == {"landmark_index", "enrollment_count", "healthy_volunteers", "masking"}
+    assert arrays["enrollment_count"].dtype == np.float64
+    assert arrays["enrollment_count"][[0, 2]].tolist() == [100.0, 0.0]
+    assert np.isnan(arrays["enrollment_count"][1])
+    assert arrays["healthy_volunteers"][[0, 2]].tolist() == [1.0, 0.0]
+    assert np.isnan(arrays["healthy_volunteers"][1])
+    assert arrays["masking"].dtype == object
+    assert arrays["masking"].tolist() == ["NONE", None, "DOUBLE"]
+    assert arrays["landmark_index"].tolist() == [0.0, 1.0, 2.0]
+
+
+def test_the_arrays_of_a_built_matrix_hold_every_model_feature(
+    built: Built, cfg: ProjectConfig
+) -> None:
+    matrix = frame.load(cfg, ORIGIN, "training", built.features_dir, built.cohort_dir)
+    arrays = frame.as_arrays(matrix)
+    assert set(arrays) == set(reg.model_columns())
+    assert len(arrays) == len(reg.model_columns())
+    missing_somewhere = 0
+    for name, values in arrays.items():
+        assert len(values) == len(matrix)
+        absent = matrix[name].isna().to_numpy()
+        if reg.BY_NAME[name].kind == reg.CATEGORY:
+            assert [v is None for v in values] == absent.tolist(), name
+        else:
+            assert values.dtype == np.float64
+            assert np.isnan(values).tolist() == absent.tolist(), name
+        missing_somewhere += int(absent.any())
+    assert missing_somewhere > 5  # the test registry leaves fields empty, as the real one does
+
+
+def test_the_harness_gets_the_matrix_of_an_origin_through_its_loader(
+    built: Built, cfg: ProjectConfig
+) -> None:
+    from trialpulse.eval import walkforward
+
+    load = walkforward.feature_loader(cfg, built.features_dir, built.cohort_dir)
+    for role in (walkforward.TRAINING, walkforward.EVALUATION):
+        matrix = frame.load(cfg, ORIGIN, role, built.features_dir, built.cohort_dir, (0,))  # type: ignore[arg-type]
+        got = load(ORIGIN, role, (0,))
+        assert got.trial_id.tolist() == matrix["trial_id"].tolist()
+        assert got.landmark_index.tolist() == [0] * len(matrix)
+        expected = frame.as_arrays(matrix)
+        assert tuple(got.features) == tuple(expected)
+        assert set(got.features) == set(reg.model_columns())
+        for name, values in expected.items():
+            if values.dtype == object:
+                assert got.features[name].tolist() == values.tolist()
+            else:
+                assert np.array_equal(got.features[name], values, equal_nan=True)
+    # Training and evaluation rows are different rows, and all landmark indices come when
+    # none is asked for.
+    training, evaluation = load(ORIGIN, "training", None), load(ORIGIN, "evaluation", None)
+    assert set(training.landmark_index.tolist()) > {0}
+    assert training.trial_id.tolist() != evaluation.trial_id.tolist()
+    with pytest.raises(ValueError, match="unknown role"):
+        load(ORIGIN, "test", None)
+    # A build that is not there is one line naming the command, as the lock gives.
+    absent = walkforward.feature_loader(cfg, built.root / "no_features", built.cohort_dir)
+    with pytest.raises(ValueError, match=r"trialpulse\.features\.build"):
+        absent(ORIGIN, "training", None)
+
+
+def test_the_cox_models_read_the_landmark_0_rows_of_the_cohort_as_of_the_origin(
+    built: Built, cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trialpulse.models import cox
+
+    features, time, event = cox.load_rows(cfg, ORIGIN, built.features_dir, built.cohort_dir)
+    training = (built.cohort_dir / "training" / f"origin_{ORIGIN}" / "landmarks.parquet").as_posix()
+    with duckdb.connect() as con:
+        rows = con.execute(
+            f"""SELECT trial_id, date_diff('day', landmark_date, event_date), event
+            FROM '{training}' WHERE landmark_index = 0 ORDER BY trial_id"""
+        ).fetchall()
+    assert len(rows) > 30
+    assert time.tolist() == [float(days) for _, days, _ in rows]
+    assert event.tolist() == [e for _, _, e in rows]
+    matrix = frame.load(cfg, ORIGIN, "training", built.features_dir, built.cohort_dir, (0,))
+    assert matrix["trial_id"].tolist() == [trial for trial, _, _ in rows]
+    assert set(features) == set(reg.model_columns())
+    assert np.array_equal(
+        features["sponsor_stop_rate"], matrix["sponsor_stop_rate"].to_numpy(dtype=float)
+    )
+    # Features of other rows, or of the same rows in another order, are refused.
+    real = frame.load
+
+    def reversed_rows(*args: object, **kwargs: object) -> pd.DataFrame:
+        return real(*args, **kwargs).iloc[::-1].reset_index(drop=True)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cox.frame, "load", reversed_rows)
+    with pytest.raises(RefusedError, match="hold different landmark 0 rows"):
+        cox.load_rows(cfg, ORIGIN, built.features_dir, built.cohort_dir)
