@@ -1,0 +1,34 @@
+{
+  "model": "m3",
+  "settings": {
+    "C": 0.009826156742912194
+  },
+  "objective": "mean over the development origins of the IPCW AUC at 12 months, all landmark indices; ties by the Brier score, then by the calibration slope closest to 1",
+  "auc": 0.6857114887009746,
+  "brier": 0.031198364707046754,
+  "calibration_slope": 1.0930733871848908,
+  "by_origin": {
+    "2016-01-01": 0.680552123013375,
+    "2017-01-01": 0.6908708543885743
+  },
+  "default_settings": {
+    "C": 1.0
+  },
+  "default_auc": 0.6777133797658913,
+  "chosen_trial": 23,
+  "trials": 40,
+  "trial_sample_share": 0.1,
+  "sampled_training_trials": {
+    "2016-01-01": 9942,
+    "2017-01-01": 11715
+  },
+  "seed": 42,
+  "search_space": {
+    "C": [
+      0.001,
+      100.0,
+      "log"
+    ]
+  },
+  "dataset_revision": "v2026.09.26"
+}
