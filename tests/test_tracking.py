@@ -218,6 +218,41 @@ def test_a_run_is_logged_with_its_commit_dataset_config_metrics_and_files(
     assert mlflow.get_run(again["run_id"]).info.experiment_id == run.info.experiment_id
 
 
+def test_two_files_of_one_name_go_under_the_names_of_their_folders(tmp_path: Path) -> None:
+    study, record = tmp_path / "tuning" / "m4.json", tmp_path / "tuned" / "m4.json"
+    other = tmp_path / "results" / "m4_dev.json"
+    assert tracking.artifact_folders([other, study, record]) == [
+        (other, None), (study, "tuning"), (record, "tuned"),
+    ]  # fmt: skip
+    assert tracking.artifact_folders([]) == []
+
+
+@pytest.mark.slow
+def test_a_run_keeps_both_of_two_files_with_the_same_name(
+    tmp_path: Path, real_tracking: None
+) -> None:
+    """The real client against a store of this test's own. The tuning logs its study and
+    the committed settings, both named <model>.json; logged side by side the second
+    replaced the first, and the runs on the server held no study."""
+    import mlflow
+
+    cfg = load_project_config()
+    target = tracking.local_target(tmp_path / "store")
+    study, record = tmp_path / "tuning" / "m4.json", tmp_path / "tuned" / "m4.json"
+    for path, content in ((study, {"all_trials": [1, 2, 3]}), (record, {"settings": {}})):
+        path.parent.mkdir()
+        path.write_text(json.dumps(content), encoding="utf-8")
+    info = tracking.log_run("tune-m4", {}, {"auc_mean": 0.6}, [study, record], cfg, target=target)
+    mlflow.set_tracking_uri(target.uri)
+    top = {f.path for f in mlflow.artifacts.list_artifacts(run_id=info["run_id"])}
+    assert top == {"project.yaml", "tuning", "tuned"}
+    for folder, key in (("tuning", "all_trials"), ("tuned", "settings")):
+        local = mlflow.artifacts.download_artifacts(
+            run_id=info["run_id"], artifact_path=f"{folder}/m4.json", dst_path=str(tmp_path / "out")
+        )
+        assert list(json.loads(Path(local).read_text(encoding="utf-8"))) == [key]
+
+
 @pytest.mark.slow
 def test_a_store_that_refuses_a_run_raises_a_tracking_error_with_the_state_it_was_given(
     tmp_path: Path, real_tracking: None

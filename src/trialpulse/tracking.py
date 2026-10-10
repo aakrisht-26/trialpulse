@@ -184,6 +184,15 @@ def finite_metrics(metrics: Mapping[str, float]) -> dict[str, float]:
     return {name: float(value) for name, value in metrics.items() if math.isfinite(value)}
 
 
+def artifact_folders(paths: Sequence[Path]) -> list[tuple[Path, str | None]]:
+    """Where each file goes in a run: at the top, or, when two files share a name, each
+    under the name of its own folder. A run keeps one file per path, so two files of one
+    name logged at the top would leave only the second (the tuning logs two <model>.json:
+    its study and the committed settings)."""
+    names = [path.name for path in paths]
+    return [(path, path.parent.name if names.count(path.name) > 1 else None) for path in paths]
+
+
 def log_run(
     name: str,
     params: Mapping[str, Any],
@@ -233,9 +242,9 @@ def log_run(
             mlflow.log_params({k: str(v) for k, v in params.items()})
             if finite:
                 mlflow.log_metrics(finite)
-            for path in (PROJECT_CONFIG_PATH, *artifacts):
-                if Path(path).is_file():
-                    mlflow.log_artifact(str(path))
+            files = [Path(p) for p in (PROJECT_CONFIG_PATH, *artifacts) if Path(p).is_file()]
+            for path, folder in artifact_folders(files):
+                mlflow.log_artifact(str(path), artifact_path=folder)
             run_id = active.info.run_id
     except Exception as exc:  # whatever the client raises: the caller keeps its results
         raise TrackingError(explain(exc, resolved)) from exc
