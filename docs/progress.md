@@ -1468,6 +1468,19 @@ git diff docs/results_dev.md
 uv run python -m trialpulse.nlp.llm_labeler --status
 ```
 
+### Review of Step 9 (Aakrisht, 2026-10-10) and what was done
+
+**Approved.** His decisions, and what followed from each:
+
+- **ADR 0023 is accepted** and is in the Amendments of CLAUDE.md. **Stage 2 of ADR 0022 stays.** The 13 decisions of the Step 9 report are approved, "including continuing after committing the diagnosis".
+- **DagsHub: "create a public repository named trialpulse under my account through the API".** Creating a public repository publishes outside this repository, so I asked once in chat before doing it, as the standing rule for pasted reviews says, and he confirmed. The repository exists (public, empty of code; it holds the MLflow experiment `trialpulse-development`). Three of the four runs were logged from commit `6d36e97`, each with its commit, dataset revision, parameters, metrics and files: `cox-l0`, `m0-calibration-diagnosis` and `m1-dev`. M0 is logged with the runs of Step 10 (see below), from the harness that also saves the scores.
+  - **A failure on the way, fixed:** the first run arrived complete and was then reported as failed and left open on the server. At the end of a run on a server MLflow prints the run's address with an emoji in front, and the output of a command redirected to a file on Windows cannot encode that character. The print is switched off (commit `6d36e97`, with a test). I marked the open run as failed and moved it to the deleted runs of the experiment, which MLflow keeps and can restore; the experiment lists the complete runs only.
+  - **M0's first run to DagsHub was lost to standby:** the laptop was in Modern Standby from 19:01 to 20:23 (the keep-awake hold of the app prevents idle sleep only). The run was throttled, was still computing 20 minutes after the wake and had logged nothing. I stopped it and its script (and checked by process list that both were gone, after the stray run of Step 9).
+- **Calibration remedy:** to be decided with the tables of Step 10, as recommended. Step 10 reports calibration by registration year and by sponsor class and ends with a recommendation; nothing is applied.
+- **The later-fate table of the diagnosis ends on 2018-01-01** ("It informs a modeling decision, so Section 10 applies"). Done in commit `ed61d69`: the table reads the cohort built from versions posted before 2018-01-01, the one the EDA uses, and nothing later. Two years after the 2016 origin, 4.1% of the trials lapsed on it had stopped early and 17.6% had completed, against 5.7% and 29.8% of the trials still open on it; 73.6% of the lapsed ones were lapsed at the end of that window. Part 1 above carries the new numbers. This replaces what rows 19 and 24 of the review table of Step 9 describe (the label "descriptive only" and the fate "lapsed at the data cutoff").
+- **Step 6:** the labeling batch of 2026-10-10 had already run in this session and stopped at the provider's daily limit (5,250 of 10,000). One batch per session, so none was started again.
+- **Guidance for Step 10** is recorded in "Guidance for later steps", items 8 and 15 to 18.
+
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
 Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to branch `provisional/step6-step8` on 2026-09-23 from main at `bd87054`, reviewed in PR #1, approved by Aakrisht, and merged into main the same day (merge commit `0d2248c`). The branch was then deleted. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
