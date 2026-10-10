@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 9 (baselines and Cox analysis)**, built and independently reviewed on 2026-10-10, waiting for Aakrisht's review. One acceptance criterion is open: the runs are logged to a local MLflow store, not to DagsHub, because the DagsHub repository named in `.env` does not exist yet (see "Blocked, skipped or deferred" in the Step 9 section). Step 10 is not started. **Step 6** is in progress: 5,250 of 10,000 sample texts are labeled (2026-10-10; LLM test result: macro-F1 0.842); the final distilled model waits for the sample. Since 2026-10-10 the daily labeling batch is run by Claude, once per session.
+Current step: **Step 10 (discrete-time models and tuning)**, started on 2026-10-10 after Aakrisht approved Step 9 (see "Review of Step 9"). Its guidance is in "Guidance for later steps", items 8 and 15 to 18. **Step 6** is in progress: 5,250 of 10,000 sample texts are labeled (2026-10-10; LLM test result: macro-F1 0.842); the final distilled model waits for the sample. Since 2026-10-10 the daily labeling batch is run by Claude, once per session.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -85,8 +85,8 @@ Current step: **Step 9 (baselines and Cox analysis)**, built and independently r
 | 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); the sample is labeled in daily batches, by Claude since 2026-10-10 (5,250 of 10,000 on 2026-10-10); distilled model provisional |
 | 7 | Point-in-time features | Approved 2026-10-10 (ADRs 0018 to 0021 accepted). Personal-title sponsor names no longer stored (ADR 0022, warehouse schema version 3), decided in the same review |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
-| 9 | Baselines and Cox analysis | Built and independently reviewed 2026-10-10, waiting for review. Open: runs are in a local MLflow store until the DagsHub repository exists; ADR 0023 proposed |
-| 10 | Discrete-time models and tuning | Not started |
+| 9 | Baselines and Cox analysis | Approved 2026-10-10 (ADR 0023 accepted). Runs logged to DagsHub after the review |
+| 10 | Discrete-time models and tuning | In progress since 2026-10-10 |
 | 11 | Pre-registration, locked test and results | Not started |
 | 12 | Explainability, model card, data card | Not started |
 | 13 | Scoring pipeline and model registry | Not started |
@@ -123,6 +123,13 @@ Added on 2026-10-10, from Aakrisht's review of Step 7:
 
 13. **Step 14: intervention types join the canonical version schema,** with a parity test between the dataset path and the API v2 path (ADR 0020).
 14. **Step 6: Claude runs the labeling batch,** once per session, in the background; it stops at the provider's daily limit. When the sample reaches 10,000, Step 6 is finished as specified.
+
+Added on 2026-10-10, from Aakrisht's review of Step 9:
+
+15. **Step 10: model differences come with a paired bootstrap** (the same resampled trials for both models), including M4 against M1 at registration.
+16. **Step 10: calibration is reported by registration year and by sponsor class,** including the small classes where M1 overpredicts about twofold, and those tables are used to recommend a calibration remedy. Recommend only; none is applied.
+17. **Step 10: every run is logged to DagsHub.** Development origins only; the lock stays.
+18. **Analysis that informs a modeling decision ends on 2018-01-01,** also inside a diagnosis: the later-fate table of the calibration diagnosis was cut there (Section 10).
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -1276,7 +1283,7 @@ The whole move is +0.208 (95% interval +0.144 to +0.270) and +0.127 (+0.087 to +
 2. **Whom it hits.** Lapsed records are mostly in sponsor class OTHER (universities and hospitals). Less event-free time for OTHER means a higher estimated hazard for OTHER: its predicted 24-month risk rises from 5.93% to 6.30% (2016), while INDUSTRY's moves from 7.41% to 7.53%. Swapping the prediction of OTHER alone moves the slope by +0.247 (2016) and +0.192 (2017); the rest of the move is a sixth (2016) to a third (2017) of that size, in the other direction.
 3. **Why the slope reacts so strongly.** M0 predicts one number per class, and two classes hold 95% of the rows. With as-of labels its slope is the observed gap between INDUSTRY and OTHER divided by the predicted gap, in logits: 0.278 over 0.191, which is 1.45 (the slope on those two classes alone is 1.45, on all classes 1.458). With hindsight labels the predicted gap is 0.239. A shift of 0.37 percentage points in the prediction for one class is most of the effect.
 
-**Is it a bias or a different question?** Both. The censoring is informative: of the trials lapsed on the 2016 origin, 8.5% stopped early later, 32.1% completed and 59.1% are lapsed at the data cutoff (57.1% never came back; 1.9%, 216 trials, came back and lapsed again), against 12.2%, 66.2% and 16.9% of the trials still open on the origin. These shares follow the trials to the data cutoff, past the development period, so they are descriptive only (Section 10): they explain the mechanism and are not used to build anything. A lapsed record is a quieter trial, and censoring it removes quiet time. But no build on the origin can know which lapsed records will come back: the hindsight labels were not available then, which is why ADR 0016 replaced them. The evaluation, which follows outcomes to the data cutoff, does know, and counts the quiet time of a record that came back. So training and evaluation treat the same kind of record differently, and a model fitted as of the origin runs slightly hot for the class with the most lapsed records.
+**Is it a bias or a different question?** Both. The censoring is informative: by 2018-01-01, two years after the 2016 origin, 4.1% of the trials lapsed on that origin had stopped early and 17.6% had completed, against 5.7% and 29.8% of the trials still open on the origin; 73.6% of the lapsed ones were lapsed at the end of that window. (Revised after the review of Step 9: the table ends on 2018-01-01, the end of the development period, because it informs the choice of a remedy and Section 10 applies. Its first version followed the trials to the data cutoff.) A lapsed record is a quieter trial, and censoring it removes quiet time. But no build on the origin can know which lapsed records will come back: the hindsight labels were not available then, which is why ADR 0016 replaced them. The evaluation, which follows outcomes to the data cutoff, does know, and counts the quiet time of a record that came back. So training and evaluation treat the same kind of record differently, and a model fitted as of the origin runs slightly hot for the class with the most lapsed records.
 
 **How much it matters.** For M0, little beyond the slope itself: under every label set the AUC at 24 months stays between 0.5345 and 0.5350 and the Brier score moves in the fifth decimal, and with either plain label set the calibration intercept is 0.03 or less in size. Two things are worth keeping in view:
 
@@ -1286,7 +1293,7 @@ The whole move is +0.208 (95% interval +0.144 to +0.270) and +0.127 (+0.087 to +
 **Possible remedies, for your decision (none applied):**
 
 - (a) **Leave the labels as they are and watch calibration by sponsor class** in Steps 9 and 10. Recommended for now: the effect on M0 is a third of a percentage point in one class, and a change to the training labels is a change to ADR 0016.
-- (b) **Observe a trial lapsed on the origin up to the origin** in the training labels, instead of censoring it at its status-verified date. It matches hindsight for the 4 in 10 whose lapse a later version resolves and overstates the event-free time of the others, which the evaluation censors. It would need an ADR that amends ADRs 0014 and 0016 for training rows.
+- (b) **Observe a trial lapsed on the origin up to the origin** in the training labels, instead of censoring it at its status-verified date. It matches hindsight for the trials whose lapse a later version resolves (26.4% of them had stopped, completed or were open again within two years) and overstates the event-free time of the others, which the evaluation censors. It would need an ADR that amends ADRs 0014 and 0016 for training rows.
 - (c) **Weight training rows for lapse censoring by more than the sponsor class** (for example by how stale the record already is). Closer to the cause, and a modeling choice that belongs to Step 10.
 
 Decisions in this part that were mine: the five categories and the order of the swaps; scoring every label set with the harness's own metrics and censoring groups; 200 bootstrap resamples of the evaluation trials for the interval of the move, with the predictions held fixed (so the interval reflects the evaluation sample, not the training sample).

@@ -1,7 +1,7 @@
 # 0022. No stored names for sponsors named by a personal title
 
 - Date: 2026-10-10
-- Status: **Accepted.** Decided by Aakrisht in his review of Step 7 on 2026-10-10 ("fix it now, not at Step 14. Never storing personal names is a non-negotiable rule. Extend the ADR 0012 rule to sponsor names that open with a personal title, rebuild the warehouse, then rebuild the cohort and the features."). Decision 3 (more title forms) is Claude's extension of that instruction and is flagged for his review in the Step 9 report.
+- Status: **Accepted.** Decided by Aakrisht in his review of Step 7 on 2026-10-10 ("fix it now, not at Step 14. Never storing personal names is a non-negotiable rule. Extend the ADR 0012 rule to sponsor names that open with a personal title, rebuild the warehouse, then rebuild the cohort and the features."). Decision 3 (more title forms) is Claude's extension of that instruction; it was flagged in the Step 9 report and approved in the review of Step 9 on 2026-10-10 ("ADR 0022 stage 2 stays").
 - Extends ADR 0012, decision 2 (who is an individual sponsor). Refines CLAUDE.md Section 2 (privacy) and Section 8 (sponsor identity).
 
 ## Context
