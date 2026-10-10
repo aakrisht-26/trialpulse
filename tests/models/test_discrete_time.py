@@ -1,12 +1,14 @@
 """The discrete-time models M2, M3 and M4 (CLAUDE.md Sections 6 and 9), on hand-built and
-simulated rows. No real data."""
+simulated rows. One slow test reads the real cohort where it is built."""
 
 import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import numpy as np
+import pandas as pd
 import pytest
 
 from trialpulse.cohort.person_period import expand
@@ -14,7 +16,14 @@ from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import ProjectConfig
 from trialpulse.dates import add_months
 from trialpulse.eval.metrics import ipcw_auc
-from trialpulse.eval.rows import LandmarkRows, horizon_days
+from trialpulse.eval.rows import (
+    TRAINING_DIR,
+    LandmarkRows,
+    horizon_days,
+    load_landmark_rows,
+    training_path,
+)
+from trialpulse.eval.walkforward import training_rows
 from trialpulse.features import registry
 from trialpulse.models import discrete_time as dtm
 from trialpulse.models.aalen_johansen import aalen_johansen
@@ -155,6 +164,41 @@ def test_the_intervals_of_a_training_row_end_within_the_observation_window(
     assert built["trial_id"].tolist() == rows.trial_id[periods.row].tolist()
     assert built["outcome"].tolist() == periods.outcome.tolist()
     assert built["interval"].tolist() == periods.interval.tolist()
+
+
+@pytest.mark.slow  # reads the real training rows of two origins, where the cohort is built
+@pytest.mark.parametrize("origin", [dt.date(2016, 1, 1), dt.date(2017, 1, 1)])
+def test_on_the_real_cohort_the_models_train_on_the_rows_the_build_stored(
+    cfg: ProjectConfig, origin: dt.date
+) -> None:
+    """A model does not read the person-period file of the cohort build: it expands the
+    landmark rows itself, from follow-up days and with row positions in place of trial ids.
+    On the real training rows of a development origin the two must be the same rows."""
+    landmarks = training_path(TRAINING_DIR, origin)
+    stored = landmarks.with_name("person_period.parquet")
+    if not (landmarks.is_file() and stored.is_file()):
+        pytest.skip("the cohort is not built here")
+    rows, time, event = training_rows(load_landmark_rows(landmarks), np.datetime64(origin))
+    periods = person_period(rows, time, event, origin, cfg)
+    key = ["trial_id", "landmark_index", "interval"]
+    mine = pd.DataFrame(
+        {"trial_id": rows.trial_id[periods.row],
+         "landmark_index": rows.landmark_index[periods.row],
+         "interval": periods.interval, "outcome": periods.outcome,
+         "interval_end": periods.interval_end.astype("datetime64[s]")}
+    ).sort_values(key, ignore_index=True)  # fmt: skip
+    with duckdb.connect() as con:
+        built = con.execute(
+            f"""SELECT trial_id, landmark_index, "interval", outcome, interval_end
+            FROM read_parquet('{stored.as_posix()}')"""
+        ).df().sort_values(key, ignore_index=True)  # fmt: skip
+    assert len(mine) == len(built) > 1_000_000
+    for column in (*key, "outcome"):
+        assert mine[column].tolist() == built[column].tolist(), column
+    assert (
+        mine["interval_end"].to_numpy().astype("datetime64[D]").tolist()
+        == built["interval_end"].to_numpy().astype("datetime64[D]").tolist()
+    )
 
 
 def test_a_model_cannot_be_fitted_without_a_finished_interval(cfg: ProjectConfig) -> None:
