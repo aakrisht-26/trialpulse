@@ -251,6 +251,7 @@ def test_cli_reads_one_training_file_per_origin(
     args = ["--model", "m0", "--origins", "2016", "--resamples", "20", "--input", str(final),
             "--training-dir", str(training_dir)]  # fmt: skip
     monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(walkforward, "PREDICTIONS_DIR", tmp_path / "predictions")
     assert walkforward.main(args) == 2
     assert "origin_2016-01-01" in capsys.readouterr().err
 
@@ -262,6 +263,8 @@ def test_cli_reads_one_training_file_per_origin(
     assert walkforward.main(args) == 0
     saved = json.loads((tmp_path / "results" / "m0_2016.json").read_text(encoding="utf-8"))
     assert saved["origins"][0]["n_train_rows"] == len(_training(origin))
+    # The scores are saved too, in the predictions folder (the test's own, not data/results).
+    assert walkforward.predictions_path(tmp_path / "predictions", "m0", "2016", origin).is_file()
 
     write(_rows(), training_path(training_dir, origin))  # the final rows, not built as of T
     assert walkforward.main(args) == 2
@@ -468,7 +471,8 @@ def test_the_command_logs_each_run_unless_told_not_to(
     write(_training(origin), training_path(training_dir, origin))
     monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path / "results")
     args = ["--model", "m0", "--origins", "2016", "--resamples", "20", "--input", str(final),
-            "--training-dir", str(training_dir)]  # fmt: skip
+            "--training-dir", str(training_dir),
+            "--predictions-dir", str(tmp_path / "predictions")]  # fmt: skip
     assert walkforward.main([*args, "--no-track"]) == 0
     out = tmp_path / "results" / "m0_2016.json"
     assert "tracking" not in json.loads(out.read_text(encoding="utf-8"))
