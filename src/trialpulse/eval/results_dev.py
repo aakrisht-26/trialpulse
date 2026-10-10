@@ -27,7 +27,7 @@ from typing import Any
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
-from trialpulse.models.discrete_time import TUNED_DIR
+from trialpulse.models import discrete_time
 from trialpulse.reports import markdown_table, write_text_if_changed
 
 DOC_PATH = REPO_ROOT / "docs" / "results_dev.md"
@@ -325,6 +325,50 @@ def _delta(part: dict[str, Any] | None, key: str, digits: int = 4) -> str:
     return f"{d['estimate']:+.{digits}f} ({d['ci_low']:+.{digits}f} to {d['ci_high']:+.{digits}f})"
 
 
+SAME_SCORES = 1e-9  # two computations of one metric from the same scores
+
+
+def _reported(
+    everything: dict[str, dict[str, Any]], model: str, day: str, months: str, part: str
+) -> dict[str, Any] | None:
+    """The slice of a model's result file that a slice of the comparison stands beside."""
+    origins = everything.get(model, {}).get("origins", [])
+    origin = next((o for o in origins if o["origin"] == day), None)
+    return None if origin is None else _slice(origin, months, None if part == "all" else part)
+
+
+def check_compared(path: Path, everything: dict[str, dict[str, Any]]) -> None:
+    """The paired differences must come from the scores behind the result files. A
+    prediction file does not say which run wrote it, so a model run again after the
+    comparison would leave differences between new and old scores in this document. For
+    every pair, origin, horizon and slice, the AUC and the Brier score of each model as the
+    comparison computed them are held against that model's result file."""
+    if not path.is_file():
+        return
+    for pair in json.loads(path.read_text(encoding="utf-8"))["pairs"]:
+        cells = [
+            (months, part, day, here, role)
+            for months, slices in pair["horizons"].items()
+            for part, values in slices.items()
+            for day, here in (values.get("by_origin") or {}).items()
+            for role in ("model", "baseline")
+        ]
+        for months, part, day, here, role in cells:
+            s = _reported(everything, pair[role], day, months, part)
+            if s is None:
+                continue
+            where = "all landmark indices" if part == "all" else f"landmark {part}"
+            for metric in ("auc", "brier"):
+                compared, reported = here[f"{metric}_{role}"], s[metric]["estimate"]
+                if abs(compared - reported) > SAME_SCORES:
+                    raise RefusedError(
+                        f"{path} was not computed from the scores behind the result file of "
+                        f"{pair[role].upper()} (origin {day}, {months} months, {where}: {metric} "
+                        f"{compared:.6f} in the comparison, {reported:.6f} in the result "
+                        "file). Run the comparison again: uv run python -m trialpulse.eval.compare"
+                    )
+
+
 def _compare_section(path: Path, horizons: Sequence[str]) -> list[str]:
     if not path.is_file():
         return []
@@ -450,7 +494,8 @@ def _runtime_section(results: dict[str, dict[str, Any]]) -> list[str]:
                     f"{s['fit_seconds']:,.0f}",
                     f"{s.get('predict_seconds', 0):,.0f}",
                     _size(s.get("model_bytes")),
-                    str(s.get("rounds", s.get("iterations", ""))),
+                    str(s.get("rounds", s.get("iterations", "")))
+                    + (" (the limit: not converged)" if s.get("converged") is False else ""),
                 ]
             )
     if not rows:
@@ -703,6 +748,7 @@ def document(
     if not results:
         raise RefusedError("no development result of a model of the ladder (M0 to M4)")
     compare_path = root / "compare" / "dev.json"
+    check_compared(compare_path, everything)
     first = next(iter(results.values()))
     origins = ", ".join(o["origin"] for o in first["origins"])
     lines = [
@@ -821,7 +867,7 @@ def document(
     cox_path = root / "cox" / "cox_l0.json"
     lines += _cox_section(cox_path)
     lines += _runtime_section(everything)
-    lines += _tuning_section(TUNED_DIR if tuned_dir is None else tuned_dir)
+    lines += _tuning_section(discrete_time.TUNED_DIR if tuned_dir is None else tuned_dir)
     lines += _runs_section(everything, cox_path, diagnosis_path, root)
     return "\n".join(lines).rstrip("\n") + "\n"
 

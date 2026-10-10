@@ -525,18 +525,84 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
     assert "M4-DESIGN" not in ladder  # the ablation rungs are not rungs of the ladder
     assert "the champion is **M4**" in ladder
     assert results_dev.champion(results) == "m4"
-    # Ties in AUC go to the lower Brier score, then to the slope closest to 1; a model of
-    # landmark 0 only is no candidate, whatever its AUC.
+    # The rule reads the AUC at 12 months over all landmark indices and no other AUC: a
+    # model far ahead at 24 months and at landmark 0 is not the champion for that.
+    contest = {
+        "m2": _ladder_result("m2", 0.66),
+        "m3": _ladder_result("m3", 0.68),
+        "m4": _ladder_result("m4", 0.67),
+    }
+    for origin in contest["m4"]["origins"]:
+        origin["horizons"]["24"]["pooled"]["auc"]["estimate"] = 0.90
+        for months in ("12", "24"):
+            origin["horizons"][months]["by_landmark_index"]["0"]["auc"]["estimate"] = 0.95
+    assert results_dev.champion(contest) == "m3"
+    # Ties in AUC go to the lower Brier score, then to the slope closest to 1 (1.05 against
+    # 0.80, which is smaller but further away); a model of landmark 0 only is no candidate,
+    # whatever its AUC.
     tied = {
         "m2": _ladder_result("m2", 0.70, brier=0.031, slope=1.0),
-        "m3": _ladder_result("m3", 0.70, brier=0.030, slope=1.4),
-        "m4": _ladder_result("m4", 0.70, brier=0.030, slope=0.9),
+        "m3": _ladder_result("m3", 0.70, brier=0.030, slope=0.80),
+        "m4": _ladder_result("m4", 0.70, brier=0.030, slope=1.05),
         "m1": _result("m1", 0.99, landmarks=[0]),
     }
     assert results_dev.champion(tied) == "m4"
     del tied["m4"]
-    assert results_dev.champion(tied) == "m3"
+    assert results_dev.champion(tied) == "m3"  # the lower Brier score, against a slope of 1
     assert results_dev.champion({"m0": tied["m2"]}) is None  # nothing to choose between
+
+
+def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path]) -> None:
+    """The comparison file holds each model's AUC and Brier score at each origin. They must
+    be the numbers of the result files: if a model was run again after the comparison, the
+    differences are between new and old scores, and the document is not written."""
+    root, tuned = step10
+    cfg = load_project_config()
+    results = results_dev.load_results(root)
+    path = root / "compare" / "dev.json"
+    compared = json.loads(path.read_text(encoding="utf-8"))
+    for pair in compared["pairs"]:
+        for months, slices in pair["horizons"].items():
+            for part, values in slices.items():
+                values["by_origin"] = {}
+                for position, day in enumerate(("2016-01-01", "2017-01-01")):
+                    cells: dict[str, float] = {}
+                    for role in ("model", "baseline"):
+                        by = results[pair[role]]["origins"][position]["horizons"][months]
+                        s = by["pooled"] if part == "all" else by["by_landmark_index"][part]
+                        cells[f"auc_{role}"] = s["auc"]["estimate"]
+                        cells[f"brier_{role}"] = s["brier"]["estimate"]
+                    values["by_origin"][day] = cells
+
+    def written(change: tuple[int, str, str, str, str, float] | None = None) -> str:
+        changed = json.loads(json.dumps(compared))
+        if change is not None:
+            pair, months, part, day, cell, by = change
+            changed["pairs"][pair]["horizons"][months][part]["by_origin"][day][cell] += by
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        return results_dev.document(cfg, results, root, tuned)
+
+    assert "## Differences between models, with paired intervals" in written()
+    # The last digits of two computations may differ; nothing else may.
+    assert written((1, "24", "0", "2017-01-01", "brier_baseline", 1e-12))
+    cases = [
+        ((1, "24", "0", "2017-01-01", "brier_baseline", 1e-6),
+         "result file of M2 (origin 2017-01-01, 24 months, landmark 0: brier"),
+        ((2, "12", "0", "2016-01-01", "auc_model", -1e-6),
+         "result file of M4 (origin 2016-01-01, 12 months, landmark 0: auc"),
+        ((2, "12", "0", "2016-01-01", "auc_baseline", 1e-6),
+         "result file of M1 (origin 2016-01-01, 12 months, landmark 0: auc"),
+        ((0, "12", "all", "2017-01-01", "auc_baseline", 1e-6),
+         "result file of M0 (origin 2017-01-01, 12 months, all landmark indices: auc"),
+        ((4, "24", "all", "2016-01-01", "brier_model", -1e-6),
+         "result file of M4 (origin 2016-01-01, 24 months, all landmark indices: brier"),
+    ]  # fmt: skip
+    for change, message in cases:
+        with pytest.raises(RefusedError) as refused:
+            written(change)
+        assert message in str(refused.value)
+        assert "uv run python -m trialpulse.eval.compare" in str(refused.value)
+    assert written()  # and the comparison as it was is accepted again
 
 
 def test_differences_ablation_and_calibration_tables_read_their_cells(
@@ -608,12 +674,26 @@ def test_run_time_tuning_and_runs_are_listed(step10: tuple[Path, Path]) -> None:
     assert "| M2 | 2016 | 31 | 400,000 | 1,000,000 | 61 | 3 | 4 kB | 45 |" in runtime
     assert "| M0 |" not in runtime  # M0 and M1 report no fit of this kind
     assert "| M1 |" not in runtime
+    # A linear fit that stopped at its iteration limit says so in its row, and only there.
+    stopped = json.loads((root / "walkforward" / "m3_dev.json").read_text(encoding="utf-8"))
+    stopped["origins"][0]["model_summary"]["converged"] = False
+    stopped["origins"][1]["model_summary"]["converged"] = True
+    _write(root, "m3", stopped)
+    again = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+    rows = [line for line in _section(again, "## Run time and size").splitlines()
+            if line.startswith("| M3 |")]  # fmt: skip
+    assert rows[0].endswith("| 4 kB | 45 (the limit: not converged) |")
+    assert rows[1].endswith("| 4 kB | 45 |")
+    assert again.count("not converged") == 1
     tuning = _section(text, "## Tuning")
     assert (
         "| M4 | 40 | 25% | 0.6812 | 0.6904 | `learning_rate` 0.03125, `num_leaves` 63 |" in tuning
     )
     assert "| M2 | 40 | 25% | 0.5911 | 0.5913 | `C` 0.01235 |" in tuning
     assert "| M3 |" not in tuning  # not tuned yet: no file
+    # Without a folder handed in, the document reads the folder the models read, which in
+    # the tests is an empty one (tests/conftest.py), never the repository's config/tuned.
+    assert "## Tuning" not in results_dev.document(cfg, results_dev.load_results(root), root)
     runs = _section(text, "## Runs")
     assert f"| Paired differences between models | {REMOTE} | `compare-dev` in " in runs
     assert f"| Tuning of M4 | {LOCAL} | `tune-m4` in " in runs
