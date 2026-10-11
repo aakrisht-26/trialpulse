@@ -252,6 +252,59 @@ def test_two_files_of_one_name_go_under_the_names_of_their_folders(tmp_path: Pat
     ]  # fmt: skip
     assert tracking.artifact_folders([]) == []
 
+    def placed(paths: list[Path]) -> list[str | None]:
+        out = tracking.artifact_folders(paths)
+        assert [path for path, _ in out] == paths
+        # Whatever is handed in, no two files land on one path of the run.
+        assert len({((folder or "").lower(), path.name.lower()) for path, folder in out}) == len(
+            paths
+        )
+        return [folder for _, folder in out]
+
+    # Folders of one name too, three files of one name, and the same file twice.
+    twin = tmp_path / "elsewhere" / "tuned" / "m4.json"
+    assert placed([record, twin]) == ["tuned", "tuned-2"]
+    assert placed([record, study, twin]) == ["tuned", "tuning", "tuned-2"]
+    assert placed([study, study]) == ["tuning", "tuning-2"]
+    # A file given without a folder stays at the top; its namesake goes under its folder.
+    assert placed([Path("m4.json"), study]) == [None, "tuning"]
+    assert placed([Path("m4.json"), Path("m4.json")]) == [None, "file-2"]
+    # Names that differ by case only are one name to a store on Windows.
+    assert placed([tmp_path / "a" / "M4.json", tmp_path / "b" / "m4.json"]) == ["a", "b"]
+
+
+def test_a_settings_file_is_asked_about_by_name(tmp_path: Path) -> None:
+    """`git_state` counts changed tracked files only. A settings file the tuning has just
+    written for the first time is not tracked yet, so `uncommitted` asks git about it."""
+    repo = tmp_path / "repo"
+    tuned = repo / "config" / "tuned"
+    tuned.mkdir(parents=True)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "test")
+    git("config", "commit.gpgsign", "false")
+    (tuned / "m2.json").write_text("{}\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("data/\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "first")
+    assert not tracking.uncommitted(tuned / "m2.json", repo)
+    assert not tracking.uncommitted(tuned / "m4.json", repo)  # no such file
+    (tuned / "m4.json").write_text("{}\n", encoding="utf-8")
+    assert tracking.git_state(repo)["git_dirty"] == "no"  # which is why it is asked by name
+    assert tracking.uncommitted(tuned / "m4.json", repo)
+    assert not tracking.uncommitted(tuned / "m2.json", repo)
+    (tuned / "m2.json").write_text('{"C": 1}\n', encoding="utf-8")
+    assert tracking.uncommitted(tuned / "m2.json", repo)
+    (repo / "data").mkdir()
+    (repo / "data" / "study.json").write_text("{}\n", encoding="utf-8")
+    assert not tracking.uncommitted(repo / "data" / "study.json", repo)  # ignored: not a change
+    assert not tracking.uncommitted(tmp_path / "elsewhere.json", repo)  # outside the repository
+    assert not tracking.uncommitted(tuned / "m2.json", tmp_path / "missing")  # no such folder
+
 
 @pytest.mark.slow
 def test_a_run_keeps_both_of_two_files_with_the_same_name(

@@ -170,6 +170,21 @@ def git_state(repo: Path = REPO_ROOT) -> dict[str, str]:
     return {"git_commit": commit or "unknown", "git_dirty": "yes" if dirty else "no"}
 
 
+def uncommitted(path: Path, repo: Path = REPO_ROOT) -> bool:
+    """Whether a file differs from the commit: changed, or new and not tracked yet.
+    `git_state` leaves untracked files out, because data and scratch files are not changes
+    to the code; a file that a run reads its settings from is asked about by name. A path
+    outside the repository, or no git, answers no."""
+    try:
+        done = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all", "--", str(path)],
+            cwd=repo, capture_output=True, text=True, check=False,
+        )  # fmt: skip
+    except OSError:
+        return False
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
 def remote_address(repo: Path = REPO_ROOT) -> str:
     """The address of the repository's git remote, without credentials; empty if none."""
     try:
@@ -202,9 +217,22 @@ def artifact_folders(paths: Sequence[Path]) -> list[tuple[Path, str | None]]:
     """Where each file goes in a run: at the top, or, when two files share a name, each
     under the name of its own folder. A run keeps one file per path, so two files of one
     name logged at the top would leave only the second (the tuning logs two <model>.json:
-    its study and the committed settings)."""
-    names = [path.name for path in paths]
-    return [(path, path.parent.name if names.count(path.name) > 1 else None) for path in paths]
+    its study and the committed settings). If two files would still land on one path (their
+    folders share a name too, or a file is listed twice), the later one gets a numbered
+    folder. Names are compared without case: a store on Windows does not tell them apart."""
+    names = [path.name.lower() for path in paths]
+    taken: set[tuple[str, str]] = set()
+    out: list[tuple[Path, str | None]] = []
+    for path in paths:
+        name = path.name.lower()
+        folder = (path.parent.name or None) if names.count(name) > 1 else None
+        base, number = folder or "file", 1
+        while ((folder or "").lower(), name) in taken:
+            number += 1
+            folder = f"{base}-{number}"
+        taken.add(((folder or "").lower(), name))
+        out.append((path, folder))
+    return out
 
 
 def log_run(

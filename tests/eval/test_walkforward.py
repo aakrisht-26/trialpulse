@@ -724,13 +724,22 @@ def test_tuning_runs_before_the_model_when_asked(
     )  # fmt: skip
 
 
+def test_an_empty_selection_of_origins_is_an_error(cfg: ProjectConfig) -> None:
+    """A list of years that names none selected nothing, and a run over no origin ran."""
+    for spec in ("", ",", " , "):
+        with pytest.raises(ValueError, match="no origin is selected"):
+            select_origins(cfg, spec)
+    assert [o.date.year for o in select_origins(cfg, "all")] == [2016, 2017, 2018, 2019, 2020]
+    assert [o.role for o in select_origins(cfg, "stress")] == ["stress"]
+
+
 def test_tune_refuses_before_an_hour_of_tuning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A model without settings of its own, a locked origin and an unknown origin are
-    refused before the tuning starts, and a refusal of the tuning itself is one line with
-    exit code 2, as every other refusal of this command is."""
-    from trialpulse.cli import RefusedError
+    """A model without settings of its own, a locked origin, an unknown origin and an empty
+    selection are refused before the tuning starts. A refusal of the tuning itself is one
+    line with the tuning's own exit code, and a bug in it keeps its traceback."""
+    from trialpulse.cli import RefusedError, StoppedEarlyError
     from trialpulse.models import tuning
 
     calls: list[Any] = []
@@ -751,22 +760,52 @@ def test_tune_refuses_before_an_hour_of_tuning(
         message = capsys.readouterr().err
         assert message.startswith("refused: --tune is for m2, m3, m4")
         assert f"{name} has no settings of its own" in message
-    # The lock is checked first, as it is before any data is read.
-    assert walkforward.main(["--model", "m4", "--origins", "test", "--tune", "--no-track"]) == 2
-    assert "refused: locked origins need the --unlock-test flag" in capsys.readouterr().err
-    assert walkforward.main(["--model", "m4", "--origins", "2016,2019", "--tune"]) == 2
-    assert "--unlock-test" in capsys.readouterr().err
-    assert walkforward.main(["--model", "m4", "--origins", "2031", "--tune", "--no-track"]) == 2
-    assert "unknown origin year" in capsys.readouterr().err
+    # A locked origin, with or without the unlock: settings are tuned on the development
+    # origins and committed before a locked origin is evaluated with them.
+    locked = [("test", []), ("2016,2019", []), ("all", []), ("stress", ["--unlock-test"]),
+              ("2018", ["--unlock-test"])]  # fmt: skip
+    for origins, more in locked:
+        argv = ["--model", "m4", "--origins", origins, "--tune", "--no-track", *more]
+        assert walkforward.main(argv) == 2
+        message = capsys.readouterr().err
+        assert message.startswith("refused: --tune runs with development origins only")
+        assert "config/tuned/m4.json" in message
+    for origins, said in (("2031", "unknown origin year"), ("", "no origin is selected"),
+                          (",", "no origin is selected")):  # fmt: skip
+        argv = ["--model", "m4", "--origins", origins, "--tune", "--no-track"]
+        assert walkforward.main(argv) == 2
+        assert said in capsys.readouterr().err
     assert calls == []
+    # The development origins by year are development origins.
+    assert (
+        walkforward.main(["--model", "m4", "--origins", "2016,2017", "--tune", "--no-track"]) == 0
+    )
+    assert [c if isinstance(c, str) else "tune" for c in calls] == ["tune", "run"]
+    calls.clear()
+    capsys.readouterr()
+    argv = ["--model", "m4", "--origins", "dev", "--tune", "--no-track"]
 
     def refusing(argv: list[str]) -> int:
         raise RefusedError("the features of origin 2016-01-01\n are not built")
 
     monkeypatch.setattr(tuning, "main", refusing)
-    assert walkforward.main(["--model", "m4", "--origins", "dev", "--tune", "--no-track"]) == 2
-    assert capsys.readouterr().err == ("refused: the features of origin 2016-01-01 are not built\n")
-    assert calls == []  # the model does not run after a refused tuning
+    assert walkforward.main(argv) == 2
+    assert capsys.readouterr().err == "refused: the features of origin 2016-01-01 are not built\n"
+
+    def stopping(argv: list[str]) -> int:
+        raise StoppedEarlyError("the provider's daily limit")
+
+    monkeypatch.setattr(tuning, "main", stopping)
+    assert walkforward.main(argv) == 4  # the tuning's own code and word, not "refused"
+    assert capsys.readouterr().err == "stopped: the provider's daily limit\n"
+
+    def broken(argv: list[str]) -> int:
+        raise ValueError("operands could not be broadcast together")
+
+    monkeypatch.setattr(tuning, "main", broken)
+    with pytest.raises(ValueError, match="broadcast"):  # a bug is not a refusal
+        walkforward.main(argv)
+    assert calls == []  # the model does not run after a tuning that did not finish
 
 
 def test_a_tuned_run_is_credited_to_the_tree_it_read_its_settings_from(
@@ -775,13 +814,16 @@ def test_a_tuned_run_is_credited_to_the_tree_it_read_its_settings_from(
     """The tuning rewrites config/tuned/<model>.json and the model then reads it. So the git
     state of the model run is read again after the tuning: settings that differ from the
     committed ones show as uncommitted changes, not as a clean commit that does not hold
-    them."""
-    from trialpulse.models import tuning
+    them. A settings file written for the first time is not a tracked file yet, so git's
+    list of changed tracked files misses it, and the file is asked about by name."""
+    from trialpulse.models import discrete_time, tuning
 
     order: list[str] = []
-    states = iter(
-        [{"git_commit": "c1", "git_dirty": "no"}, {"git_commit": "c1", "git_dirty": "yes"}]
-    )
+    asked: list[Path] = []
+    clean = {"git_commit": "c1", "git_dirty": "no"}
+    states = iter([dict(clean), {"git_commit": "c1", "git_dirty": "yes"}, dict(clean), dict(clean),
+                   dict(clean), dict(clean)])  # fmt: skip
+    new_file = iter([False, True, False])
 
     def state() -> dict[str, str]:
         order.append("state")
@@ -796,11 +838,22 @@ def test_a_tuned_run_is_credited_to_the_tree_it_read_its_settings_from(
         return {"model": "m4", "origins_spec": "dev", "origins": [], "bootstrap_resamples": 5,
                 "training_labels": "as of each origin (ADR 0016)"}  # fmt: skip
 
+    def uncommitted(path: Path) -> bool:
+        asked.append(path)
+        return next(new_file)
+
     monkeypatch.setattr(tracking, "git_state", state)
+    monkeypatch.setattr(tracking, "uncommitted", uncommitted)
     monkeypatch.setattr(tuning, "main", tune)
     monkeypatch.setattr(walkforward, "run", fake_run)
     monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path)
-    assert walkforward.main(["--model", "m4", "--origins", "dev", "--tune"]) == 0
+    argv = ["--model", "m4", "--origins", "dev", "--tune"]
+    # 1. The tuning changed a tracked settings file: the second reading of the state says so.
+    assert walkforward.main(argv) == 0
     assert order == ["state", "tune", "state", "run"]
-    (logged,) = tracked_runs
-    assert logged["state"] == {"git_commit": "c1", "git_dirty": "yes"}
+    # 2. The tracked files are unchanged, and the settings file is new.
+    assert walkforward.main(argv) == 0
+    # 3. Nothing changed: the tuning chose the committed settings again.
+    assert walkforward.main(argv) == 0
+    assert [run["state"]["git_dirty"] for run in tracked_runs] == ["yes", "yes", "no"]
+    assert asked == [discrete_time.TUNED_DIR / "m4.json"] * 3

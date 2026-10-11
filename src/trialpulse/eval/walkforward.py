@@ -96,6 +96,7 @@ RESULTS_DIR = REPO_ROOT / "data" / "results" / "walkforward"
 PREDICTIONS_DIR = RESULTS_DIR / "predictions"
 FEATURES_DIR = REPO_ROOT / "data" / "features"
 CENSORING_COLUMN = "stratum"  # the lead sponsor class at the landmark (ADR 0017)
+DEV_ROLE = "dev"  # the origins a model is developed and tuned on (Section 6)
 TRAINING, EVALUATION = "training", "evaluation"
 
 
@@ -155,13 +156,16 @@ def select_origins(cfg: ProjectConfig, spec: str) -> list[Origin]:
     """ "dev", "test", "stress", "all", or a comma-separated list of origin years."""
     origins = list(cfg.walk_forward.origins)
     if spec == "all":
-        return origins
-    if spec in {"dev", "test", "stress"}:
-        return [o for o in origins if o.role == spec]
-    years = {int(y) for y in spec.split(",") if y.strip()}
-    chosen = [o for o in origins if o.date.year in years]
-    if len(chosen) != len(years):
-        raise ValueError(f"unknown origin year in {spec!r}")
+        chosen = origins
+    elif spec in {"dev", "test", "stress"}:
+        chosen = [o for o in origins if o.role == spec]
+    else:
+        years = {int(y) for y in spec.split(",") if y.strip()}
+        chosen = [o for o in origins if o.date.year in years]
+        if len(chosen) != len(years):
+            raise ValueError(f"unknown origin year in {spec!r}")
+    if not chosen:
+        raise ValueError(f"no origin is selected by {spec!r}")
     return chosen
 
 
@@ -511,11 +515,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        # The origins first, as run() checks the lock before any data: not after an hour of
+        # tuning. A locked origin is refused with or without the unlock: settings are tuned
+        # on the development origins, committed, and only then used on a locked origin.
         try:
-            # The lock first, as run() checks it before any data: not after an hour of tuning.
-            require_unlock(
-                {o.role for o in select_origins(cfg, args.origins)}, REPO_ROOT, args.unlock_test
+            roles = {o.role for o in select_origins(cfg, args.origins)}
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        if roles != {DEV_ROLE}:
+            print(
+                "refused: --tune runs with development origins only. Tune on them first, commit "
+                f"config/tuned/{args.model}.json, then evaluate the locked origins without "
+                "--tune (ADR 0025)",
+                file=sys.stderr,
             )
+            return 2
+        try:
             code: int = tune(
                 ["--model", args.model, "--input", str(args.input),
                  "--training-dir", str(args.training_dir),
@@ -523,14 +539,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                  *(["--no-track"] if args.no_track else []),
                  *(["--local-tracking"] if args.local_tracking else [])]
             )  # fmt: skip
-        except (TestLockError, RefusedError, ValueError) as exc:
-            print(f"refused: {' '.join(str(exc).split())}", file=sys.stderr)
-            return 2
+        except RefusedError as exc:  # a refusal or an early stop, reported as the tuning does
+            print(f"{exc.prefix}: {' '.join(str(exc).split())}", file=sys.stderr)
+            return exc.exit_code
         if code != 0:
             return code
         # The tuning may have rewritten config/tuned/<model>.json: the model run is credited
-        # to the tree it reads its settings from, with its uncommitted changes if any.
+        # to the tree it reads its settings from, with its uncommitted changes if any. A
+        # settings file that is new is not a tracked file yet, so it is asked about by name.
         started = tracking.git_state()
+        if tracking.uncommitted(discrete_time.TUNED_DIR / f"{args.model}.json"):
+            started["git_dirty"] = "yes"
     try:
         results = run(
             cfg,
