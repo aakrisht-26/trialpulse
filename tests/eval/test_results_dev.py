@@ -545,6 +545,10 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
     assert "| M1 | n/a | n/a | 0.6750 | 0.5750 | n/a | n/a |" in ladder  # landmark 0 only
     assert "M4-DESIGN" not in ladder  # the ablation rungs are not rungs of the ladder
     assert "the champion is **M4**" in ladder
+    assert "among the rungs of the ladder that score every landmark index (M0, M2, M3 and M4)" in (
+        ladder
+    )
+    assert "not rungs of the ladder and not candidates. The paired differences" in ladder
     assert results_dev.champion(results) == "m4"
     # The rule reads the AUC at 12 months over all landmark indices and no other AUC: a
     # model far ahead at 24 months and at landmark 0 is not the champion for that.
@@ -577,6 +581,18 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
     del tied["m4"]
     assert results_dev.champion(tied) == "m3"  # the lower Brier score, against a slope of 1
     assert results_dev.champion({"m0": tied["m2"]}) is None  # nothing to choose between
+    # An ablation rung that scores higher on the rule's own number is named beside the
+    # champion: it is no candidate, and the reader must see it. (The made-up comparison is
+    # removed first: it was computed from the other scores of that rung.)
+    (root / "compare" / "dev.json").unlink()
+    higher = dict(results)
+    higher["m4-sponsor"] = _ladder_result("m4-sponsor", 0.71)
+    said = _section(
+        results_dev.document(cfg, higher, root, tuned), "## The ladder and the champion"
+    )
+    assert "the champion is **M4**" in said
+    assert "M4-SPONSOR has a higher mean AUC at 12 months (0.7150 against 0.7050)" in said
+    assert "M4-DESIGN has a higher" not in said
 
 
 def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path]) -> None:
@@ -663,14 +679,14 @@ def test_differences_ablation_and_calibration_tables_read_their_cells(
     differences = _section(text, "## Differences between models, with paired intervals")
     assert "1,000 resamples" in differences
     assert (
-        "| M3 minus M2 | what m3 adds | +0.0500 (+0.0460 to +0.0540) | +0.0600 (+0.0560 to "
-        "+0.0640) | +0.0510 (+0.0470 to +0.0550) | +0.0610 (+0.0570 to +0.0650) | -0.00050 "
-        "(-0.00450 to +0.00350) |"
+        "| M3 minus M2 | the amendment signals | +0.0500 (+0.0460 to +0.0540) | +0.0600 "
+        "(+0.0560 to +0.0640) | +0.0510 (+0.0470 to +0.0550) | +0.0610 (+0.0570 to +0.0650) | "
+        "-0.00050 (-0.00450 to +0.00350) |"
     ) in differences
     # M4 against M1 exists at landmark 0 only: the other cells stay empty.
     assert (
-        "| M4 minus M1 | what m4 adds |  | +0.0400 (+0.0360 to +0.0440) |  | +0.0410 ("
-        in differences
+        "| M4 minus M1 | the dynamic model against the static one, at registration |  | "
+        "+0.0400 (+0.0360 to +0.0440) |  | +0.0410 (" in differences
     )
     by_index = differences.split("Difference in AUC at 12 months, by landmark index:")[1]
     assert "| Landmark index | M2 minus M0 | M3 minus M2 |" in by_index

@@ -55,7 +55,7 @@ DEV = "dev"
 ALL = "all"
 # (model, baseline, what the difference shows, also at every landmark index)
 PAIRS: tuple[tuple[str, str, str, bool], ...] = (
-    ("m2", "m0", "the design family, beyond the sponsor class", True),
+    ("m2", "m0", "the design family, the landmark index and a regression for a curve", True),
     ("m3", "m2", "the amendment signals", True),
     ("m4", "m3", "the other families, and trees for a linear model", True),
     ("m4", "m0", "the whole ladder", False),

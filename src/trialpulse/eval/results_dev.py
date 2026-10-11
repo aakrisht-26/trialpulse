@@ -28,6 +28,7 @@ from typing import Any
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
+from trialpulse.eval.compare import PAIRS
 from trialpulse.models import discrete_time
 from trialpulse.reports import markdown_table, write_text_if_changed
 
@@ -161,22 +162,26 @@ def _by_index_section(results: dict[str, dict[str, Any]], months: str) -> list[s
     return [f"## By landmark index, {months} months", "", *markdown_table(headers, rows), ""]
 
 
-def _first_landmark_slice(result: dict[str, Any], day: str, months: str) -> dict[str, Any] | None:
-    """The landmark 0 slice of a model at one origin and horizon, or nothing if the model
-    has no result for that origin."""
+def _first_landmark_slice(
+    result: dict[str, Any], day: str, months: str, landmark: str | None = FIRST_LANDMARK
+) -> dict[str, Any] | None:
+    """The landmark 0 slice of a model at one origin and horizon (or, with no landmark, its
+    slice over all landmark indices), or nothing if the model has no such result."""
     origin = next((o for o in result["origins"] if o["origin"] == day), None)
-    return None if origin is None else _slice(origin, months, FIRST_LANDMARK)
+    return None if origin is None else _slice(origin, months, landmark)
 
 
-def _decile_section(results: dict[str, dict[str, Any]], months: str) -> list[str]:
+def _decile_section(
+    results: dict[str, dict[str, Any]], months: str, landmark: str | None = FIRST_LANDMARK
+) -> list[str]:
     """Predicted against observed risk by decile of each model's own predictions, at
-    landmark 0."""
+    landmark 0 or, with no landmark, over all landmark indices."""
     lines: list[str] = []
     origins = [o["origin"] for o in next(iter(results.values()))["origins"]]
     for day in origins:
         tables = {}
         for model, result in results.items():
-            s = _first_landmark_slice(result, day, months)
+            s = _first_landmark_slice(result, day, months, landmark)
             if s is not None and s.get("calibration_table"):
                 tables[model] = {row["bin"]: row for row in s["calibration_table"]}
         if not tables:
@@ -268,7 +273,8 @@ def _mean(results: dict[str, Any], months: str, landmark: str | None, key: str) 
 
 def champion(results: dict[str, dict[str, Any]]) -> str | None:
     """Section 9: the model with the best mean AUC at 12 months over the development
-    origins, among the models that score every landmark index; ties by the Brier score at
+    origins, among the rungs of the ladder that score every landmark index (M0, M2, M3, M4:
+    an ablation rung of M4 is not a candidate, whatever it scores); ties by the Brier score at
     12 months, then by the calibration slope closest to 1."""
     ranked = []
     for model in MAIN:
@@ -283,7 +289,11 @@ def champion(results: dict[str, dict[str, Any]]) -> str | None:
     return min(ranked)[1] if len(ranked) > 1 else None
 
 
-def _ladder_section(results: dict[str, dict[str, Any]], horizons: Sequence[str]) -> list[str]:
+def _ladder_section(
+    results: dict[str, dict[str, Any]],
+    horizons: Sequence[str],
+    ablation: dict[str, dict[str, Any]] | None = None,
+) -> list[str]:
     rows = []
     for model in MAIN:
         if model not in results:
@@ -311,12 +321,29 @@ def _ladder_section(results: dict[str, dict[str, Any]], horizons: Sequence[str])
         *markdown_table(headers, rows),
         "",
         "By the selection rule declared in Section 9 (the best mean AUC at 12 months over the "
-        "development origins, among the models that score every landmark index; ties by the "
-        f"Brier score, then by the calibration slope closest to 1), the champion is "
-        f"**{best.upper()}**. The paired differences below say which steps of the ladder the "
-        "evaluation trials can tell from no difference.",
+        "development origins; ties by the Brier score, then by the calibration slope closest "
+        "to 1), among the rungs of the ladder that score every landmark index (M0, M2, M3 and "
+        f"M4), the champion is **{best.upper()}**. The ablation rungs of M4 are not rungs of "
+        f"the ladder and not candidates.{_higher_ablation(ablation or {}, results[best])} The "
+        "paired differences below say which steps of the ladder the evaluation trials can "
+        "tell from no difference.",
         "",
     ]
+
+
+def _higher_ablation(ablation: dict[str, dict[str, Any]], best: dict[str, Any]) -> str:
+    """A sentence for each ablation rung that scores higher than the champion on the rule's
+    own number: the reader of the champion must see it beside the name."""
+    top = _mean(best, PRIMARY_MONTHS, None, "auc")
+    said = ""
+    for model, result in ablation.items():
+        auc = _mean(result, PRIMARY_MONTHS, None, "auc")
+        if auc is not None and top is not None and auc > top:
+            said += (
+                f" {model.upper()} has a higher mean AUC at 12 months ({auc:.4f} against "
+                f"{top:.4f}): see the ablation below."
+            )
+    return said
 
 
 def _delta(part: dict[str, Any] | None, key: str, digits: int = 4) -> str:
@@ -327,6 +354,7 @@ def _delta(part: dict[str, Any] | None, key: str, digits: int = 4) -> str:
 
 
 SAME_SCORES = 1e-9  # two computations of one metric from the same scores
+WHAT = {(model, baseline): what for model, baseline, what, _ in PAIRS}
 
 
 def _reported(
@@ -402,7 +430,10 @@ def _compare_section(path: Path, horizons: Sequence[str]) -> list[str]:
     result = json.loads(path.read_text(encoding="utf-8"))
     rows = []
     for pair in result["pairs"]:
-        cells = [f"{pair['model'].upper()} minus {pair['baseline'].upper()}", pair["what"]]
+        # The wording of a known pair is the code's, so that it can be corrected without
+        # computing the comparison again; the file's own wording serves any other pair.
+        what = WHAT.get((pair["model"], pair["baseline"]), pair["what"])
+        cells = [f"{pair['model'].upper()} minus {pair['baseline'].upper()}", what]
         for months in horizons:
             slices = pair["horizons"][months]
             cells += [_delta(slices.get("all"), "delta_auc"), _delta(slices.get("0"), "delta_auc")]
@@ -532,7 +563,10 @@ def _runtime_section(results: dict[str, dict[str, Any]]) -> list[str]:
         "",
         "Fitting one model on the training rows of an origin and scoring that origin's "
         "evaluation rows at every interval, on the project's laptop (no GPU). The size is "
-        "that of the fitted model as it would be stored.",
+        "that of the fitted model as it would be stored. The times are those of the "
+        "walk-forward runs, which share the laptop with whatever else it is doing, so the "
+        "same fit can take two to three times as long in one run as in another; "
+        "`docs/progress.md` says which were measured on a quiet machine.",
         "",
         *markdown_table(
             ["Model", "Origin", "Features", "Training landmark rows", "Person-period rows",
@@ -808,7 +842,8 @@ def document(
         *(f"  - **{model.upper()}:** {MODELS[model]}." for model in everything),
         "",
     ]
-    lines += _ladder_section(results, horizons)
+    rungs = {m: everything[m] for m in ABLATION if m in everything and m not in MAIN}
+    lines += _ladder_section(results, horizons, rungs)
     lines += _compare_section(compare_path, horizons)
     lines += _ablation_section(everything, compare_path, horizons)
     for months in (str(m) for m in cfg.horizons_months):
@@ -866,9 +901,12 @@ def document(
             "## Predicted against observed risk by registration year, all landmark indices",
             "",
             "By the calendar year in which a trial was first posted. The evaluation rows of "
-            "an origin hold landmarks 0 to 6, so they reach back three years. A model that is "
-            "right on average and wrong by registration year has learned something about "
-            "calendar time that does not carry over (ADR 0023 names one such selection).",
+            "an origin hold landmarks 0 to 6, so they reach back three years, and within one "
+            "origin the registration year and the landmark index are nearly the same thing: "
+            "the newest year is landmarks 0 and 1, the oldest landmarks 5 and 6. A model that "
+            "is right on average and wrong by registration year is wrong along the age of the "
+            "record; these tables alone cannot say whether that is calendar time or time "
+            "since registration (ADR 0023 names one selection by calendar time).",
             "",
             *by_year,
         ]
@@ -886,6 +924,17 @@ def document(
             "groups.",
             "",
             *deciles,
+        ]
+    pooled_deciles: list[str] = []
+    for months in (str(m) for m in cfg.horizons_months):
+        pooled_deciles += _decile_section(results, months, None)
+    if pooled_deciles:
+        lines += [
+            "## Predicted against observed risk by decile, all landmark indices",
+            "",
+            "The same over every landmark index, for the models that score them all.",
+            "",
+            *pooled_deciles,
         ]
     if "m1" in results:
         lines += _m1_section(results["m1"])
