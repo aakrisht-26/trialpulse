@@ -11,6 +11,7 @@ import pytest
 
 from trialpulse.cli import RefusedError
 from trialpulse.config import ProjectConfig
+from trialpulse.dates import add_months
 from trialpulse.eval.ipcw import censoring_groups
 from trialpulse.eval.lock import TestLockError
 from trialpulse.eval.metrics import calibration_slope_intercept, ipcw_auc, ipcw_brier
@@ -96,9 +97,12 @@ def test_the_study_starts_with_the_default_setting_and_keeps_its_budget(
     created: list[dict[str, Any]] = []
     real = optuna.create_study
 
+    studies: list[Any] = []
+
     def recording(**kwargs: Any) -> Any:
         created.append(kwargs)
-        return real(**kwargs)
+        studies.append(real(**kwargs))
+        return studies[-1]
 
     monkeypatch.setattr(tuning.optuna, "create_study", recording)
 
@@ -118,6 +122,8 @@ def test_the_study_starts_with_the_default_setting_and_keeps_its_budget(
     # The search looks for a higher AUC, with the project's seed.
     assert created[0]["direction"] == "maximize"
     assert isinstance(created[0]["sampler"], optuna.samplers.TPESampler)
+    # What the search is told about each trial is its AUC, and nothing else.
+    assert [trial.value for trial in studies[0].trials] == [t["auc"] for t in study["trials"]]
     again = tuning.tune(cfg, "m4", [], 12, scorer)
     assert [t["settings"] for t in again["trials"]] == [t["settings"] for t in study["trials"]]
     other_seed = cfg.model_copy(update={"seeds": cfg.seeds.model_copy(update={"default": 7})})
@@ -127,6 +133,31 @@ def test_the_study_starts_with_the_default_setting_and_keeps_its_budget(
     for name in ("m1", "m4-design", "m0"):
         with pytest.raises(RefusedError, match="no settings of its own"):
             tuning.tune(cfg, name, [], 2, scorer)
+
+
+def test_the_chosen_trial_breaks_ties_by_the_declared_rule(cfg: ProjectConfig) -> None:
+    """Every trial has the same AUC here. The lower Brier score wins; with equal Brier scores
+    too, the slope closest to 1. The default setting comes first and is not the best."""
+
+    def by_brier(cfg: Any, model: str, settings: Any, data: Any) -> dict[str, Any]:
+        off = abs(float(np.log(settings["num_leaves"] / 60.0)))
+        return {"auc": 0.7, "brier": 0.03 + off / 1000.0, "calibration_slope": 1.0, "by_origin": {}}
+
+    study = tuning.tune(cfg, "m4", [], 12, by_brier)
+    assert study["best"]["brier"] == min(t["brier"] for t in study["trials"])
+    assert study["best"]["brier"] < study["default"]["brier"]
+    assert study["best"]["number"] != 0
+
+    def by_slope(cfg: Any, model: str, settings: Any, data: Any) -> dict[str, Any]:
+        slope = 1.0 + float(np.log(settings["num_leaves"] / 60.0))
+        return {"auc": 0.7, "brier": 0.03, "calibration_slope": slope, "by_origin": {}}
+
+    study = tuning.tune(cfg, "m4", [], 12, by_slope)
+    distances = [abs(t["calibration_slope"] - 1.0) for t in study["trials"]]
+    assert abs(study["best"]["calibration_slope"] - 1.0) == min(distances) < distances[0]
+    # Some slopes are below 1 and closer to it than the best above 1 is not required: both
+    # sides occur, so "closest" is not "smallest".
+    assert min(t["calibration_slope"] for t in study["trials"]) < study["best"]["calibration_slope"]
 
 
 def test_the_objective_is_the_mean_over_the_origins_of_the_auc_at_12_months(
@@ -139,7 +170,9 @@ def test_the_objective_is_the_mean_over_the_origins_of_the_auc_at_12_months(
     later = dt.date(2017, 1, 1)
     data = [
         _origin_data(seed=0, lapse_share=0.6),
-        _origin_data(seed=1, origin=later, lapse_share=0.6),
+        # Fewer evaluation rows than the first origin: a mean over the origins is not a
+        # mean over their rows.
+        _origin_data(seed=1, origin=later, lapse_share=0.6, n_eval=1_500),
     ]
     settings = {"C": 0.5}
     result = tuning.score(cfg, "m3", settings, data)
@@ -227,23 +260,47 @@ def test_the_command_writes_the_chosen_settings_where_the_models_read_them(
     assert len(tracked_runs) == 1
 
 
-def test_only_the_development_origins_are_prepared_with_a_share_of_their_trials(
-    cfg: ProjectConfig,
-) -> None:
-    """The loaders of the harness, on made-up trials first posted from 2010 to 2018: the
-    tuning asks them for the development origins and for nothing else, keeps a seeded share
-    of each origin's training trials and every evaluation row."""
-    rows, _, _ = simulated_rows(
+def _two_landmarks() -> LandmarkRows:
+    """Made-up trials first posted from 2010 to 2018, each with a landmark row at
+    registration and, if it is still open six months later, a second one: a trial is more
+    than one row, as in the cohort."""
+    base, _, _ = simulated_rows(
         6_000, seed=40, first=dt.date(2010, 1, 1), last=dt.date(2018, 1, 1), end=None
     )
+    later = add_months(base.landmark_date, 6)
+    still = base.event_date > later
+    n = len(base)
+
+    def stack(first: Any, second: Any) -> Any:
+        return np.concatenate([first, second[still]])
+
+    features = {name: stack(values, values) for name, values in base.features.items()}
+    features["landmark_index"] = stack(np.zeros(n), np.ones(n))
+    features["months_since_t0"] = stack(np.zeros(n), np.full(n, 6.0))
+    return LandmarkRows(
+        stack(base.trial_id, base.trial_id),
+        stack(np.zeros(n, dtype=np.int64), np.ones(n, dtype=np.int64)),
+        stack(base.landmark_date, later),
+        stack(base.event, base.event),
+        stack(base.event_date, base.event_date),
+        features,
+    )
+
+
+def test_only_the_development_origins_are_prepared_with_a_share_of_their_trials(
+    cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loaders of the harness on made-up trials: the tuning asks them for the
+    development origins and for nothing else, keeps a seeded share of each origin's training
+    trials with all their rows, and every evaluation row with the harness's censoring groups."""
+    rows = _two_landmarks()
     bare = LandmarkRows(
         rows.trial_id, rows.landmark_index, rows.landmark_date, rows.event, rows.event_date,
         {"stratum": rows.features["stratum"]},
     )  # fmt: skip
-    asked: list[tuple[str, dt.date]] = []
+    asked: list[tuple[str, dt.date | None]] = []
 
-    def training(origin: dt.date) -> LandmarkRows:
-        asked.append(("training rows", origin))
+    def as_of(origin: dt.date) -> LandmarkRows:
         day = np.datetime64(origin, "D")
         before = bare.subset(bare.landmark_date < day)
         late = before.event_date >= day
@@ -252,6 +309,14 @@ def test_only_the_development_origins_are_prepared_with_a_share_of_their_trials(
             np.where(late, 0, before.event).astype(np.int64),
             np.where(late, day, before.event_date).astype("datetime64[D]"), before.features,
         )  # fmt: skip
+
+    def final() -> LandmarkRows:
+        asked.append(("final rows", None))
+        return bare
+
+    def training(origin: dt.date) -> LandmarkRows:
+        asked.append(("training rows", origin))
+        return as_of(origin)
 
     def features(origin: dt.date, role: str, only: Any) -> FeatureRows:
         asked.append((f"{role} features", origin))
@@ -262,39 +327,60 @@ def test_only_the_development_origins_are_prepared_with_a_share_of_their_trials(
             chosen, _, _ = evaluation_rows(rows, day, cfg.walk_forward.eval_window_months)
         return FeatureRows(chosen.trial_id, chosen.landmark_index, dict(chosen.features))
 
-    data = tuning.prepare(cfg, bare, training, features, 0.5)
+    data = tuning.prepare(cfg, final, training, features, 0.5)
     dev = [o.date for o in cfg.walk_forward.origins if o.role == "dev"]
     assert dev == [dt.date(2016, 1, 1), dt.date(2017, 1, 1)]
     assert [d.origin for d in data] == dev
-    assert asked == [
+    assert asked == [("final rows", None)] + [
         (what, origin)
         for origin in dev
         for what in ("training rows", "training features", "evaluation features")
     ]
     for d in data:
         day = np.datetime64(d.origin, "D")
-        every = bare.trial_id[bare.landmark_date < day]
-        keep = tuning.sample_trials(every, 0.5, cfg.seeds.default)
-        assert d.training_trials == len(every)
-        assert d.train.trial_id.tolist() == every[keep].tolist()
-        assert d.sampled_trials == len(d.train) == int(keep.sum())
+        every = as_of(d.origin)
+        keep = tuning.sample_trials(every.trial_id, 0.5, cfg.seeds.default)
+        # Trials are counted and drawn, not rows, and a drawn trial keeps all its rows.
+        assert d.training_trials == len(set(every.trial_id.tolist())) < len(every)
+        assert d.sampled_trials == len(set(every.trial_id[keep].tolist())) < len(d.train)
         assert 0.4 * d.training_trials < d.sampled_trials < 0.6 * d.training_trials
-        assert len(d.train_time) == len(d.train_event) == len(d.train)
+        assert d.train.trial_id.tolist() == every.trial_id[keep].tolist()
+        assert d.train.landmark_index.tolist() == every.landmark_index[keep].tolist()
+        drawn = set(d.train.trial_id.tolist())
+        assert sum(1 for trial in every.trial_id.tolist() if trial in drawn) == len(d.train)
+        # The follow-up and the events are those of the drawn rows.
+        follow_up = (every.event_date - every.landmark_date).astype(np.int64).astype(float)
+        assert d.train_time.tolist() == follow_up[keep].tolist()
+        assert d.train_event.tolist() == every.event[keep].tolist()
+        assert len(set(d.train_time.tolist())) > 100
         year_end = np.datetime64(d.origin.replace(year=d.origin.year + 1), "D")
         window = (bare.landmark_date >= day) & (bare.landmark_date < year_end)
         assert d.evaluation.trial_id.tolist() == bare.trial_id[window].tolist()  # every row
-        assert len(d.groups) == len(d.time) == len(d.event) == len(d.evaluation)
+        assert len(d.time) == len(d.event) == len(d.evaluation)
+        groups = censoring_groups(
+            bare.features["stratum"][window], cfg.evaluation.censoring_min_rows
+        )
+        assert d.groups.tolist() == groups.tolist()
+        assert len(set(d.groups.tolist())) >= 2  # a curve per sponsor class, as in the harness
         assert "enrollment_count" in d.train.features
         assert "enrollment_count" in d.evaluation.features
-    everything = tuning.prepare(cfg, bare, training, features, 1.0)
-    assert all(d.sampled_trials == d.training_trials == len(d.train) for d in everything)
+    everything = tuning.prepare(cfg, final, training, features, 1.0)
+    assert all(d.sampled_trials == d.training_trials for d in everything)
+    assert all(len(d.train) == len(as_of(d.origin)) for d in everything)
+    # The origins read are the ones that passed the lock, whatever the configuration lists.
+    second = [o for o in cfg.walk_forward.origins if o.date == dev[1]]
+    monkeypatch.setattr(tuning, "select_origins", lambda cfg, spec: second)
+    asked.clear()
+    assert [d.origin for d in tuning.prepare(cfg, final, training, features, 0.5)] == [dev[1]]
+    assert {origin for _, origin in asked} == {None, dev[1]}
 
 
 def test_a_locked_origin_never_reaches_the_tuning(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The tuning has no unlock flag. Its origins pass the test lock like the harness's, so
-    if they ever held a locked origin it would be refused before a row is read."""
+    if they ever held a locked origin it would be refused before a row is read: not the
+    final landmark rows either, which hold the evaluation rows of every origin."""
     asked: list[Any] = []
 
     def loader(*args: Any) -> Any:
@@ -302,9 +388,8 @@ def test_a_locked_origin_never_reaches_the_tuning(
         raise AssertionError("no data may be read")
 
     monkeypatch.setattr(tuning, "select_origins", lambda cfg, spec: list(cfg.walk_forward.origins))
-    final, _, _ = simulated_rows(50, seed=2)
     with pytest.raises(TestLockError, match="--unlock-test"):
-        tuning.prepare(cfg, final, loader, loader, 0.5)
+        tuning.prepare(cfg, loader, loader, loader, 0.5)
     assert asked == []
     # What the lock is asked: the roles of every origin, and never "unlocked".
     handed: list[tuple[set[str], bool]] = []
@@ -315,6 +400,6 @@ def test_a_locked_origin_never_reaches_the_tuning(
 
     monkeypatch.setattr(tuning, "require_unlock", recording)
     with pytest.raises(TestLockError, match="refused by the test"):
-        tuning.prepare(cfg, final, loader, loader, 0.5)
+        tuning.prepare(cfg, loader, loader, loader, 0.5)
     assert handed == [({"dev", "test", "stress"}, False)]
     assert asked == []

@@ -39,6 +39,9 @@ def test_a_committed_settings_file_is_what_the_tuning_of_this_configuration_writ
     assert record["trials"] == cfg.tuning.n_trials
     assert record["trial_sample_share"] == cfg.tuning.trial_sample_share
     assert record["seed"] == cfg.seeds.default
+    assert 0 <= record["chosen_trial"] < record["trials"]
+    by_origin = list(record["by_origin"].values())
+    assert record["auc"] == pytest.approx(sum(by_origin) / len(by_origin), abs=1e-12)
     assert record["dataset_revision"] == cfg.dataset.revision
     assert record["objective"] == tuning.OBJECTIVE.format(months=min(cfg.horizons_months))
     assert 0.5 < record["default_auc"] <= record["auc"] < 1.0  # the default is the first trial
@@ -63,3 +66,28 @@ def test_no_other_test_reads_the_committed_settings(cfg: ProjectConfig) -> None:
     assert not any(discrete_time.TUNED_DIR.iterdir())
     assert discrete_time.build("m4", cfg).settings == discrete_time.BOOSTING_DEFAULTS
     assert discrete_time.build("m3", cfg).settings == discrete_time.LOGISTIC_DEFAULTS
+
+
+@pytest.mark.slow  # reads the studies of this machine, where the tuning ran
+@pytest.mark.parametrize("model", tuning.TUNABLE)
+def test_the_committed_settings_are_the_choice_of_the_study(model: str) -> None:
+    """A committed settings file is small enough to edit by hand, and a value changed inside
+    its range passes every check above. Where the study that chose the settings is on disk
+    (data/results is not committed), the two must agree: the settings are those of the
+    chosen trial, and the chosen trial is the best one by the declared rule."""
+    study_path = REPO_ROOT / "data" / "results" / "tuning" / f"{model}.json"
+    if not study_path.is_file():
+        pytest.skip("the study is not on this machine")
+    study = json.loads(study_path.read_text(encoding="utf-8"))
+    record = json.loads((COMMITTED / f"{model}.json").read_text(encoding="utf-8"))
+    trials = study["all_trials"]
+    assert len(trials) == record["trials"]
+    chosen = trials[record["chosen_trial"]]
+    assert chosen["number"] == record["chosen_trial"]
+    assert chosen["settings"] == record["settings"]
+    assert (chosen["auc"], chosen["brier"]) == (record["auc"], record["brier"])
+    assert min(trials, key=tuning.rank)["number"] == record["chosen_trial"]
+    assert trials[0]["settings"] == record["default_settings"]
+    assert trials[0]["auc"] == record["default_auc"]
+    written = {k: v for k, v in study.items() if k not in ("all_trials", "seconds", "tracking")}
+    assert written == record

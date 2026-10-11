@@ -141,16 +141,18 @@ class OriginData:
 
 def prepare(
     cfg: ProjectConfig,
-    final: LandmarkRows,
+    load_final: Callable[[], LandmarkRows],
     load_training: Callable[[dt.date], LandmarkRows],
     load_features: FeatureLoader,
     share: float,
 ) -> list[OriginData]:
     """The rows of every development origin, with their features, as the harness joins them.
     The origins pass the test lock, as they do in the harness: a locked origin is refused
-    here before any of its rows is read, and the tuning has no way to unlock one."""
+    here before any row is read (the final landmark rows hold the evaluation rows of every
+    origin), and the tuning has no way to unlock one."""
     origins = select_origins(cfg, DEV_ROLE)
     require_unlock({o.role for o in origins}, REPO_ROOT, unlock_flag=False)
+    final = load_final()
     out = []
     for origin in (o.date for o in origins):
         t = np.datetime64(origin, "D")
@@ -166,8 +168,6 @@ def prepare(
                 len(np.unique(train.trial_id)), len(np.unique(train.trial_id[keep])),
             )
         )  # fmt: skip
-    if not out:
-        raise RefusedError("config/project.yaml names no development origin")
     return out
 
 
@@ -286,7 +286,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         data = prepare(
             cfg,
-            load_landmark_rows(args.input),
+            lambda: load_landmark_rows(args.input),
             lambda origin: load_landmark_rows(training_path(args.training_dir, origin)),
             feature_loader(cfg, args.features_dir, args.input.parent),
             share,
