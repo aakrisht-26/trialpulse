@@ -4,6 +4,7 @@ simulated rows. One slow test reads the real cohort where it is built."""
 import datetime as dt
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import duckdb
@@ -112,13 +113,19 @@ def test_a_horizon_costs_only_the_intervals_it_needs(
         return real(landmark, interval)
 
     monkeypatch.setattr(model, "_probabilities", counting)
+    # A clock that moves one second per reading: each scoring pass takes "one second".
+    ticks = iter(range(10_000))
+    monkeypatch.setattr(dtm, "clock", SimpleNamespace(perf_counter=lambda: float(next(ticks))))
     twelve = model.predict_months(rows, 12)
     assert asked == [1, 2]
+    assert model.summary["predict_seconds"] == 1.0
     assert model.predict_months(rows, 6) == pytest.approx(model.hazards(rows, 1)[0][:, 0])
     assert asked == [1, 2]  # already known
     twenty_four = model.predict_months(rows, 24)
     assert asked == [1, 2, 3, 4]
     assert model.summary["predicted_rows"] == len(rows)
+    # The scoring time of the rows is that of both passes, not of the last one.
+    assert model.summary["predict_seconds"] == 2.0
     fresh = build("m2", cfg).fit_rows(rows, time, event, ORIGIN)
     stop, complete = fresh.hazards(rows)
     both = cumulative_incidence(stop, complete)
@@ -129,6 +136,7 @@ def test_a_horizon_costs_only_the_intervals_it_needs(
     model.predict_months(other, 12)
     assert asked == [1, 2, 3, 4, 1, 2]
     assert model.summary["predicted_rows"] == 10
+    assert model.summary["predict_seconds"] == 1.0  # other rows: counted from nothing
 
 
 # Person-period rows ------------------------------------------------------------------------------

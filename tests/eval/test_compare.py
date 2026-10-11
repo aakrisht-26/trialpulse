@@ -313,6 +313,11 @@ def test_files_that_do_not_hold_the_same_rows_are_refused(
     _save(tmp_path, "m3", origin, other, "fair")
     with pytest.raises(RefusedError, match="not scored on the same evaluation rows"):
         compare.load_pair(tmp_path, "m4", "m3", (origin,), (12, 24))
+    # Two files that share no landmark index hold no row to compare.
+    _save(tmp_path, "m3", origin, frame, "fair", only=(1,))
+    _save(tmp_path, "m1", origin, frame, "fair", only=(0,))
+    with pytest.raises(RefusedError, match="not scored on the same evaluation rows"):
+        compare.load_pair(tmp_path, "m3", "m1", (origin,), (12, 24))
     # The same rows again: accepted.
     _save(tmp_path, "m3", origin, frame, "fair")
     assert len(compare.load_pair(tmp_path, "m4", "m3", (origin,), (12, 24))) == len(frame)
