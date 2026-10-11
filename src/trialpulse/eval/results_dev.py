@@ -21,6 +21,7 @@ landmark indices, the run time and size of each model, and the settings the tuni
 
 import argparse
 import json
+import math
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -337,36 +338,62 @@ def _reported(
     return None if origin is None else _slice(origin, months, None if part == "all" else part)
 
 
+def _same(compared: float, reported: float) -> bool:
+    """Two computations of one metric from the same scores. Two values that are both not a
+    number are the same; one that is not a number beside one that is, never."""
+    if math.isnan(compared) or math.isnan(reported):
+        return math.isnan(compared) and math.isnan(reported)
+    return abs(compared - reported) <= SAME_SCORES
+
+
+def _compared_cells(pair: dict[str, Any]) -> list[tuple[str, str, str | None, Any]]:
+    """Every (horizon, slice, origin, numbers of that origin) of one pair of the comparison.
+    A slice without numbers per origin gives one entry without an origin."""
+    cells: list[tuple[str, str, str | None, Any]] = []
+    for months, slices in pair["horizons"].items():
+        for part, values in slices.items():
+            by_origin = values.get("by_origin") or {None: None}
+            cells += [(months, part, day, here) for day, here in by_origin.items()]
+    return cells
+
+
 def check_compared(path: Path, everything: dict[str, dict[str, Any]]) -> None:
     """The paired differences must come from the scores behind the result files. A
     prediction file does not say which run wrote it, so a model run again after the
     comparison would leave differences between new and old scores in this document. For
-    every pair, origin, horizon and slice, the AUC and the Brier score of each model as the
-    comparison computed them are held against that model's result file."""
+    every pair, origin, horizon and slice (each landmark index too), the AUC and the Brier
+    score of each model as the comparison computed them are held against that model's
+    result file. A cell that cannot be checked (no numbers per origin, no result file, no
+    such slice) refuses the document as a cell that differs does."""
     if not path.is_file():
         return
+    again = "Run the comparison again: uv run python -m trialpulse.eval.compare"
     for pair in json.loads(path.read_text(encoding="utf-8"))["pairs"]:
-        cells = [
-            (months, part, day, here, role)
-            for months, slices in pair["horizons"].items()
-            for part, values in slices.items()
-            for day, here in (values.get("by_origin") or {}).items()
-            for role in ("model", "baseline")
-        ]
-        for months, part, day, here, role in cells:
-            s = _reported(everything, pair[role], day, months, part)
-            if s is None:
-                continue
+        name = f"{pair['model'].upper()} minus {pair['baseline'].upper()}"
+        for months, part, day, here in _compared_cells(pair):
             where = "all landmark indices" if part == "all" else f"landmark {part}"
-            for metric in ("auc", "brier"):
-                compared, reported = here[f"{metric}_{role}"], s[metric]["estimate"]
-                if abs(compared - reported) > SAME_SCORES:
+            if day is None:
+                raise RefusedError(
+                    f"{path} holds no numbers per origin for {name} ({months} months, {where}), "
+                    f"so it cannot be held against the result files. {again}"
+                )
+            for role in ("model", "baseline"):
+                s = _reported(everything, pair[role], day, months, part)
+                if s is None:
                     raise RefusedError(
-                        f"{path} was not computed from the scores behind the result file of "
-                        f"{pair[role].upper()} (origin {day}, {months} months, {where}: {metric} "
-                        f"{compared:.6f} in the comparison, {reported:.6f} in the result "
-                        "file). Run the comparison again: uv run python -m trialpulse.eval.compare"
+                        f"{path} compares {pair[role].upper()} at origin {day} ({months} months, "
+                        f"{where}), and no result file holds that slice. Run that model again, "
+                        "then the comparison"
                     )
+                for metric in ("auc", "brier"):
+                    compared, reported = here[f"{metric}_{role}"], s[metric]["estimate"]
+                    if not _same(compared, reported):
+                        raise RefusedError(
+                            f"{path} was not computed from the scores behind the result file of "
+                            f"{pair[role].upper()} (origin {day}, {months} months, {where}: "
+                            f"{metric} {compared:.12g} in the comparison, {reported:.12g} in "
+                            f"the result file). {again}"
+                        )
 
 
 def _compare_section(path: Path, horizons: Sequence[str]) -> list[str]:

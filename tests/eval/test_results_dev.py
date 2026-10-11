@@ -6,6 +6,7 @@ printed in the wrong column, or taken from the wrong model, origin or horizon, c
 line that a test reads in full."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -462,26 +463,46 @@ def _pair(model: str, baseline: str, delta: float, indices: tuple[int, ...] = (0
             "landmark_indices": list(indices), "horizons": horizons}  # fmt: skip
 
 
+def _numbers_per_origin(pair: dict[str, Any], made: dict[str, dict[str, Any]]) -> None:
+    """What the comparison writes beside each difference: both models' AUC and Brier score at
+    each origin. Here they are those of the made-up result files, as they must be."""
+    for months, slices in pair["horizons"].items():
+        for part, values in slices.items():
+            values["by_origin"] = {}
+            for position, day in enumerate(("2016-01-01", "2017-01-01")):
+                cells: dict[str, float] = {}
+                for role in ("model", "baseline"):
+                    by = made[pair[role]]["origins"][position]["horizons"][months]
+                    s = by["pooled"] if part == "all" else by["by_landmark_index"][part]
+                    cells[f"auc_{role}"] = s["auc"]["estimate"]
+                    cells[f"brier_{role}"] = s["brier"]["estimate"]
+                values["by_origin"][day] = cells
+
+
 @pytest.fixture
 def step10(tmp_path: Path) -> tuple[Path, Path]:
     root, tuned = tmp_path / "results", tmp_path / "tuned"
     aucs = {"m0": 0.54, "m2": 0.60, "m3": 0.66, "m4": 0.70, "m4-design": 0.61,
             "m4-amendments": 0.67, "m4-sponsor": 0.69}  # fmt: skip
-    for model, auc in aucs.items():
-        _write(root, model, _ladder_result(model, auc))
-    _write(root, "m1", _result("m1", 0.62, landmarks=[0], tracking=_tracking("m1")))
+    made = {model: _ladder_result(model, auc) for model, auc in aucs.items()}
+    made["m1"] = _result("m1", 0.62, landmarks=[0], tracking=_tracking("m1"))
+    for model, result in made.items():
+        _write(root, model, result)
+    pairs = [
+        _pair("m2", "m0", 0.06, by_index=True),
+        _pair("m3", "m2", 0.05, by_index=True),
+        _pair("m4", "m1", 0.03, indices=(0,)),
+        _pair("m4-amendments", "m4-design", 0.055),
+        _pair("m4", "m4-sponsor", 0.0005),
+    ]
+    for pair in pairs:
+        _numbers_per_origin(pair, made)
     (root / "compare").mkdir()
     (root / "compare" / "dev.json").write_text(
         json.dumps(
             {
                 "bootstrap_resamples": 1000,
-                "pairs": [
-                    _pair("m2", "m0", 0.06, by_index=True),
-                    _pair("m3", "m2", 0.05, by_index=True),
-                    _pair("m4", "m1", 0.03, indices=(0,)),
-                    _pair("m4-amendments", "m4-design", 0.055),
-                    _pair("m4", "m4-sponsor", 0.0005),
-                ],
+                "pairs": pairs,
                 "tracking": {**_tracking("m4"), "run_name": "compare-dev"},
             }
         ),
@@ -537,6 +558,12 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
         for months in ("12", "24"):
             origin["horizons"][months]["by_landmark_index"]["0"]["auc"]["estimate"] = 0.95
     assert results_dev.champion(contest) == "m3"
+    # The mean over the origins, not the first origin: M3 leads in 2016, M4 on the mean.
+    split = {"m3": _ladder_result("m3", 0.66), "m4": _ladder_result("m4", 0.66)}
+    for model, by_year in (("m3", (0.70, 0.64)), ("m4", (0.69, 0.67))):
+        for origin, value in zip(split[model]["origins"], by_year, strict=True):
+            origin["horizons"]["12"]["pooled"]["auc"]["estimate"] = value
+    assert results_dev.champion(split) == "m4"
     # Ties in AUC go to the lower Brier score, then to the slope closest to 1 (1.05 against
     # 0.80, which is smaller but further away); a model of landmark 0 only is no candidate,
     # whatever its AUC.
@@ -555,24 +582,13 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
 def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path]) -> None:
     """The comparison file holds each model's AUC and Brier score at each origin. They must
     be the numbers of the result files: if a model was run again after the comparison, the
-    differences are between new and old scores, and the document is not written."""
+    differences are between new and old scores, and the document is not written. A cell that
+    cannot be checked refuses the document too."""
     root, tuned = step10
     cfg = load_project_config()
     results = results_dev.load_results(root)
     path = root / "compare" / "dev.json"
     compared = json.loads(path.read_text(encoding="utf-8"))
-    for pair in compared["pairs"]:
-        for months, slices in pair["horizons"].items():
-            for part, values in slices.items():
-                values["by_origin"] = {}
-                for position, day in enumerate(("2016-01-01", "2017-01-01")):
-                    cells: dict[str, float] = {}
-                    for role in ("model", "baseline"):
-                        by = results[pair[role]]["origins"][position]["horizons"][months]
-                        s = by["pooled"] if part == "all" else by["by_landmark_index"][part]
-                        cells[f"auc_{role}"] = s["auc"]["estimate"]
-                        cells[f"brier_{role}"] = s["brier"]["estimate"]
-                    values["by_origin"][day] = cells
 
     def written(change: tuple[int, str, str, str, str, float] | None = None) -> str:
         changed = json.loads(json.dumps(compared))
@@ -585,24 +601,57 @@ def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path
     assert "## Differences between models, with paired intervals" in written()
     # The last digits of two computations may differ; nothing else may.
     assert written((1, "24", "0", "2017-01-01", "brier_baseline", 1e-12))
+    nan = float("nan")
     cases = [
         ((1, "24", "0", "2017-01-01", "brier_baseline", 1e-6),
          "result file of M2 (origin 2017-01-01, 24 months, landmark 0: brier"),
         ((2, "12", "0", "2016-01-01", "auc_model", -1e-6),
          "result file of M4 (origin 2016-01-01, 12 months, landmark 0: auc"),
-        ((2, "12", "0", "2016-01-01", "auc_baseline", 1e-6),
+        ((2, "12", "0", "2016-01-01", "auc_baseline", 3e-8),  # small, and still shown
          "result file of M1 (origin 2016-01-01, 12 months, landmark 0: auc"),
         ((0, "12", "all", "2017-01-01", "auc_baseline", 1e-6),
          "result file of M0 (origin 2017-01-01, 12 months, all landmark indices: auc"),
         ((4, "24", "all", "2016-01-01", "brier_model", -1e-6),
          "result file of M4 (origin 2016-01-01, 24 months, all landmark indices: brier"),
+        # A landmark index other than 0, and an ablation rung: every slice of every pair.
+        ((1, "12", "1", "2016-01-01", "auc_model", 1e-6),
+         "result file of M3 (origin 2016-01-01, 12 months, landmark 1: auc"),
+        ((3, "12", "all", "2017-01-01", "auc_baseline", 1e-6),
+         "result file of M4-DESIGN (origin 2017-01-01, 12 months, all landmark indices: auc"),
+        # A cell that is not a number is not "within the tolerance".
+        ((0, "24", "all", "2016-01-01", "auc_model", nan),
+         "result file of M2 (origin 2016-01-01, 24 months, all landmark indices: auc nan in"),
     ]  # fmt: skip
     for change, message in cases:
         with pytest.raises(RefusedError) as refused:
             written(change)
-        assert message in str(refused.value)
-        assert "uv run python -m trialpulse.eval.compare" in str(refused.value)
+        said = str(refused.value)
+        assert message in said
+        assert "uv run python -m trialpulse.eval.compare" in said
+        shown = re.search(r": \w+ (\S+) in the comparison, (\S+) in the result file", said)
+        assert shown is not None
+        assert shown.group(1) != shown.group(2)  # the message shows the difference it found
     assert written()  # and the comparison as it was is accepted again
+    # A model of the comparison without a result file, and a slice no result file holds.
+    without = {name: result for name, result in results.items() if name != "m3"}
+    with pytest.raises(RefusedError) as refused:
+        results_dev.document(cfg, without, root, tuned)
+    assert "compares M3 at origin 2016-01-01 (12 months, landmark 0)" in str(refused.value)
+    assert "no result file holds that slice" in str(refused.value)
+    shorter = json.loads(json.dumps(results))
+    del shorter["m2"]["origins"][1]["horizons"]["24"]["by_landmark_index"]["1"]
+    with pytest.raises(RefusedError) as refused:
+        results_dev.document(cfg, shorter, root, tuned)
+    assert "compares M2 at origin 2017-01-01 (24 months, landmark 1)" in str(refused.value)
+    # A comparison that holds no numbers per origin cannot be checked at all.
+    bare = json.loads(json.dumps(compared))
+    del bare["pairs"][4]["horizons"]["24"]["all"]["by_origin"]
+    path.write_text(json.dumps(bare), encoding="utf-8")
+    with pytest.raises(RefusedError) as refused:
+        results_dev.document(cfg, results, root, tuned)
+    assert "no numbers per origin for M4 minus M4-SPONSOR (24 months, all landmark indices)" in (
+        str(refused.value)
+    )
 
 
 def test_differences_ablation_and_calibration_tables_read_their_cells(
