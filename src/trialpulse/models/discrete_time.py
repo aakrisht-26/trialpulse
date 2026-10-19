@@ -527,6 +527,10 @@ class DiscreteTimeBoosting(DiscreteTimeModel):
 
     levels: dict[str, tuple[str, ...]] = field(default_factory=dict)
     booster: lgb.Booster | None = None
+    # The model the early stopping fits on the earlier intervals, kept only when asked for:
+    # the recalibration of ADR 0027 is fitted with its predictions on the last training year.
+    keep_choosing: bool = False
+    choosing: lgb.Booster | None = None
 
     def __post_init__(self) -> None:
         self.settings = {**BOOSTING_DEFAULTS, **tuned_settings(self.name), **self.settings}
@@ -573,6 +577,7 @@ class DiscreteTimeBoosting(DiscreteTimeModel):
                 callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)],
             )
             rounds, chosen_by = int(choosing.best_iteration), "last training year"
+            self.choosing = choosing if self.keep_choosing else None
             del choosing
         self.booster = lgb.train(params, self._dataset(x, y), num_boost_round=max(1, rounds))
         gain = self.booster.feature_importance(importance_type="gain")
@@ -597,6 +602,12 @@ class DiscreteTimeBoosting(DiscreteTimeModel):
         if self.booster is None:
             raise RuntimeError(f"{self.name} is not fitted")
         return tree_matrix(features, self.features, self.levels)
+
+    def tree_landmark_matrix(
+        self, features: Mapping[str, npt.NDArray[Any]]
+    ) -> npt.NDArray[np.float32]:
+        """The columns of the landmark rows for the trees, without the interval."""
+        return self._landmark_matrix(features)
 
     def _probabilities(self, landmark: npt.NDArray[np.float32], interval: int) -> FloatArray:
         if self.booster is None:
