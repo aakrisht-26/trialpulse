@@ -257,34 +257,38 @@ def test_without_covariates_the_discrete_cif_matches_aalen_johansen(
 
 
 def test_each_rung_of_the_ladder_holds_the_one_below() -> None:
-    """ADR 0024: M0 knows the sponsor class; M2 adds the design family, M3 the amendment
-    signals, M4 everything else. The ablation rungs add the same families to M4's learner."""
+    """ADRs 0024 and 0026: M0 knows the sponsor class; M2 adds the design family, M3 the
+    amendment signals, M4 the sponsor record and competition, and no text. The ablation
+    rungs add the same families to M4's learner, and `m4-text` adds the text families."""
     m2, m3, m4 = (set(feature_names(dtm.FAMILY_SETS[m])) for m in ("m2", "m3", "m4"))
     assert {"sponsor_class", "landmark_index", "months_since_t0"} < m2 < m3 < m4
-    assert feature_names(dtm.FAMILY_SETS["m4"]) == registry.model_columns()
+    text = {f.name for f in registry.FEATURES if f.main and f.family == registry.TEXT}
+    assert feature_names(dtm.FAMILY_SETS["m4-text"]) == registry.model_columns()
+    assert set(registry.model_columns()) - m4 == text
+    assert len(text) == 69
+    assert not m4 & text
     design = {f.name for f in registry.FEATURES if f.main and f.family == registry.DESIGN}
     amendments = {f.name for f in registry.FEATURES if f.main and f.family == registry.AMENDMENTS}
     assert m2 == design | {"sponsor_class", "landmark_index", "months_since_t0"}
     assert m3 - m2 == amendments
     assert "status" in m3 - m2  # the recruitment status is an amendment signal
     assert "sponsor_stop_rate" in m4 - m3
-    assert "eligibility_svd_01" in m4 - m3
+    assert "open_interventional_trials" in m4 - m3
+    assert "eligibility_svd_01" not in m4
     rungs = [
-        set(feature_names(dtm.FAMILY_SETS[m])) for m in ("m4-design", "m4-amendments", "m4-sponsor")
+        set(feature_names(dtm.FAMILY_SETS[m])) for m in ("m4-design", "m4-amendments", "m4-text")
     ]
     assert rungs[0] == m2
     assert rungs[1] == m3
-    assert rungs[0] < rungs[1] < rungs[2] < m4
-    assert m4 - rungs[2] == {
-        f.name for f in registry.FEATURES if f.main and f.family == registry.TEXT
-    }
-    assert "open_interventional_trials" in rungs[2] - rungs[1]
+    assert rungs[0] < rungs[1] < m4 < rungs[2]
+    assert rungs[2] - m4 == text
+    assert len(m4) == 54
 
 
 def test_which_learner_a_name_gets(cfg: ProjectConfig) -> None:
     assert isinstance(build("m2", cfg), DiscreteTimeLogistic)
     assert isinstance(build("m3", cfg), DiscreteTimeLogistic)
-    for name in ("m4", "m4-design", "m4-amendments", "m4-sponsor"):
+    for name in ("m4", "m4-design", "m4-amendments", "m4-text"):
         model = build(name, cfg)
         assert isinstance(model, DiscreteTimeBoosting)
         assert model.landmark_indices is None  # every landmark index
@@ -632,7 +636,7 @@ def test_a_model_runs_with_the_settings_the_tuning_chose(
     tuned = build("m4", cfg).settings
     assert tuned == {**dtm.BOOSTING_DEFAULTS, "num_leaves": 63, "learning_rate": 0.03}
     # The ablation rungs run with M4's settings, so that only the features differ.
-    for rung in ("m4-design", "m4-amendments", "m4-sponsor"):
+    for rung in ("m4-design", "m4-amendments", "m4-text"):
         assert build(rung, cfg).settings == tuned
     assert build("m3", cfg).settings == {"C": 0.1}
     assert build("m2", cfg).settings == dtm.LOGISTIC_DEFAULTS  # M2 has no file of its own

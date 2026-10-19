@@ -40,14 +40,14 @@ MODELS: dict[str, str] = {
     "m1": "static LightGBM classifier at registration (landmark 0), all feature families",
     "m2": "discrete-time logistic regression on the sponsor class and the design features",
     "m3": "M2 plus the amendment signals",
-    "m4": "discrete-time LightGBM, all feature families",
+    "m4": "discrete-time LightGBM, every feature family but text (ADR 0026)",
     "m4-design": "ablation of M4: its learner on the sponsor class and the design features",
     "m4-amendments": "ablation of M4: plus the amendment signals",
-    "m4-sponsor": "ablation of M4: plus the sponsor record and competition",
+    "m4-text": "ablation of M4: plus the text families, which M4 leaves out",
 }
 # The models of the main tables; the ablation rungs have a section of their own.
 MAIN: tuple[str, ...] = ("m0", "m1", "m2", "m3", "m4")
-ABLATION: tuple[str, ...] = ("m4-design", "m4-amendments", "m4-sponsor", "m4")
+ABLATION: tuple[str, ...] = ("m4-design", "m4-amendments", "m4", "m4-text")
 TUNED: tuple[str, ...] = ("m2", "m3", "m4")
 PRIMARY_MONTHS = "12"  # the horizon of the selection rule (Section 9)
 FIRST_LANDMARK = "0"

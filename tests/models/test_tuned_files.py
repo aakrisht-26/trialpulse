@@ -55,7 +55,7 @@ def test_a_committed_settings_file_is_what_the_tuning_of_this_configuration_writ
 def test_the_ablation_rungs_read_the_committed_settings_of_m4() -> None:
     chosen = discrete_time.tuned_settings("m4", COMMITTED)
     assert chosen
-    for rung in ("m4-design", "m4-amendments", "m4-sponsor"):
+    for rung in ("m4-design", "m4-amendments", "m4-text"):
         assert discrete_time.tuned_settings(rung, COMMITTED) == chosen
 
 

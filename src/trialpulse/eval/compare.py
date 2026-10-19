@@ -57,12 +57,12 @@ ALL = "all"
 PAIRS: tuple[tuple[str, str, str, bool], ...] = (
     ("m2", "m0", "the design family, the landmark index and a regression for a curve", True),
     ("m3", "m2", "the amendment signals", True),
-    ("m4", "m3", "the other families, and trees for a linear model", True),
+    ("m4", "m3", "the sponsor record and competition, and trees for a linear model", True),
     ("m4", "m0", "the whole ladder", False),
     ("m4", "m1", "the dynamic model against the static one, at registration", False),
     ("m4-amendments", "m4-design", "ablation of M4: the amendment signals", False),
-    ("m4-sponsor", "m4-amendments", "ablation of M4: the sponsor record and competition", False),
-    ("m4", "m4-sponsor", "ablation of M4: the text families", False),
+    ("m4", "m4-amendments", "ablation of M4: the sponsor record and competition", False),
+    ("m4-text", "m4", "ablation of M4: the text families, which M4 leaves out", False),
 )
 
 

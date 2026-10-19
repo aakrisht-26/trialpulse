@@ -659,10 +659,10 @@ def test_the_harness_saves_the_scores_of_every_evaluation_row(
 
 def test_the_ladder_and_the_ablation_rungs_are_models_of_the_harness() -> None:
     assert set(walkforward.MODELS) == {
-        "m0", "m1", "m2", "m3", "m4", "m4-design", "m4-amendments", "m4-sponsor",
+        "m0", "m1", "m2", "m3", "m4", "m4-design", "m4-amendments", "m4-text",
     }  # fmt: skip
     cfg = load_project_config()
-    for name in ("m2", "m3", "m4", "m4-sponsor"):
+    for name in ("m2", "m3", "m4", "m4-text"):
         model = walkforward.MODELS[name](cfg)
         assert model.name == name
         assert model.feature_matrix

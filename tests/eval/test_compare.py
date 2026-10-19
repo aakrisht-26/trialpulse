@@ -342,7 +342,7 @@ def test_the_command_compares_every_pair_that_has_files(
     # The rungs of the ladder are compared at every landmark index too.
     assert set(by_pair["m3", "m2"]["horizons"]["12"]) == {"all", "0", "1"}
     assert set(by_pair["m4", "m1"]["horizons"]["24"]) == {"0"}
-    assert by_pair["m4", "m3"]["what"].startswith("the other families")
+    assert by_pair["m4", "m3"]["what"].startswith("the sponsor record and competition")
     printed = capsys.readouterr().out
     assert "m3 minus m2: AUC +" in printed
     assert "at 12 months" in printed

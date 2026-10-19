@@ -431,8 +431,8 @@ def _ladder_result(
                      "observed": 0.04 + later, "mean_predicted": auc / 10 + later},
                 ]  # fmt: skip
         origin["model_summary"] = {
-            "features": {"m2": 31, "m3": 47, "m4": 123, "m4-design": 31, "m4-amendments": 47,
-                         "m4-sponsor": 54}.get(model),
+            "features": {"m2": 31, "m3": 47, "m4": 54, "m4-design": 31, "m4-amendments": 47,
+                         "m4-text": 123}.get(model),
             "landmark_rows": 400_000 + 80_000 * position,
             "person_period_rows": 1_000_000 + 200_000 * position,
             "fit_seconds": 61.4 + position,
@@ -483,7 +483,7 @@ def _numbers_per_origin(pair: dict[str, Any], made: dict[str, dict[str, Any]]) -
 def step10(tmp_path: Path) -> tuple[Path, Path]:
     root, tuned = tmp_path / "results", tmp_path / "tuned"
     aucs = {"m0": 0.54, "m2": 0.60, "m3": 0.66, "m4": 0.70, "m4-design": 0.61,
-            "m4-amendments": 0.67, "m4-sponsor": 0.69}  # fmt: skip
+            "m4-amendments": 0.67, "m4-text": 0.69}  # fmt: skip
     made = {model: _ladder_result(model, auc) for model, auc in aucs.items()}
     made["m1"] = _result("m1", 0.62, landmarks=[0], tracking=_tracking("m1"))
     for model, result in made.items():
@@ -493,7 +493,7 @@ def step10(tmp_path: Path) -> tuple[Path, Path]:
         _pair("m3", "m2", 0.05, by_index=True),
         _pair("m4", "m1", 0.03, indices=(0,)),
         _pair("m4-amendments", "m4-design", 0.055),
-        _pair("m4", "m4-sponsor", 0.0005),
+        _pair("m4-text", "m4", 0.0005),
     ]
     for pair in pairs:
         _numbers_per_origin(pair, made)
@@ -586,12 +586,12 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
     # removed first: it was computed from the other scores of that rung.)
     (root / "compare" / "dev.json").unlink()
     higher = dict(results)
-    higher["m4-sponsor"] = _ladder_result("m4-sponsor", 0.71)
+    higher["m4-text"] = _ladder_result("m4-text", 0.71)
     said = _section(
         results_dev.document(cfg, higher, root, tuned), "## The ladder and the champion"
     )
     assert "the champion is **M4**" in said
-    assert "M4-SPONSOR has a higher mean AUC at 12 months (0.7150 against 0.7050)" in said
+    assert "M4-TEXT has a higher mean AUC at 12 months (0.7150 against 0.7050)" in said
     assert "M4-DESIGN has a higher" not in said
 
 
@@ -628,7 +628,7 @@ def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path
         ((0, "12", "all", "2017-01-01", "auc_baseline", 1e-6),
          "result file of M0 (origin 2017-01-01, 12 months, all landmark indices: auc"),
         ((4, "24", "all", "2016-01-01", "brier_model", -1e-6),
-         "result file of M4 (origin 2016-01-01, 24 months, all landmark indices: brier"),
+         "result file of M4-TEXT (origin 2016-01-01, 24 months, all landmark indices: brier"),
         # A landmark index other than 0, and an ablation rung: every slice of every pair.
         ((1, "12", "1", "2016-01-01", "auc_model", 1e-6),
          "result file of M3 (origin 2016-01-01, 12 months, landmark 1: auc"),
@@ -665,7 +665,7 @@ def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path
     path.write_text(json.dumps(bare), encoding="utf-8")
     with pytest.raises(RefusedError) as refused:
         results_dev.document(cfg, results, root, tuned)
-    assert "no numbers per origin for M4 minus M4-SPONSOR (24 months, all landmark indices)" in (
+    assert "no numbers per origin for M4-TEXT minus M4 (24 months, all landmark indices)" in (
         str(refused.value)
     )
 
@@ -698,12 +698,12 @@ def test_differences_ablation_and_calibration_tables_read_their_cells(
     ablation = _section(text, "## Ablation of M4")
     rows = [line for line in ablation.splitlines() if line.startswith("| M4")]
     assert [row.split(" | ")[0] for row in rows] == [
-        "| M4-DESIGN", "| M4-AMENDMENTS", "| M4-SPONSOR", "| M4",
+        "| M4-DESIGN", "| M4-AMENDMENTS", "| M4", "| M4-TEXT",
     ]  # fmt: skip
     assert rows[0].endswith("| 31 | 0.6150 | 0.5150 | 0.03000 |  |")
     assert rows[1].endswith("| 47 | 0.6750 | 0.5750 | 0.03000 | +0.0550 (+0.0510 to +0.0590) |")
-    assert rows[2].endswith("| 54 | 0.6950 | 0.5950 | 0.03000 |  |")  # that pair was not compared
-    assert rows[3].endswith("| 123 | 0.7050 | 0.6050 | 0.03000 | +0.0005 (-0.0035 to +0.0045) |")
+    assert rows[2].endswith("| 54 | 0.7050 | 0.6050 | 0.03000 |  |")  # that pair was not compared
+    assert rows[3].endswith("| 123 | 0.6950 | 0.5950 | 0.03000 | +0.0005 (-0.0035 to +0.0045) |")
     # Calibration over all landmark indices, by sponsor class and by registration year: the
     # models of every landmark index only, each with its own prediction.
     pooled = _section(
@@ -735,7 +735,7 @@ def test_run_time_tuning_and_runs_are_listed(step10: tuple[Path, Path]) -> None:
     cfg = load_project_config()
     text = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
     runtime = _section(text, "## Run time and size")
-    assert "| M4 | 2017 | 123 | 480,000 | 1,200,000 | 62 | 3 | 2.5 MB | 251 |" in runtime
+    assert "| M4 | 2017 | 54 | 480,000 | 1,200,000 | 62 | 3 | 2.5 MB | 251 |" in runtime
     assert "| M2 | 2016 | 31 | 400,000 | 1,000,000 | 61 | 3 | 4 kB | 45 |" in runtime
     assert "| M0 |" not in runtime  # M0 and M1 report no fit of this kind
     assert "| M1 |" not in runtime
@@ -763,7 +763,7 @@ def test_run_time_tuning_and_runs_are_listed(step10: tuple[Path, Path]) -> None:
     assert f"| Paired differences between models | {REMOTE} | `compare-dev` in " in runs
     assert f"| Tuning of M4 | {LOCAL} | `tune-m4` in " in runs
     assert "| Tuning of M2 |" not in runs  # no study file for it
-    assert "| M4-SPONSOR, development origins |" in runs
+    assert "| M4-TEXT, development origins |" in runs
     assert NOT_EVERY_RUN in runs
     # Without the ladder there is nothing to write.
     with pytest.raises(RefusedError, match="no development result of a model of the ladder"):

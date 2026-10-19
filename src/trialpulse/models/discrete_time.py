@@ -14,17 +14,19 @@ S(j - 1) * h_stop(j) (`cumulative_incidence`). A horizon of 12 months is two int
 months four. Completion is a competing event, not a censoring: a trial that completed
 cannot stop early any more, and the formula says so.
 
-**The ladder (ADR 0024).** Each rung holds the one below it:
+**The ladder (ADRs 0024 and 0026).** Each rung holds the one below it:
 
 - M0 knows the lead sponsor class (one curve per class, `models.aalen_johansen`);
 - M2 is a multinomial logistic regression on the sponsor class and the design family;
 - M3 is M2 plus the amendment signals;
-- M4 is gradient-boosted trees (LightGBM) on every feature family.
+- M4 is gradient-boosted trees (LightGBM) on every feature family but text: M3's families
+  plus the sponsor record and competition.
 
 Every rung also has the interval and the time family (the landmark index), which say where
-in a trial's life a row sits. The ablation of M4 (`m4-design`, `m4-amendments`,
-`m4-sponsor`, then M4 itself) adds the same families one at a time to M4's own learner, so
-that the gain of a family is not mixed with the change of learner.
+in a trial's life a row sits. The ablation of M4 (`m4-design`, `m4-amendments`, M4 itself,
+then `m4-text`) adds the same families one at a time to M4's own learner, so that the gain of
+a family is not mixed with the change of learner. `m4-text` adds the text families, which
+are not part of M4 (ADR 0026): on the development origins they lowered its AUC.
 
 **Censoring.** A person-period row exists only for an interval a trial was followed
 through, so the rows need no censoring weights: a trial censored under the lapse rule (ADR
@@ -99,10 +101,10 @@ LOGISTIC_MAX_ITER = 300
 FAMILY_SETS: dict[str, tuple[str, ...]] = {
     "m2": (DESIGN,),
     "m3": (DESIGN, AMENDMENTS),
-    "m4": (DESIGN, AMENDMENTS, SPONSOR, COMPETITION, TEXT),
+    "m4": (DESIGN, AMENDMENTS, SPONSOR, COMPETITION),  # ADR 0026: no text
     "m4-design": (DESIGN,),
     "m4-amendments": (DESIGN, AMENDMENTS),
-    "m4-sponsor": (DESIGN, AMENDMENTS, SPONSOR, COMPETITION),
+    "m4-text": (DESIGN, AMENDMENTS, SPONSOR, COMPETITION, TEXT),
 }
 # The model whose tuned settings a model runs with: the ablation rungs use M4's.
 SETTINGS_OF: dict[str, str] = {
