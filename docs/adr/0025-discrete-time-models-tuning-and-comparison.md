@@ -1,7 +1,7 @@
 # 0025. Discrete-time models: how they are fitted, tuned and compared
 
 - Date: 2026-10-10
-- Status: **Proposed.** Built in Step 10 without asking, and waiting for Aakrisht's review. Decision 6 (the paired bootstrap) is his instruction from the review of Step 9 and is recorded here with how it was built.
+- Status: **Accepted** by Aakrisht in the review of Step 10 on 2026-10-19. Built in Step 10 without asking; decision 6 (the paired bootstrap) was Aakrisht's instruction from the review of Step 9. ADR 0026 changes which families M4 has; nothing here changes with it.
 - Refines CLAUDE.md Section 9 (the discrete-time models, tuning, the selection rule) and Section 6 (how the discrete-time formulation is used for training). No locked definition changes: the intervals, the outcomes, the horizons, the origins, the evaluation rows and the metrics are those of Section 6 and ADRs 0015 to 0017.
 
 ## Context
@@ -38,4 +38,4 @@ Section 9 names the models (M2 and M3 multinomial logistic regressions, M4 Light
 - Forty trials scored on the evaluation rows of the development origins make the development results of the tuned models slightly optimistic. Step 11's locked origins are untouched by any of it.
 - The tuning of M4 is over the one-hour mark of the working agreements on this laptop when anything else runs beside it. A later tuning should either run alone or search smaller trees.
 - The walk-forward run of M4 on the two development origins took 74 minutes (40 of them in the two fits), also over that mark, and the locked origins have more training rows. How M4 is run in Step 11 is an open question of the Step 10 report.
-- If accepted, CLAUDE.md gains through the Amendments: "ADR 0025, discrete-time models: person-period rows from the cohort as of the origin, without censoring weights; M4's trees by early stopping on the intervals that ended in the last 12 months; a tuning trial is a setting fitted on a tenth of the training trials and scored by the selection rule of Section 9 on the development origins, and the chosen settings are committed in config/tuned/; the champion is chosen among the models that score every landmark index; differences between models use a paired cluster bootstrap."
+- CLAUDE.md gains through the Amendments: "ADR 0025, discrete-time models: person-period rows from the cohort as of the origin, without censoring weights; M4's trees by early stopping on the intervals that ended in the last 12 months; a tuning trial is a setting fitted on a tenth of the training trials and scored by the selection rule of Section 9 on the development origins, and the chosen settings are committed in config/tuned/; the champion is chosen among the models that score every landmark index; differences between models use a paired cluster bootstrap."
