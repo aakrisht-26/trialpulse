@@ -19,10 +19,14 @@ at each landmark index.
 quantity the selection rule of Section 9 reads. A trial can have evaluation rows at two
 origins; it is one cluster, so the origins are resampled together.
 
-**The rows** come from the prediction files the walk-forward harness writes
-(`data/results/walkforward/predictions/<model>_dev/`). Two models are compared only on
-rows that both files hold with the same follow-up, event and censoring group: anything
-else means the files are not from the same evaluation rows, and is refused.
+**The rows** come from the prediction files the walk-forward harness writes, from a run of
+the development origins (`data/results/walkforward/predictions/<model>_dev/`) or from a run
+of one origin (`<model>_2016/`), never both. Two models are compared only on rows that both
+files hold with the same follow-up, event, landmark date and censoring group: anything else
+means the files are not from the same evaluation rows, and is refused.
+
+**One file per pair** (`data/results/compare/dev/<model>__<baseline>.json`), so that each
+pair can be its own job (`--pairs m4:m1`); `trialpulse.eval.results_dev` reads them all.
 
 Development origins only. A prediction file of a locked origin is never read here.
 """
@@ -50,7 +54,8 @@ from trialpulse.eval.ipcw import FloatArray, IntArray, horizon_labels_and_weight
 from trialpulse.eval.metrics import weighted_auc
 from trialpulse.eval.walkforward import PREDICTIONS_DIR, predictions_path
 
-RESULTS_PATH = REPO_ROOT / "data" / "results" / "compare" / "dev.json"
+RESULTS_DIR = REPO_ROOT / "data" / "results" / "compare"
+PAIR_SEPARATOR = "__"  # m4__m1.json: model names hold hyphens, never two underscores
 DEV = "dev"
 ALL = "all"
 # (model, baseline, what the difference shows, also at every landmark index)
@@ -93,20 +98,44 @@ class Paired:
         )  # fmt: skip
 
 
+def prediction_file(folder: Path, model: str, origin: dt.date) -> Path:
+    """The scores of a model at a development origin: from a run of the development origins
+    or from a run of that origin alone. Both at once are two answers to one question, and
+    are refused."""
+    found = [
+        path
+        for path in (
+            predictions_path(folder, model, DEV, origin),
+            predictions_path(folder, model, str(origin.year), origin),
+        )
+        if path.is_file()
+    ]
+    if len(found) > 1:
+        raise RefusedError(
+            f"two prediction files of {model} for origin {origin} ({found[0]} and {found[1]}): "
+            "keep the one of the run that the result files name"
+        )
+    if not found:
+        raise FileNotFoundError(
+            f"no prediction file of {model} for origin {origin}. Create it with: uv run python "
+            f"-m trialpulse.eval.walkforward --model {model} --origins dev (or --origins "
+            f"{origin.year} for that origin alone)"
+        )
+    return found[0]
+
+
+def pair_path(folder: Path, model: str, baseline: str) -> Path:
+    return folder / f"{model}{PAIR_SEPARATOR}{baseline}.json"
+
+
 def load_pair(
     folder: Path, model: str, baseline: str, origins: Sequence[dt.date], months: Sequence[int]
 ) -> Paired:
     """The rows both models scored, for every origin, in one table."""
     parts: dict[str, list[npt.NDArray[Any]]] = {}
     for position, origin in enumerate(origins):
-        a = predictions_path(folder, model, DEV, origin)
-        b = predictions_path(folder, baseline, DEV, origin)
-        for path, name in ((a, model), (b, baseline)):
-            if not path.is_file():
-                raise FileNotFoundError(
-                    f"{path} is missing. Create it with: uv run python -m "
-                    f"trialpulse.eval.walkforward --model {name} --origins dev"
-                )
+        a = prediction_file(folder, model, origin)
+        b = prediction_file(folder, baseline, origin)
         scores = ", ".join(f"a.score_{m} AS model_{m}, b.score_{m} AS baseline_{m}" for m in months)
         with duckdb.connect() as con:
             shared = f"""landmark_index IN (
@@ -271,7 +300,12 @@ def run_metrics(result: dict[str, Any]) -> dict[str, float]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Paired differences between models (dev).")
     parser.add_argument("--predictions-dir", type=Path, default=PREDICTIONS_DIR)
-    parser.add_argument("--out", type=Path, default=RESULTS_PATH)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="one file for every pair (default: one file per pair in data/results/compare/dev/)",
+    )
     parser.add_argument("--resamples", type=int, default=None)
     parser.add_argument(
         "--pairs", default=None, help="for example m4:m1,m3:m2 (default: every pair with files)"
@@ -297,13 +331,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if wanted is not None and (model, baseline) not in wanted:
             continue
         have = all(
-            predictions_path(args.predictions_dir, name, DEV, origin).is_file()
+            any(
+                predictions_path(args.predictions_dir, name, spec, origin).is_file()
+                for spec in (DEV, str(origin.year))
+            )
             for name in (model, baseline)
             for origin in origins
         )
         if not have:
             result["skipped"].append({"model": model, "baseline": baseline})
             continue
+        pair_started = clock.perf_counter()
         try:
             compared = compare_pair(
                 cfg, args.predictions_dir, model, baseline, by_index, origins, n
@@ -311,7 +349,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         except BootstrapError as exc:
             print(f"failed: {exc}", file=sys.stderr)
             return 3
-        result["pairs"].append({"model": model, "baseline": baseline, "what": what, **compared})
+        result["pairs"].append(
+            {"model": model, "baseline": baseline, "what": what, **compared,
+             "seconds": round(clock.perf_counter() - pair_started, 1)}
+        )  # fmt: skip
         primary = compared["horizons"][str(min(cfg.horizons_months))]
         part = primary.get(ALL, primary.get("0"))
         d = part["delta_auc"]
@@ -326,17 +367,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             "m4 --origins dev"
         )
     result["seconds"] = round(clock.perf_counter() - begun, 1)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    print(f"wrote {args.out}")
+    # One file for every pair if asked for, else one file per pair, each a result of its own.
+    if args.out is not None:
+        files = {args.out: result}
+    else:
+        files = {
+            pair_path(RESULTS_DIR / DEV, p["model"], p["baseline"]): {
+                **{k: v for k, v in result.items() if k not in ("pairs", "skipped", "seconds")},
+                "pairs": [p],
+                "seconds": p["seconds"],
+            }
+            for p in result["pairs"]
+        }
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(content, indent=2), encoding="utf-8")
+        print(f"wrote {path}")
     if not args.no_track:
+        only = result["pairs"][0] if len(result["pairs"]) == 1 else None
+        name = f"compare-{only['model']}-vs-{only['baseline']}" if only else "compare-dev"
         try:
-            result["tracking"] = tracking.log_run(
-                "compare-dev",
+            logged = tracking.log_run(
+                name,
                 {"pairs": len(result["pairs"]), "bootstrap_resamples": n,
                  "origins": ",".join(result["origins"])},
                 run_metrics(result),
-                [args.out],
+                list(files),
                 cfg,
                 tags={"step": "10", "kind": "comparison", "roles": DEV},
                 local=args.local_tracking,
@@ -344,10 +400,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )  # fmt: skip
         except tracking.TrackingError as exc:  # the results are on disk: say so and fail
             print(f"failed: the run was not logged to MLflow ({exc}); its results are in "
-                  f"{args.out}", file=sys.stderr)  # fmt: skip
+                  f"{', '.join(map(str, files))}", file=sys.stderr)  # fmt: skip
             return tracking.FAILED_EXIT_CODE
-        args.out.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        print(f"logged to {result['tracking']['store_description']}")
+        for path, content in files.items():
+            content["tracking"] = logged
+            path.write_text(json.dumps(content, indent=2), encoding="utf-8")
+        print(f"logged to {logged['store_description']}")
     return 0
 
 

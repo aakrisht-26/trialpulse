@@ -769,3 +769,71 @@ def test_run_time_tuning_and_runs_are_listed(step10: tuple[Path, Path]) -> None:
     # Without the ladder there is nothing to write.
     with pytest.raises(RefusedError, match="no development result of a model of the ladder"):
         results_dev.document(cfg, {"m4-design": _ladder_result("m4-design", 0.6)}, root, tuned)
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_results_by_origin_and_comparisons_by_pair_are_put_together(
+    step10: tuple[Path, Path],
+) -> None:
+    """One job per origin and per pair (the review of Step 10). M2 is run origin by origin
+    here and its two results make one; the comparison of M3 and M2 is a file of its own; the
+    document is the one the combined files give, and each run is listed."""
+    root, tuned = step10
+    cfg = load_project_config()
+    whole = root / "walkforward" / "m2_dev.json"
+    before = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+    for year in ("2016", "2017"):
+        tracked = {**_tracking("m2"), "run_name": f"m2-{year}", "run_id": f"id{year}"}
+        part = _ladder_result("m2", 0.60)
+        part["origins"] = [o for o in part["origins"] if o["origin"].startswith(year)]
+        part["tracking"] = tracked
+        _write_named(root, f"m2_{year}", part)
+    with pytest.raises(RefusedError, match="two results of M2 for one origin"):
+        results_dev.load_results(root)
+    whole.unlink()
+    merged = results_dev.load_results(root)["m2"]
+    assert [o["origin"] for o in merged["origins"]] == ["2016-01-01", "2017-01-01"]
+    # The comparison of M3 and M2 moves to a file of its own.
+    legacy = root / "compare" / "dev.json"
+    combined = json.loads(legacy.read_text(encoding="utf-8"))
+    alone = [p for p in combined["pairs"] if (p["model"], p["baseline"]) == ("m3", "m2")]
+    rest = [p for p in combined["pairs"] if (p["model"], p["baseline"]) != ("m3", "m2")]
+    (root / "compare" / "dev").mkdir()
+    (root / "compare" / "dev" / "m3__m2.json").write_text(
+        json.dumps({"bootstrap_resamples": 1000, "pairs": alone,
+                    "tracking": {**_tracking("m3"), "run_name": "compare-m3-vs-m2"}}),
+        encoding="utf-8",
+    )  # fmt: skip
+    legacy.write_text(json.dumps({**combined, "pairs": rest}), encoding="utf-8")
+    after = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+
+    def without_runs(text: str) -> str:
+        return text.split("\n## Runs")[0]
+
+    assert without_runs(after) == without_runs(before)  # the same numbers, in the same order
+    runs = _section(after, "## Runs")
+    assert "| M2, origin 2016 |" in runs
+    assert "`m2-2016` in `trialpulse-development`, id `id2016`" in runs
+    assert "| M2, origin 2017 |" in runs
+    assert "| M2, development origins |" not in runs
+    assert "| Paired differences: M3 minus M2 |" in runs
+    assert "| Paired differences between models |" in runs  # the older file, for the rest
+    # A pair found twice, a model run for one origin only, and runs that disagree.
+    legacy.write_text(json.dumps(combined), encoding="utf-8")
+    with pytest.raises(RefusedError, match="M3 minus M2 is in"):
+        results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+    legacy.write_text(json.dumps({**combined, "pairs": rest}), encoding="utf-8")
+    (root / "walkforward" / "m2_2017.json").rename(root / "m2_2017.json")
+    with pytest.raises(RefusedError, match=r"M2 has results by origin, but no m2_2017.json"):
+        results_dev.load_results(root)
+    later = json.loads((root / "m2_2017.json").read_text(encoding="utf-8"))
+    later["bootstrap_resamples"] = 200
+    _write_named(root, "m2_2017", later)
+    with pytest.raises(RefusedError, match="differ in bootstrap_resamples"):
+        results_dev.load_results(root)
+
+
+def _write_named(root: Path, stem: str, result: dict[str, Any]) -> None:
+    path = root / "walkforward" / f"{stem}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result), encoding="utf-8")

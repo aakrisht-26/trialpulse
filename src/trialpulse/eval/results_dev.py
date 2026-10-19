@@ -69,20 +69,64 @@ def _interval(metric: dict[str, Any], digits: int = 3) -> str:
     )
 
 
-def load_results(root: Path) -> dict[str, dict[str, Any]]:
-    """The development result of every model that has one, in ladder order."""
+def _read_result(path: Path) -> dict[str, Any]:
+    result: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    roles = {origin["role"] for origin in result["origins"]}
+    if roles != {DEV} or result.get("unlock"):
+        raise RefusedError(
+            f"{path} holds origins with roles {sorted(roles)}: this document is for the "
+            "development origins only"
+        )
+    return result
+
+
+def _merge(model: str, parts: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
+    """The results of one model run origin by origin, as one result. The runs must agree on
+    what makes their numbers comparable; each keeps its own record of where it was logged."""
+    for key in ("bootstrap_resamples", "dataset_revision", "training_labels"):
+        if len({json.dumps(result.get(key)) for _, result in parts}) > 1:
+            raise RefusedError(
+                f"the results of {model.upper()} by origin differ in {key}: run them again "
+                "with one setting"
+            )
+    first = parts[0][1]
+    merged = {k: v for k, v in first.items() if k not in ("origins", "origins_spec", "tracking")}
+    merged["origins_spec"] = DEV
+    merged["origins"] = [origin for _, result in parts for origin in result["origins"]]
+    merged["runs"] = [(path.stem, result.get("tracking")) for path, result in parts]
+    return merged
+
+
+def load_results(root: Path, cfg: ProjectConfig | None = None) -> dict[str, dict[str, Any]]:
+    """The development result of every model that has one, in ladder order: from one run of
+    the development origins (`<model>_dev.json`) or from one run per origin
+    (`<model>_2016.json`, `<model>_2017.json`), put together. A model run by origin must have
+    every development origin, and a model with both kinds of file is refused: which run the
+    document reports must not depend on which file is read first."""
+    cfg = cfg or load_project_config()
+    days = [o.date.isoformat() for o in cfg.walk_forward.origins if o.role == DEV]
     found: dict[str, dict[str, Any]] = {}
     for model in MODELS:
-        path = root / "walkforward" / f"{model}_{DEV}.json"
-        if not path.is_file():
-            continue
-        result = json.loads(path.read_text(encoding="utf-8"))
-        roles = {origin["role"] for origin in result["origins"]}
-        if roles != {DEV} or result.get("unlock"):
+        whole = root / "walkforward" / f"{model}_{DEV}.json"
+        parts = [root / "walkforward" / f"{model}_{day[:4]}.json" for day in days]
+        present = [path for path in parts if path.is_file()]
+        if whole.is_file() and present:
             raise RefusedError(
-                f"{path} holds origins with roles {sorted(roles)}: this document is for the "
-                "development origins only"
+                f"{whole} and {present[0]} are two results of {model.upper()} for one origin: "
+                "keep one of them"
             )
+        if whole.is_file():
+            result = _read_result(whole)
+        elif present:
+            missing = [path.name for path in parts if not path.is_file()]
+            if missing:
+                raise RefusedError(
+                    f"{model.upper()} has results by origin, but no {', '.join(missing)}: run "
+                    "it for every development origin"
+                )
+            result = _merge(model, [(path, _read_result(path)) for path in parts])
+        else:
+            continue
         found[model] = result
     if not found:
         raise RefusedError(
@@ -90,6 +134,44 @@ def load_results(root: Path) -> dict[str, dict[str, Any]]:
             "uv run python -m trialpulse.eval.walkforward --model m0 --origins dev"
         )
     return found
+
+
+def load_compared(root: Path) -> dict[str, Any] | None:
+    """Every paired comparison of the development origins: one file per pair
+    (`compare/dev/<model>__<baseline>.json`) and an older file holding several
+    (`compare/dev.json`). A pair found twice is refused, and so are comparisons made with
+    different numbers of resamples. The pairs come in the order of `compare.PAIRS`."""
+    paths = sorted((root / "compare" / DEV).glob("*.json"))
+    legacy = root / "compare" / f"{DEV}.json"
+    if legacy.is_file():
+        paths = [legacy, *paths]
+    if not paths:
+        return None
+    pairs: list[dict[str, Any]] = []
+    sources: list[tuple[Path, dict[str, Any]]] = []
+    seen: dict[tuple[str, str], Path] = {}
+    resamples = set()
+    for path in paths:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        resamples.add(saved["bootstrap_resamples"])
+        for pair in saved["pairs"]:
+            key = (pair["model"], pair["baseline"])
+            if key in seen:
+                raise RefusedError(
+                    f"{key[0].upper()} minus {key[1].upper()} is in {seen[key]} and in {path}: "
+                    "keep one of them"
+                )
+            seen[key] = path
+            pairs.append({**pair, "_source": str(path)})
+        sources.append((path, saved))
+    if len(resamples) > 1:
+        raise RefusedError(
+            f"the comparisons were made with {sorted(resamples)} resamples: make them again "
+            "with one number"
+        )
+    order = {(model, baseline): i for i, (model, baseline, _, _) in enumerate(PAIRS)}
+    pairs.sort(key=lambda pair: order.get((pair["model"], pair["baseline"]), len(order)))
+    return {"bootstrap_resamples": resamples.pop(), "pairs": pairs, "sources": sources}
 
 
 def _slice(origin: dict[str, Any], months: str, landmark: str | None) -> dict[str, Any] | None:
@@ -385,7 +467,7 @@ def _compared_cells(pair: dict[str, Any]) -> list[tuple[str, str, str | None, An
     return cells
 
 
-def check_compared(path: Path, everything: dict[str, dict[str, Any]]) -> None:
+def check_compared(compared: dict[str, Any] | None, everything: dict[str, dict[str, Any]]) -> None:
     """The paired differences must come from the scores behind the result files. A
     prediction file does not say which run wrote it, so a model run again after the
     comparison would leave differences between new and old scores in this document. For
@@ -393,10 +475,11 @@ def check_compared(path: Path, everything: dict[str, dict[str, Any]]) -> None:
     score of each model as the comparison computed them are held against that model's
     result file. A cell that cannot be checked (no numbers per origin, no result file, no
     such slice) refuses the document as a cell that differs does."""
-    if not path.is_file():
+    if compared is None:
         return
     again = "Run the comparison again: uv run python -m trialpulse.eval.compare"
-    for pair in json.loads(path.read_text(encoding="utf-8"))["pairs"]:
+    for pair in compared["pairs"]:
+        path = pair["_source"]
         name = f"{pair['model'].upper()} minus {pair['baseline'].upper()}"
         for months, part, day, here in _compared_cells(pair):
             where = "all landmark indices" if part == "all" else f"landmark {part}"
@@ -414,20 +497,20 @@ def check_compared(path: Path, everything: dict[str, dict[str, Any]]) -> None:
                         "then the comparison"
                     )
                 for metric in ("auc", "brier"):
-                    compared, reported = here[f"{metric}_{role}"], s[metric]["estimate"]
-                    if not _same(compared, reported):
+                    computed, reported = here[f"{metric}_{role}"], s[metric]["estimate"]
+                    if not _same(computed, reported):
                         raise RefusedError(
                             f"{path} was not computed from the scores behind the result file of "
                             f"{pair[role].upper()} (origin {day}, {months} months, {where}: "
-                            f"{metric} {compared:.12g} in the comparison, {reported:.12g} in "
+                            f"{metric} {computed:.12g} in the comparison, {reported:.12g} in "
                             f"the result file). {again}"
                         )
 
 
-def _compare_section(path: Path, horizons: Sequence[str]) -> list[str]:
-    if not path.is_file():
+def _compare_section(compared: dict[str, Any] | None, horizons: Sequence[str]) -> list[str]:
+    if compared is None:
         return []
-    result = json.loads(path.read_text(encoding="utf-8"))
+    result = compared
     rows = []
     for pair in result["pairs"]:
         # The wording of a known pair is the code's, so that it can be corrected without
@@ -491,15 +574,16 @@ def _compare_section(path: Path, horizons: Sequence[str]) -> list[str]:
 
 
 def _ablation_section(
-    results: dict[str, dict[str, Any]], compare_path: Path, horizons: Sequence[str]
+    results: dict[str, dict[str, Any]],
+    compared: dict[str, Any] | None,
+    horizons: Sequence[str],
 ) -> list[str]:
     rungs = [m for m in ABLATION if m in results]
     if len(rungs) < 2:
         return []
     pairs = {}
-    if compare_path.is_file():
-        for pair in json.loads(compare_path.read_text(encoding="utf-8"))["pairs"]:
-            pairs[pair["model"], pair["baseline"]] = pair
+    for pair in (compared or {}).get("pairs", []):
+        pairs[pair["model"], pair["baseline"]] = pair
     rows = []
     for position, model in enumerate(rungs):
         summary = results[model]["origins"][0].get("model_summary") or {}
@@ -742,17 +826,33 @@ def _log(value: float) -> float:
 
 
 def _runs_section(
-    results: dict[str, dict[str, Any]], cox_path: Path, diagnosis_path: Path, root: Path
+    results: dict[str, dict[str, Any]],
+    cox_path: Path,
+    diagnosis_path: Path,
+    root: Path,
+    compared: dict[str, Any] | None = None,
 ) -> list[str]:
     rows = []
-    entries: list[tuple[str, dict[str, Any] | None]] = [
-        (f"{model.upper()}, development origins", result.get("tracking"))
-        for model, result in results.items()
-    ]
+    entries: list[tuple[str, dict[str, Any] | None]] = []
+    for model, result in results.items():
+        if "runs" in result:  # one run per origin
+            entries += [
+                (f"{model.upper()}, origin {stem.rsplit('_', 1)[1]}", info)
+                for stem, info in result["runs"]
+            ]
+        else:
+            entries.append((f"{model.upper()}, development origins", result.get("tracking")))
+    for _, saved in (compared or {}).get("sources", []):
+        what = (
+            f"Paired differences: {saved['pairs'][0]['model'].upper()} minus "
+            f"{saved['pairs'][0]['baseline'].upper()}"
+            if len(saved["pairs"]) == 1
+            else "Paired differences between models"
+        )
+        entries.append((what, saved.get("tracking")))
     others = [
         ("Cox models at landmark 0", cox_path),
         ("Calibration diagnosis of M0", diagnosis_path),
-        ("Paired differences between models", root / "compare" / "dev.json"),
         *((f"Tuning of {model.upper()}", root / "tuning" / f"{model}.json") for model in TUNED),
     ]
     for what, path in others:
@@ -808,8 +908,8 @@ def document(
     results = {model: result for model, result in everything.items() if model in MAIN}
     if not results:
         raise RefusedError("no development result of a model of the ladder (M0 to M4)")
-    compare_path = root / "compare" / "dev.json"
-    check_compared(compare_path, everything)
+    compared = load_compared(root)
+    check_compared(compared, everything)
     first = next(iter(results.values()))
     origins = ", ".join(o["origin"] for o in first["origins"])
     lines = [
@@ -844,8 +944,8 @@ def document(
     ]
     rungs = {m: everything[m] for m in ABLATION if m in everything and m not in MAIN}
     lines += _ladder_section(results, horizons, rungs)
-    lines += _compare_section(compare_path, horizons)
-    lines += _ablation_section(everything, compare_path, horizons)
+    lines += _compare_section(compared, horizons)
+    lines += _ablation_section(everything, compared, horizons)
     for months in (str(m) for m in cfg.horizons_months):
         rows = _metric_rows(results, months, None)
         lines += [f"## All landmark indices, {months} months", ""]
@@ -944,7 +1044,7 @@ def document(
     lines += _cox_section(cox_path)
     lines += _runtime_section(everything)
     lines += _tuning_section(discrete_time.TUNED_DIR if tuned_dir is None else tuned_dir)
-    lines += _runs_section(everything, cox_path, diagnosis_path, root)
+    lines += _runs_section(everything, cox_path, diagnosis_path, root, compared)
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
@@ -955,7 +1055,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tuned-dir", type=Path, default=None)
     args = parser.parse_args(argv)
     cfg = load_project_config()
-    results = load_results(args.results)
+    results = load_results(args.results, cfg)
     text = document(cfg, results, args.results, args.tuned_dir)
     changed = write_text_if_changed(args.doc, text)
     print(f"models: {', '.join(model.upper() for model in results)}")

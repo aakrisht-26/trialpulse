@@ -77,13 +77,13 @@ def _frame(origin: dt.date, n_trials: int = 1500, seed: int = 0) -> pd.DataFrame
 
 
 def _save(folder: Path, model: str, origin: dt.date, frame: pd.DataFrame, score: str,
-          only: tuple[int, ...] | None = None) -> None:  # fmt: skip
+          only: tuple[int, ...] | None = None, spec: str = "dev") -> None:  # fmt: skip
     chosen = frame if only is None else frame[frame["landmark_index"].isin(only)]
     out = chosen[["trial_id", "landmark_index", "landmark_date", "time", "event",
                   "censoring_group"]].copy()  # fmt: skip
     for months in (12, 24):
         out[f"score_{months}"] = chosen[f"{score}_{months}"].to_numpy()
-    path = predictions_path(folder, model, "dev", origin)
+    path = predictions_path(folder, model, spec, origin)
     path.parent.mkdir(parents=True, exist_ok=True)
     with duckdb.connect() as con:
         con.execute(
@@ -396,3 +396,53 @@ def test_a_tracking_failure_keeps_the_comparison(
     assert code == tracking.FAILED_EXIT_CODE
     assert "not logged to MLflow (the server answered 404)" in capsys.readouterr().err
     assert len(json.loads(out.read_text(encoding="utf-8"))["pairs"]) == 1
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_each_pair_gets_a_file_and_a_run_of_its_own(
+    folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
+) -> None:
+    """One job per pair (the review of Step 10): without --out, every pair is written to a
+    file of its own, which the results document reads beside the others."""
+    monkeypatch.setattr(compare, "RESULTS_DIR", tmp_path / "compare")
+    base = ["--predictions-dir", str(folder), "--resamples", "20"]
+    assert compare.main([*base, "--pairs", "m4:m1"]) == 0
+    one = tmp_path / "compare" / "dev" / "m4__m1.json"
+    saved = json.loads(one.read_text(encoding="utf-8"))
+    assert [(p["model"], p["baseline"]) for p in saved["pairs"]] == [("m4", "m1")]
+    assert saved["bootstrap_resamples"] == 20
+    assert saved["origins"] == ["2016-01-01", "2017-01-01"]
+    assert saved["seconds"] == saved["pairs"][0]["seconds"] >= 0
+    assert "skipped" not in saved
+    assert saved["tracking"]["run_name"] == "compare-m4-vs-m1"
+    (logged,) = tracked_runs
+    assert logged["name"] == "compare-m4-vs-m1"
+    assert logged["artifacts"] == [str(one)]
+    # Every pair of a command without --pairs: a file each, and one run for the command.
+    assert compare.main(base) == 0
+    files = sorted(path.name for path in (tmp_path / "compare" / "dev").iterdir())
+    assert files == ["m3__m2.json", "m4__m1.json", "m4__m3.json"]
+    assert tracked_runs[-1]["name"] == "compare-dev"
+    assert len(tracked_runs[-1]["artifacts"]) == 3
+    again = json.loads(one.read_text(encoding="utf-8"))
+    assert again["pairs"][0]["horizons"] == saved["pairs"][0]["horizons"]  # the same numbers
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_scores_of_a_run_by_origin_are_read_and_two_runs_are_refused(
+    cfg: ProjectConfig, tmp_path: Path, frames: dict[dt.date, pd.DataFrame]
+) -> None:
+    """One job per origin: the scores of M4 come from a run of 2016 and a run of 2017, those
+    of M3 from a run of both. Scores of both kinds for one model and origin are refused."""
+    for origin, frame in frames.items():
+        _save(tmp_path, "m4", origin, frame, "good", spec=str(origin.year))
+        _save(tmp_path, "m3", origin, frame, "fair")
+    assert compare.prediction_file(tmp_path, "m4", ORIGINS[0]).parent.name == "m4_2016"
+    assert compare.prediction_file(tmp_path, "m3", ORIGINS[1]).parent.name == "m3_dev"
+    by_origin = compare.load_pair(tmp_path, "m4", "m3", ORIGINS, (12, 24))
+    assert len(by_origin) == sum(len(frame) for frame in frames.values())
+    _save(tmp_path, "m4", ORIGINS[1], frames[ORIGINS[1]], "good")  # a second answer for 2017
+    with pytest.raises(RefusedError, match="two prediction files of m4 for origin 2017-01-01"):
+        compare.load_pair(tmp_path, "m4", "m3", ORIGINS, (12, 24))
+    with pytest.raises(FileNotFoundError, match="--model m2 --origins dev"):
+        compare.prediction_file(tmp_path, "m2", ORIGINS[0])
