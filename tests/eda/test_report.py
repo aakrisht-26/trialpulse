@@ -401,6 +401,7 @@ def _as_git_checks_it_out_on_windows(path: Path) -> bytes:
     return content
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_report_checked_out_with_crlf_is_reproduced_byte_for_byte(
     world: World,
     tmp_path: Path,

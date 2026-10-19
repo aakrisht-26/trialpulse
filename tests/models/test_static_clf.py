@@ -61,6 +61,7 @@ def test_categories_become_codes_of_the_training_levels() -> None:
         design_matrix(later, levels)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_m1_separates_trials_that_stop_from_trials_that_do_not(
     cfg: ProjectConfig, fitted: StaticClassifier
 ) -> None:
@@ -88,6 +89,7 @@ def test_m1_separates_trials_that_stop_from_trials_that_do_not(
         assert {"status", "enrollment_count"} & {f["feature"] for f in top[:6]}
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_rounds_come_from_the_last_training_year(
     cfg: ProjectConfig, fitted: StaticClassifier
 ) -> None:
@@ -105,6 +107,7 @@ def test_the_rounds_come_from_the_last_training_year(
         assert info["labeled_rows"] < info["training_rows"] < info["rows_at_landmark_0"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_only_registrations_whose_horizon_has_passed_are_trained_on(cfg: ProjectConfig) -> None:
     rows, time, event = simulated_rows(4_000, seed=9)
     model = StaticClassifier(cfg).fit_rows(rows, time, event, ORIGIN)
@@ -117,6 +120,7 @@ def test_only_registrations_whose_horizon_has_passed_are_trained_on(cfg: Project
         assert info["labeled_rows"] == info["training_rows"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_row_censored_before_the_horizon_has_no_say(cfg: ProjectConfig) -> None:
     """The label and weight of each training row are those of the evaluation metrics, with
     censoring curves by sponsor class fitted on the training rows themselves (ADR 0017).
@@ -149,6 +153,7 @@ def test_a_row_censored_before_the_horizon_has_no_say(cfg: ProjectConfig) -> Non
     assert not np.array_equal(a.predict_months(probe, short), b.predict_months(probe, short))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_two_fits_give_the_same_model(cfg: ProjectConfig, fitted: StaticClassifier) -> None:
     rows, time, event = simulated_rows(12_000, seed=1, lapse_share=0.3)
     again = StaticClassifier(cfg).fit_rows(rows, time, event, ORIGIN)
@@ -183,6 +188,7 @@ def test_too_few_rows_for_a_validation_year_fall_back_to_fixed_rounds(cfg: Proje
     assert info["rounds"] == static_clf.FALLBACK_ROUNDS
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_m1_runs_through_the_walk_forward_harness(cfg: ProjectConfig) -> None:
     """End to end on simulated trials: the harness cuts the training rows off at the origin,
     asks for the features of landmark 0, fits M1 and scores the registrations of the
@@ -240,6 +246,7 @@ def test_m1_runs_through_the_walk_forward_harness(cfg: ProjectConfig) -> None:
         assert summary[str(months)]["training_rows"] < result["n_train_rows"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_each_fit_gets_the_rows_labels_and_weights_of_the_rule(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

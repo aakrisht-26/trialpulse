@@ -86,6 +86,7 @@ def test_every_whitelisted_field_is_the_source_of_a_feature() -> None:
     assert set(reg.ALLOWED_VERSION_FIELDS) - read == {"nct_id"}
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_view_shows_the_submitted_status_and_never_the_registrys_later_label(
     world: World,
 ) -> None:
@@ -112,6 +113,7 @@ def test_the_view_shows_the_submitted_status_and_never_the_registrys_later_label
     assert same == (len(world.registry.versions),)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_features_read_only_whitelisted_fields(world: World) -> None:
     """The feature queries see a `versions` view that holds the whitelisted columns and no
     other, so a field outside the list cannot be read at all."""
@@ -123,6 +125,7 @@ def test_features_read_only_whitelisted_fields(world: World) -> None:
         assert world.con.execute(f"SELECT count({forbidden}) FROM all_versions").fetchone()
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_every_computed_feature_is_registered_and_every_registered_one_is_computed(
     world: World,
 ) -> None:
@@ -139,6 +142,7 @@ def test_every_computed_feature_is_registered_and_every_registered_one_is_comput
     assert text.startswith("# Features\n\nResearch demo. Not medical advice.")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_features_at_a_landmark_ignore_every_later_version(
     world: World, rules: CohortRules, cfg: ProjectConfig
 ) -> None:
@@ -169,6 +173,7 @@ def test_features_at_a_landmark_ignore_every_later_version(
     assert checked == wanted
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_rewrite_reaches_every_field_a_feature_may_read(
     world: World, rules: CohortRules
 ) -> None:
@@ -209,6 +214,7 @@ def test_the_rewrite_reaches_every_field_a_feature_may_read(
         restore_inputs(con)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_rewrite_changes_what_comes_after_and_nothing_before(
     world: World, rules: CohortRules, cfg: ProjectConfig
 ) -> None:
@@ -266,6 +272,7 @@ def test_the_rewrite_changes_what_comes_after_and_nothing_before(
         restore_inputs(con)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_sponsor_record_ignores_versions_posted_on_the_landmark_day(
     world: World, rules: CohortRules, cfg: ProjectConfig
 ) -> None:

@@ -61,6 +61,7 @@ def _provisional_model(path: Path) -> None:
     distill.save_model(path, pipeline, meta)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_provisional_model_is_refused_for_test_scoring(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -77,6 +78,7 @@ def test_a_provisional_model_is_refused_for_test_scoring(
     assert not (tmp_path / "results").exists()  # nothing was scored
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_an_uncommitted_prompt_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -100,6 +102,7 @@ def test_an_uncommitted_prompt_is_refused(
     assert "has uncommitted changes; commit the prompt first" in _one_line(capsys, "refused")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @respx.mock
 def test_a_daily_limit_stops_with_one_line_and_exit_code_4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -169,6 +172,7 @@ def _sample_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, n: int = 4) -> 
     return items
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @respx.mock
 def test_a_client_error_is_refused_not_stopped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -185,6 +189,7 @@ def test_a_client_error_is_refused_not_stopped(
     assert "check the key, model and provider settings" in captured.err
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_missing_key_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -196,6 +201,7 @@ def test_a_missing_key_is_refused(
     assert "GROQ_API_KEY is not set" in _one_line(capsys, "refused")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_status_without_a_sample_is_refused_without_any_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -210,6 +216,7 @@ def test_status_without_a_sample_is_refused_without_any_request(
     assert "no LLM sample yet" in _one_line(capsys, "refused")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_test_predictions_from_another_model_are_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -261,6 +268,7 @@ def test_a_panel_file_that_breaks_the_protocol_is_refused(
     assert "unknown label 'Accrual'" in _one_line(capsys, "refused")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_scoring_on_dev_without_the_gold_sample_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

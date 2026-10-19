@@ -78,6 +78,7 @@ def test_add_months_clamps_like_the_harness() -> None:
         assert add_months(day, months) == expected.astype(D)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_sql_forms_agree_with_their_python_twins(rules: CohortRules) -> None:
     statuses = ["RECRUITING", "ACTIVE_NOT_RECRUITING", "SUSPENDED", "COMPLETED", "UNKNOWN"]
     posted = [D(2016, 2, 29), D(2020, 7, 15), D(2012, 1, 15)]

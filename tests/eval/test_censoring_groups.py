@@ -170,6 +170,7 @@ def _slice(cfg: ProjectConfig, min_rows: int) -> tuple[ProjectConfig, dict]:
     return chosen, result
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_harness_reports_by_class_weights_first_and_the_single_curve_beside(
     cfg: ProjectConfig,
 ) -> None:
@@ -244,6 +245,7 @@ def test_group_labels_are_read_as_text_and_must_match_the_rows() -> None:
         horizon_labels_and_weights(time, event, 5.0, np.array(["a", "b", "a"]))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_groups_are_fixed_before_the_bootstrap_and_each_resample_refits_its_curves(
     cfg: ProjectConfig,
 ) -> None:
@@ -333,6 +335,7 @@ def _walk_forward_rows(n_trials: int = 4_000, seed: int = 12) -> LandmarkRows:
     )
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_walk_forward_run_decides_the_groups_once_per_origin(
     cfg: ProjectConfig,
 ) -> None:

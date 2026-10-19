@@ -56,6 +56,7 @@ CHANGED = {
 }
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @respx.mock
 def test_parity_compares_unchanged_trials_column_by_column(
     warehouse: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

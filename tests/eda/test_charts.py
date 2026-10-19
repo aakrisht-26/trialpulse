@@ -57,6 +57,7 @@ def drawn(
     return dict(zip(FIGURES, calls, strict=True))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_every_figure_carries_the_source_and_the_full_disclaimer(drawn: dict[str, dict]) -> None:
     for name, call in drawn.items():
         assert call["source"].endswith(DISCLAIMER), name
@@ -66,6 +67,7 @@ def test_every_figure_carries_the_source_and_the_full_disclaimer(drawn: dict[str
         assert "—" not in call["title"] + call["subtitle"], name
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_figures_of_later_dates_say_descriptive_only(drawn: dict[str, dict]) -> None:
     assert drawn["phase"]["subtitle"].startswith(PHASE_LABEL)
     assert drawn["covid"]["subtitle"].startswith(
@@ -80,6 +82,7 @@ def test_the_figures_of_later_dates_say_descriptive_only(drawn: dict[str, dict])
         assert "before 2018-01-01" in drawn[name]["subtitle"], name
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_sponsor_figure_labels_each_line_with_its_own_class(
     drawn: dict[str, dict], results: Results
 ) -> None:
@@ -100,6 +103,7 @@ def test_the_sponsor_figure_labels_each_line_with_its_own_class(
         assert np.array_equal(cif, results.sponsor_curves[name][1])
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_year_figure_shows_only_the_years_followed_for_the_whole_horizon(
     drawn: dict[str, dict], results: Results
 ) -> None:
@@ -118,6 +122,7 @@ def test_the_year_figure_shows_only_the_years_followed_for_the_whole_horizon(
     assert [row["group"] for row in followed(groups(results.year), "cif_24m")] == [2014, 2015]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_phase_and_signal_figures_put_each_value_under_its_own_name(
     drawn: dict[str, dict], results: Results
 ) -> None:
@@ -137,6 +142,7 @@ def test_the_phase_and_signal_figures_put_each_value_under_its_own_name(
     assert label == f"All trials {100 * value:.1f}%"
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_state_figures_keep_one_color_per_state(
     drawn: dict[str, dict], results: Results
 ) -> None:
@@ -162,6 +168,7 @@ def test_the_state_figures_keep_one_color_per_state(
     ]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_timing_figure_shows_modeling_years_only(
     drawn: dict[str, dict], results: Results
 ) -> None:
@@ -179,6 +186,7 @@ def test_the_timing_figure_shows_modeling_years_only(
     assert drawn["timing"].get("divider") is None
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_post_date_and_covid_figures(drawn: dict[str, dict], results: Results) -> None:
     years, shares = drawn["post_dates"]["args"]
     assert years == [r["year"] for r in results.post_dates]

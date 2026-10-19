@@ -79,6 +79,7 @@ def test_the_rows_own_trial_is_not_part_of_its_sponsors_record(
     assert counts(out, "X") == [[1, 0, 0], [1, 0, 0]]  # A only, also long after X's own post
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_rows_own_ended_trial_is_not_counted_either(
     cfg: ProjectConfig, rules: CohortRules
 ) -> None:
@@ -249,6 +250,7 @@ def test_a_rename_counts_once_its_first_replacement_is_more_than_a_year_old(
     assert counts(out, "Z") == [[6, 2, 1]]  # Y and W; and P, Q, R and R2 of the old name
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_wait_runs_from_the_first_replacement_not_from_the_latest(
     cfg: ProjectConfig, rules: CohortRules
 ) -> None:
@@ -274,6 +276,7 @@ def test_the_wait_runs_from_the_first_replacement_not_from_the_latest(
     assert counts(out, "Z") == [[5, 2, 1]]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_one_stray_version_under_the_old_name_does_not_undo_a_rename(
     cfg: ProjectConfig, rules: CohortRules
 ) -> None:
@@ -641,6 +644,7 @@ def _events_of_the_registry(world: World, rules: CohortRules, cfg: ProjectConfig
     return sp.collect_events(con)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_one_pass_counts_equal_a_replay_of_the_registry(
     world: World, rules: CohortRules, cfg: ProjectConfig
 ) -> None:
@@ -675,6 +679,7 @@ def test_the_one_pass_counts_equal_a_replay_of_the_registry(
     assert built == (n_queries,)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_counts_do_not_depend_on_the_order_the_events_arrive_in(
     world: World, rules: CohortRules, cfg: ProjectConfig
 ) -> None:
@@ -691,6 +696,7 @@ def test_the_counts_do_not_depend_on_the_order_the_events_arrive_in(
         assert np.array_equal(again, expected)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_renamed_sponsors_of_the_registry_inherit(world: World) -> None:
     """acme pharma is shown as acme pharma global from March 2015 on. Landmark rows of the
     new name must count trials registered under the old one: more registrations than the

@@ -152,6 +152,7 @@ def test_horizon_days_use_calendar_months() -> None:
     assert horizon_days(dates, 24).tolist() == [731.0, 731.0]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_m0_runs_end_to_end_on_development_origins(cfg: ProjectConfig) -> None:
     results = run(cfg, "m0", "dev", lambda: _rows(), _training, n_resamples=20)
 
@@ -220,6 +221,7 @@ def test_cli_refuses_locked_origins(capsys: pytest.CaptureFixture[str]) -> None:
     assert "refused" in capsys.readouterr().err
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_cli_reads_one_training_file_per_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -333,6 +335,7 @@ def _feature_loader(rows: LandmarkRows, calls: list[Any]) -> walkforward.Feature
     return load
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_feature_model_gets_its_rows_with_features_at_its_landmark_indices(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -365,6 +368,7 @@ def test_a_feature_model_gets_its_rows_with_features_at_its_landmark_indices(
     assert m0["model_summary"] is None
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_censoring_groups_are_decided_before_the_landmark_filter(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -409,6 +413,7 @@ def test_the_censoring_groups_are_decided_before_the_landmark_filter(
         ]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_feature_model_is_refused_without_features_or_with_those_of_other_rows(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -448,6 +453,7 @@ def test_a_feature_model_is_refused_without_features_or_with_those_of_other_rows
             load_features=other_landmark)  # fmt: skip
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_command_logs_each_run_unless_told_not_to(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
 ) -> None:
@@ -613,6 +619,7 @@ def test_every_slice_reports_calibration_by_registration_year(cfg: ProjectConfig
         assert {r["group"] for r in first["calibration_by_registration_year"]} == {"2016"}
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_harness_saves_the_scores_of_every_evaluation_row(
     cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -669,6 +676,7 @@ def test_the_ladder_and_the_ablation_rungs_are_models_of_the_harness() -> None:
         assert model.landmark_indices is None
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tuning_runs_before_the_model_when_asked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -733,6 +741,7 @@ def test_an_empty_selection_of_origins_is_an_error(cfg: ProjectConfig) -> None:
     assert [o.role for o in select_origins(cfg, "stress")] == ["stress"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tune_refuses_before_an_hour_of_tuning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -109,6 +109,7 @@ def folder(tmp_path: Path, frames: dict[dt.date, pd.DataFrame]) -> Path:
     return tmp_path
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_difference_is_the_mean_over_the_origins_of_the_difference_at_each(
     cfg: ProjectConfig, folder: Path, frames: dict[dt.date, pd.DataFrame]
 ) -> None:
@@ -164,6 +165,7 @@ def test_the_difference_is_the_mean_over_the_origins_of_the_difference_at_each(
     assert first["n_rows"] == sum(int((f["landmark_index"] == 0).sum()) for f in frames.values())
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_trial_evaluated_at_two_origins_is_one_cluster(
     cfg: ProjectConfig,
     folder: Path,
@@ -191,6 +193,7 @@ def test_a_trial_evaluated_at_two_origins_is_one_cluster(
     assert part["n_trials"] == len(first | second)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_model_against_itself_differs_by_nothing(
     cfg: ProjectConfig, tmp_path: Path, frames: dict[dt.date, pd.DataFrame]
 ) -> None:
@@ -205,6 +208,7 @@ def test_a_model_against_itself_differs_by_nothing(
         }  # fmt: skip
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_paired_interval_is_much_narrower_than_two_separate_ones(
     cfg: ProjectConfig, tmp_path: Path, frames: dict[dt.date, pd.DataFrame]
 ) -> None:
@@ -270,6 +274,7 @@ def test_a_statistic_that_is_not_finite_is_left_out_of_its_own_interval_only() -
         )  # fmt: skip
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_model_of_landmark_0_is_compared_at_landmark_0(cfg: ProjectConfig, folder: Path) -> None:
     result = compare.compare_pair(cfg, folder, "m4", "m1", False, ORIGINS, 40)
     assert result["landmark_indices"] == [0]
@@ -277,6 +282,7 @@ def test_a_model_of_landmark_0_is_compared_at_landmark_0(cfg: ProjectConfig, fol
     assert result["horizons"]["12"]["0"]["delta_auc"]["estimate"] > 0.0
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_files_that_do_not_hold_the_same_rows_are_refused(
     cfg: ProjectConfig, tmp_path: Path, frames: dict[dt.date, pd.DataFrame]
 ) -> None:
@@ -325,6 +331,7 @@ def test_files_that_do_not_hold_the_same_rows_are_refused(
         compare.load_pair(tmp_path, "m4", "m2", (origin,), (12, 24))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_command_compares_every_pair_that_has_files(
     folder: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], tracked_runs: list[Any]
 ) -> None:
@@ -374,6 +381,7 @@ def test_without_any_prediction_file_the_command_names_the_run_to_make(tmp_path:
         compare.main(["--predictions-dir", str(tmp_path), "--out", str(tmp_path / "x.json")])
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_tracking_failure_keeps_the_comparison(
     folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

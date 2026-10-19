@@ -226,6 +226,7 @@ def test_a_model_cannot_be_fitted_without_a_finished_interval(cfg: ProjectConfig
 # The required test of Section 9 -------------------------------------------------------------------
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_without_covariates_the_discrete_cif_matches_aalen_johansen(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -305,6 +306,7 @@ def fitted(cfg: ProjectConfig) -> dict[str, dtm.DiscreteTimeModel]:
     }
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_models_rank_and_calibrate_on_later_trials(
     cfg: ProjectConfig, fitted: dict[str, dtm.DiscreteTimeModel]
 ) -> None:
@@ -340,6 +342,7 @@ def test_the_models_rank_and_calibrate_on_later_trials(
     assert fitted["m3"].summary["columns"] > fitted["m2"].summary["columns"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_two_fits_give_the_same_predictions(
     cfg: ProjectConfig, fitted: dict[str, dtm.DiscreteTimeModel]
 ) -> None:
@@ -355,6 +358,7 @@ def test_two_fits_give_the_same_predictions(
 # Scoring -----------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @pytest.mark.parametrize("name", ["m2", "m4"])
 def test_scoring_uses_what_was_fitted_on_the_training_rows(cfg: ProjectConfig, name: str) -> None:
     """Section 6: the centers, scales, fill values and category levels are those of the
@@ -391,6 +395,7 @@ def test_scoring_uses_what_was_fitted_on_the_training_rows(cfg: ProjectConfig, n
     assert not np.array_equal(after, before)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_trees_are_asked_about_each_interval_by_its_number(cfg: ProjectConfig) -> None:
     """In these rows no trial stops early in its first six months (those stops are turned
     into completions), so the hazard depends on the interval and the trees must be asked
@@ -430,6 +435,7 @@ def test_an_outcome_the_training_rows_never_show_gets_probability_zero(
 # What the learners are handed --------------------------------------------------------------------
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_trees_of_m4_are_chosen_on_the_last_training_year(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -497,6 +503,7 @@ def test_the_trees_of_m4_are_chosen_on_the_last_training_year(
     assert final["patience"] == []
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_too_few_rows_for_a_validation_year_fall_back_to_fixed_rounds(cfg: ProjectConfig) -> None:
     rows, time, event = simulated_rows(700, seed=8)
     model = build("m4-design", cfg).fit_rows(rows, time, event, ORIGIN)
@@ -592,6 +599,7 @@ def test_the_trees_get_codes_and_missing_values() -> None:
         tree_matrix({"masking": features["masking"]}, names, levels)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_logistic_models_are_fitted_on_person_period_rows_with_the_interval(
     cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -647,6 +655,7 @@ def test_a_model_runs_with_the_settings_the_tuning_chose(
 # Through the harness ----------------------------------------------------------------------------
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @pytest.mark.parametrize("name", ["m3", "m4-design"])
 def test_a_discrete_time_model_runs_through_the_walk_forward_harness(
     cfg: ProjectConfig, name: str, tmp_path: Path

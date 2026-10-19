@@ -160,6 +160,7 @@ def test_the_chosen_trial_breaks_ties_by_the_declared_rule(cfg: ProjectConfig) -
     assert min(t["calibration_slope"] for t in study["trials"]) < study["best"]["calibration_slope"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_objective_is_the_mean_over_the_origins_of_the_auc_at_12_months(
     cfg: ProjectConfig,
 ) -> None:
@@ -202,6 +203,7 @@ def test_the_objective_is_the_mean_over_the_origins_of_the_auc_at_12_months(
     assert result["calibration_slope"] == pytest.approx(float(np.mean(slope)), abs=1e-9)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_trial_fits_and_scores_the_model_with_its_settings(cfg: ProjectConfig) -> None:
     data = [_origin_data(seed=0), _origin_data(seed=1)]
     one = tuning.score(cfg, "m3", {"C": 0.5}, data[:1])
@@ -215,6 +217,7 @@ def test_a_trial_fits_and_scores_the_model_with_its_settings(cfg: ProjectConfig)
     assert trees["by_origin"][ORIGIN.isoformat()]["rounds"] >= 1
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_command_writes_the_chosen_settings_where_the_models_read_them(
     cfg: ProjectConfig,
     tmp_path: Path,

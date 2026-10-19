@@ -142,6 +142,7 @@ def test_statistics_read_texts_outside_ascii_the_same_way_in_sql_and_python() ->
     assert _sql_statistics(list(texts)) == expected
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_sql_statistics_equal_their_python_twin(world: World) -> None:
     texts = [t for t in world.registry.texts.values() if "Criteria" in t]
     assert len(texts) > 200

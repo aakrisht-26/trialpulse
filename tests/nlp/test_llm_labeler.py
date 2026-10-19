@@ -91,6 +91,7 @@ def test_a_rendered_prompt_with_a_test_text_is_refused() -> None:
     assert secret not in str(render_messages("x", []))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_final_prompt_passes_the_guard() -> None:
     texts = (
         [i.why_stopped for i in load_sample(SAMPLE_PATH) if i.split == "test"]
@@ -244,6 +245,7 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_test_items_need_a_committed_unchanged_prompt(tmp_path: Path) -> None:
     prompts = tmp_path / "prompts"
     prompts.mkdir()

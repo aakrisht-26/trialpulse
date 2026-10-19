@@ -41,6 +41,7 @@ def built(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_landmarks_file_is_the_step_8_input_contract(built: Path) -> None:
     path = built / "cohort" / "landmarks.parquet"
     with duckdb.connect() as con:
@@ -54,6 +55,7 @@ def test_the_landmarks_file_is_the_step_8_input_contract(built: Path) -> None:
     assert set(REQUIRED_COLUMNS) < set(LANDMARK_COLUMNS)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_outputs_audit_and_a_repeat_build(built: Path) -> None:
     out = built / "cohort"
     for name in ("person_period.parquet", "outcomes.parquet", "aj_sanity_by_sponsor_class.csv"):
@@ -84,6 +86,7 @@ def test_outputs_audit_and_a_repeat_build(built: Path) -> None:
     assert rebuilt.startswith("# Data audit, part 1: the warehouse")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_aj_sanity_table_matches_the_estimator(built: Path) -> None:
     with duckdb.connect() as con:
         con.execute(
@@ -109,6 +112,7 @@ def test_the_aj_sanity_table_matches_the_estimator(built: Path) -> None:
     assert [r["stratum"] for r in saved] == [r["stratum"] for r in rows]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_build_writes_the_training_rows_of_every_origin(built: Path) -> None:
     """ADR 0016: one landmark file and one person-period file per walk-forward origin, built
     as of the origin, which the harness accepts as training rows."""

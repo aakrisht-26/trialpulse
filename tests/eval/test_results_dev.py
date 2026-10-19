@@ -595,6 +595,7 @@ def test_the_ladder_names_the_champion_by_the_declared_rule(step10: tuple[Path, 
     assert "M4-DESIGN has a higher" not in said
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_comparison_made_from_other_scores_is_refused(step10: tuple[Path, Path]) -> None:
     """The comparison file holds each model's AUC and Brier score at each origin. They must
     be the numbers of the result files: if a model was run again after the comparison, the

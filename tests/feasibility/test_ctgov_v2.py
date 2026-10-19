@@ -4,6 +4,7 @@ import datetime as dt
 from typing import Any
 
 import httpx
+import pytest
 import respx
 
 from trialpulse.feasibility import ctgov_v2
@@ -118,6 +119,7 @@ def _page(studies: list[dict[str, Any]], token: str | None, total: int | None = 
     return httpx.Response(200, json=body)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @respx.mock
 def test_iter_pages_follows_tokens_and_resumes_from_cache(
     fast_fetcher: JsonFetcher, cache: JsonCache
@@ -141,6 +143,7 @@ def test_iter_pages_follows_tokens_and_resumes_from_cache(
     assert route.call_count == 2
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @respx.mock
 def test_iter_pages_scrubs_before_caching(fast_fetcher: JsonFetcher, cache: JsonCache) -> None:
     study = _study("NCT1")

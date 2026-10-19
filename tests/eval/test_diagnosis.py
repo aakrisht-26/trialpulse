@@ -123,6 +123,7 @@ def _table(files: dict[str, Path]) -> dg.LabelTable:
     )  # fmt: skip
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_every_training_row_is_put_in_one_category(hand_cohort: dict[str, Path]) -> None:
     table = _table(hand_cohort)
     by_trial = {
@@ -147,6 +148,7 @@ def test_every_training_row_is_put_in_one_category(hand_cohort: dict[str, Path])
     assert set(dg.CATEGORIES) == set(table.category.tolist())
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_hindsight_form_is_cut_off_at_the_origin(hand_cohort: dict[str, Path]) -> None:
     """A completed in 2017: on the origin that is not known, in either form. Hindsight
     observes the trial up to the origin; the as-of cohort stopped in June 2013."""
@@ -348,6 +350,7 @@ def _simulated(root: Path, cfg: ProjectConfig, n_trials: int = 3000, seed: int =
     return root
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_command_writes_the_diagnosis_for_the_development_origins(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], tracked_runs: list[Any]
 ) -> None:
@@ -544,6 +547,7 @@ def test_the_metrics_of_the_logged_run_name_each_label_set() -> None:
     assert len(dg.MIX_KEYS) == len(dg.MIXES)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_tracking_failure_keeps_the_diagnosis_and_fails_the_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

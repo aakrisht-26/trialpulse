@@ -105,6 +105,7 @@ def test_lightweight_tag_is_refused(tmp_path: Path) -> None:
     "extra",
     ["Prediction: TBD", "TODO: add ranges", "Range: <prediction>", "Please fill in later"],
 )
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_placeholders_are_refused(tmp_path: Path, extra: str) -> None:
     repo = _repo_with(tmp_path, COMPLETE + extra + "\n")
     with pytest.raises(TestLockError, match="placeholder"):
@@ -117,6 +118,7 @@ def test_invalid_registered_date_is_refused(tmp_path: Path) -> None:
         check_unlock(repo, unlock_flag=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tag_must_be_an_ancestor_of_head(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     _git(repo, "tag", "-d", TAG)
@@ -129,6 +131,7 @@ def test_tag_must_be_an_ancestor_of_head(tmp_path: Path) -> None:
         check_unlock(repo, unlock_flag=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_complete_registration_unlocks_and_reports_hashes(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     _add_origin(repo, tmp_path)
@@ -145,12 +148,14 @@ def test_complete_registration_unlocks_and_reports_hashes(tmp_path: Path) -> Non
     assert unlock.remote == "origin"
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_repository_without_origin_is_refused(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     with pytest.raises(TestLockError, match="cannot list the tags on origin"):
         check_unlock(repo, unlock_flag=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tag_not_pushed_to_origin_is_refused(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     _add_origin(repo, tmp_path, push_tag=False)
@@ -158,6 +163,7 @@ def test_tag_not_pushed_to_origin_is_refused(tmp_path: Path) -> None:
         check_unlock(repo, unlock_flag=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_lightweight_tag_on_origin_is_refused(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE, annotated=False)
     _add_origin(repo, tmp_path)  # origin receives the lightweight tag
@@ -167,6 +173,7 @@ def test_lightweight_tag_on_origin_is_refused(tmp_path: Path) -> None:
         check_unlock(repo, unlock_flag=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tag_recreated_after_publishing_is_refused(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     _add_origin(repo, tmp_path)
@@ -176,6 +183,7 @@ def test_tag_recreated_after_publishing_is_refused(tmp_path: Path) -> None:
         check_unlock(repo, unlock_flag=True)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tag_on_origin_at_another_commit_is_refused(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path, COMPLETE)
     _add_origin(repo, tmp_path)  # origin's tag points at the first registration commit

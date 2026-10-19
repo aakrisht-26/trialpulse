@@ -67,6 +67,7 @@ def test_the_design_compares_each_category_with_its_reference() -> None:
     assert set(design["children_eligible"].unique()) == {0.0, 1.0}
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_models_recover_the_hazard_ratios_of_the_simulation(result: dict[str, Any]) -> None:
     stop = "early stop"
     waiting = _ratio(result, stop, "status_not_yet_recruiting")
@@ -88,6 +89,7 @@ def test_the_models_recover_the_hazard_ratios_of_the_simulation(result: dict[str
     assert masked["ci_low"] < 1.0 < masked["ci_high"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_each_cause_treats_the_other_end_as_censoring(result: dict[str, Any]) -> None:
     rows, time, event = simulated_rows(20_000, seed=11)
     assert result["rows"] == int((time > 0).sum())
@@ -101,6 +103,7 @@ def test_each_cause_treats_the_other_end_as_censoring(result: dict[str, Any]) ->
     assert len(rows) == 20_000
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_proportional_hazards_are_checked_two_ways(result: dict[str, Any]) -> None:
     """The simulated hazards are proportional: the ratio of the first year and the ratio of
     the time after it agree with the single one, and every covariate carries the
@@ -114,6 +117,7 @@ def test_proportional_hazards_are_checked_two_ways(result: dict[str, Any]) -> No
             assert 0.0 <= values["schoenfeld_p"] <= 1.0
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @pytest.mark.parametrize("whole_days", [False, True])
 def test_the_schoenfeld_test_agrees_with_lifelines(whole_days: bool) -> None:
     """The test is computed in this project because lifelines' own is too slow for every
@@ -154,6 +158,7 @@ def test_the_schoenfeld_test_agrees_with_lifelines(whole_days: bool) -> None:
     assert p_value[2] > 0.01  # the one with no effect at all is not
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_ratio_that_changes_over_time_shows_in_the_two_windows() -> None:
     """Companies stop early at three times the rate in the first year and at the usual rate
     afterwards: the single ratio is an average, the two windows show the change, and the
@@ -176,6 +181,7 @@ def test_a_ratio_that_changes_over_time_shows_in_the_two_windows() -> None:
     assert ratio["schoenfeld_p"] < 0.001
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_rows_without_follow_up_are_left_out() -> None:
     rows, time, event = simulated_rows(3_000, seed=14)
     time = time.copy()
@@ -185,6 +191,7 @@ def test_rows_without_follow_up_are_left_out() -> None:
     assert found["rows"] == 3_000 - 25
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_command_writes_the_report_for_the_later_development_origin(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -236,6 +243,7 @@ def test_the_command_writes_the_report_for_the_later_development_origin(
     assert (tracked_runs[-1]["local"], tracked_runs[-1]["state"]) == (True, started)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_tracking_failure_keeps_the_report_and_the_results_and_fails_the_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

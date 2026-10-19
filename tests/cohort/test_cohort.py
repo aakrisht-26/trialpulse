@@ -466,6 +466,7 @@ def test_the_population_window_starts_on_its_first_day(rules: CohortRules) -> No
     assert outcome(con, "NCT00000312")["in_window"] is False
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_cutoff_bounds_what_the_build_can_see(rules: CohortRules) -> None:
     rows = [
         # Lapses from 2017-02-01 (verified January 2015, completion passed).

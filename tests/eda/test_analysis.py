@@ -94,6 +94,7 @@ def test_a_hand_worked_cif_with_a_censored_trial() -> None:
     assert an.cif_at(time, event, months, cause=EVENT_COMPLETE) == pytest.approx([0, 0, 0.375])
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_registrations_keep_only_landmarks_before_2018(
     con: duckdb.DuckDBPyConnection,
     final_con: duckdb.DuckDBPyConnection,
@@ -116,6 +117,7 @@ def test_registrations_keep_only_landmarks_before_2018(
     assert set(an.registrations(final_con).year.tolist()) == set(MODELING_YEARS)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_tables_that_were_not_built_as_of_the_date_are_refused(
     con: duckdb.DuckDBPyConnection, final_con: duckdb.DuckDBPyConnection
 ) -> None:
@@ -126,6 +128,7 @@ def test_tables_that_were_not_built_as_of_the_date_are_refused(
         an.check_as_of(con, dt.date(2017, 6, 1))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_outcomes_are_what_2018_01_01_knew(
     final_con: duckdb.DuckDBPyConnection,
     reg: an.Registrations,
@@ -159,6 +162,7 @@ def test_outcomes_are_what_2018_01_01_knew(
     assert (to_cutoff.event == EVENT_CENSORED).sum() > to_cutoff.lapsed.sum() == 2
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_lapse_after_2018_is_not_known_to_the_modeling_tables(
     final_con: duckdb.DuckDBPyConnection,
     reg: an.Registrations,
@@ -185,6 +189,7 @@ def test_a_lapse_after_2018_is_not_known_to_the_modeling_tables(
     assert rows_in_final == [1, 1, 0, 0, 0, 0, 0]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_unknown_rule_censoring_is_told_apart(
     reg: an.Registrations, world: World, registered: list[Trial]
 ) -> None:
@@ -208,12 +213,14 @@ def test_the_unknown_rule_censoring_is_told_apart(
         assert expected > 0
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_small_sponsor_classes_are_pooled(reg: an.Registrations) -> None:
     assert set(reg.sponsor_class.tolist()) == {"INDUSTRY", "OTHER", "NIH", "FED"}
     assert set(reg.sponsor_group.tolist()) == {"INDUSTRY", "OTHER", "NIH", an.OTHER_CLASSES}
     assert (reg.sponsor_group == an.OTHER_CLASSES).sum() == (reg.sponsor_class == "FED").sum()
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_registration_timing_reads_the_first_version_by_calendar_month(
     reg: an.Registrations, world: World, registered: list[Trial]
 ) -> None:
@@ -224,6 +231,7 @@ def test_registration_timing_reads_the_first_version_by_calendar_month(
     assert reg.timing[changed] == an.PROSPECTIVE
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_phase_comes_from_the_current_record_snapshot(reg: an.Registrations) -> None:
     groups = set(reg.phase.tolist())
     assert {an.EARLY_PHASE, an.MID_PHASE, an.LATE_PHASE, an.POST_APPROVAL_PHASE} <= groups
@@ -231,6 +239,7 @@ def test_phase_comes_from_the_current_record_snapshot(reg: an.Registrations) -> 
     assert (reg.phase == an.NO_CURRENT_RECORD).sum() == 1
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_cif_tables_match_the_estimator_on_the_twin_outcomes(
     reg: an.Registrations, world: World, registered: list[Trial]
 ) -> None:
@@ -259,6 +268,7 @@ def test_cif_tables_match_the_estimator_on_the_twin_outcomes(
     assert withdrawn + terminated == pytest.approx(rows[0]["cif_24m"])
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_cif_curves_match_the_table(reg: an.Registrations) -> None:
     rows = an.cif_by_group(reg.time, reg.event, reg.sponsor_group, an.SPONSOR_ORDER, (12, 24))
     curves = an.cif_curves(reg.time, reg.event, reg.sponsor_group, an.SPONSOR_ORDER, 36)
@@ -272,6 +282,7 @@ def test_cif_curves_match_the_table(reg: an.Registrations) -> None:
         assert np.all(np.diff(cif) >= 0)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_landmark_rows_are_before_2018_with_outcomes_censored_there(
     con: duckdb.DuckDBPyConnection, world: World
 ) -> None:
@@ -289,6 +300,7 @@ def test_landmark_rows_are_before_2018_with_outcomes_censored_there(
     assert "on_landmark_day" in at_12
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_four_states_add_up_and_the_naive_estimate_is_pinned(
     reg: an.Registrations, world: World
 ) -> None:
@@ -308,6 +320,7 @@ def test_the_four_states_add_up_and_the_naive_estimate_is_pinned(
     assert view["naive_early_stop"][36] > view["early_stop"][36] + 0.01
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_amendment_signals_match_the_twin_row_by_row(signals: an.Amendments, world: World) -> None:
     rows = world.landmark_rows(AT_12_MONTHS)
     assert len(signals.time) == len(rows) > 0
@@ -327,6 +340,7 @@ def test_amendment_signals_match_the_twin_row_by_row(signals: an.Amendments, wor
     assert np.isnan(signals.slip_months).sum() == 1  # the trial with no first primary date
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_edge_cases_of_the_state_at_the_landmark(signals: an.Amendments, world: World) -> None:
     names = [trial.name for trial, _ in world.landmark_rows(AT_12_MONTHS)]
 
@@ -370,6 +384,7 @@ def test_the_edge_cases_of_the_state_at_the_landmark(signals: an.Amendments, wor
         assert missing[key] == -1, key
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_amendment_tables(signals: an.Amendments, world: World) -> None:
     rows = world.landmark_rows(AT_12_MONTHS)
     expected = [signals_at(trial, day) for trial, day in rows]
@@ -432,6 +447,7 @@ def _altered(world: World, tmp_path: Path, where: str) -> an.Amendments:
         return an.amendment_signals(con, AT_12_MONTHS, quiet_months=6)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_signals_ignore_everything_posted_after_the_landmark(
     signals: an.Amendments, world: World, tmp_path: Path
 ) -> None:
@@ -445,6 +461,7 @@ def test_signals_ignore_everything_posted_after_the_landmark(
         assert np.array_equal(altered.signals[key], values), key
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_signals_do_change_when_a_version_on_or_before_the_landmark_changes(
     signals: an.Amendments, world: World, tmp_path: Path
 ) -> None:
@@ -464,6 +481,7 @@ def test_signals_do_change_when_a_version_on_or_before_the_landmark_changes(
     assert [names[i] for i in np.flatnonzero(before != after)] == ["on_landmark_day"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_registration_by_year_is_by_month_and_marks_later_years(
     con: duckdb.DuckDBPyConnection, world: World
 ) -> None:
@@ -493,6 +511,7 @@ def test_registration_by_year_is_by_month_and_marks_later_years(
     assert rows[2015]["with_start_date"] < rows[2015]["trials"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_post_dates_and_the_posting_lag(con: duckdb.DuckDBPyConnection, world: World) -> None:
     versions = [v for trial in world.trials for v in trial.versions]
 
@@ -530,6 +549,7 @@ def test_post_dates_and_the_posting_lag(con: duckdb.DuckDBPyConnection, world: W
     assert later["median_days"] > first["median_days"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_covid_period_rates(con: duckdb.DuckDBPyConnection, world: World) -> None:
     monthly = an.covid_period_monthly(con, dt.date(2017, 1, 1), dt.date(2021, 12, 1))
     months = [m.astype(object) for m in monthly["months"]]
@@ -578,6 +598,7 @@ def test_covid_period_rates(con: duckdb.DuckDBPyConnection, world: World) -> Non
     assert summary["open_trials"] == pytest.approx(monthly["open_trials"][window].mean())
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_state_twin_itself(world: World) -> None:
     """The twin's two rules, on the edge cases they exist for."""
     tied = world.named("shared_post_date")

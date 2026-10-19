@@ -96,6 +96,7 @@ def test_prompt_files_skip_caches(tmp_path: Path) -> None:
     assert prompt_files(tmp_path / "missing") == []
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_no_test_text_appears_in_the_prompt_files() -> None:
     """The real check. It runs on the committed test hashes in CI, and also on the texts
     when the gitignored gold sample is present."""

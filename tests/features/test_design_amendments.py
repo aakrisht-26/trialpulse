@@ -154,6 +154,7 @@ def test_a_landmark_in_the_middle_of_a_month_compares_months_not_days(
     assert same["months_since_last_update"].tolist() == [0, 4]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_primary_completion_date_that_is_actual_was_reached_not_missed(
     cfg: ProjectConfig, rules: CohortRules
 ) -> None:
@@ -206,6 +207,7 @@ def test_each_version_is_recent_at_one_landmark_also_when_a_landmark_day_is_clam
     assert cfg.features.recent_versions_months == cfg.landmarks.spacing_months == 6
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_registrys_later_unknown_label_changes_no_feature(
     cfg: ProjectConfig, rules: CohortRules
 ) -> None:

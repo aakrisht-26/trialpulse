@@ -117,6 +117,7 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> Built:
     return Built(root, args, first, _log(root))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_building_twice_gives_identical_outputs(built: Built) -> None:
     """Step 7 acceptance: the same inputs give the same rows, checksum by checksum."""
     assert built.first["identical_to_previous"] is None
@@ -131,6 +132,7 @@ def test_building_twice_gives_identical_outputs(built: Built) -> None:
             assert f"origin_{year}-01-01/{part}" in names
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_feature_table_holds_each_landmark_row_once_with_the_registered_columns(
     built: Built,
 ) -> None:
@@ -158,6 +160,7 @@ def test_the_feature_table_holds_each_landmark_row_once_with_the_registered_colu
         assert mismatch == (0,)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_document_lists_every_feature_with_its_missing_share(built: Built) -> None:
     text = (built.root / "features.md").read_text(encoding="utf-8")
     for feature in reg.FEATURES:
@@ -170,6 +173,7 @@ def test_the_document_lists_every_feature_with_its_missing_share(built: Built) -
     assert "\r" not in text
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @pytest.mark.parametrize("role", ["training", "evaluation"])
 def test_the_matrix_of_an_origin_has_every_main_feature(
     built: Built, cfg: ProjectConfig, role: frame.Role
@@ -204,6 +208,7 @@ def test_the_matrix_of_an_origin_has_every_main_feature(
         assert (matrix["landmark_date"] < pd.Timestamp(ORIGIN)).all()
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_sponsor_rate_is_smoothed_toward_the_class_rate_of_the_origin(
     built: Built, cfg: ProjectConfig
 ) -> None:
@@ -225,6 +230,7 @@ def test_the_sponsor_rate_is_smoothed_toward_the_class_rate_of_the_origin(
         assert row["sponsor_stop_rate"] == pytest.approx(priors.prior(row["sponsor_class"]))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_what_is_fitted_for_an_origin_depends_only_on_its_training_rows(
     built: Built, tmp_path: Path
 ) -> None:
@@ -272,6 +278,7 @@ def test_what_is_fitted_for_an_origin_depends_only_on_its_training_rows(
             assert differing == (0,), table
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_leakage_command_rewrites_the_registry_after_each_origin(
     built: Built, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -290,6 +297,7 @@ def test_the_leakage_command_rewrites_the_registry_after_each_origin(
     assert "No feature at a landmark changed" in out
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_leakage_command_reports_a_leak(built: Built, tmp_path: Path) -> None:
     """Against a feature table that is not what the registry gives (here: built from a
     registry rewritten from 2017 on), the command refuses."""
@@ -312,6 +320,7 @@ def test_the_leakage_command_reports_a_leak(built: Built, tmp_path: Path) -> Non
         leakage.main(command)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_text_counts_are_cached_once_and_reused(built: Built, tmp_path: Path) -> None:
     """The two builds of the fixture left one cache per text field. It is one file, written
     whole, and it holds what it says it holds."""
@@ -367,6 +376,7 @@ def test_a_cache_that_cannot_be_trusted_is_not_used(tmp_path: Path) -> None:
     assert features_build.load_cached_counts(path, signature) is None
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_build_recomputes_counts_it_cannot_trust_and_reuses_the_rest(
     built: Built, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -396,6 +406,7 @@ def test_the_build_recomputes_counts_it_cannot_trust_and_reuses_the_rest(
     assert log["tables"] == built.second["tables"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_report_of_missing_values_needs_the_cohort_as_of_2018(
     built: Built, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -414,6 +425,7 @@ def test_the_report_of_missing_values_needs_the_cohort_as_of_2018(
         features_build.main(built.args)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_build_names_the_command_for_a_missing_input(built: Built, tmp_path: Path) -> None:
     from trialpulse.cli import RefusedError
 
@@ -432,6 +444,7 @@ def test_the_build_names_the_command_for_a_missing_input(built: Built, tmp_path:
 # What a model reads ------------------------------------------------------------------------------
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @pytest.mark.parametrize("role", ["training", "evaluation"])
 def test_the_matrix_can_be_cut_to_some_landmark_indices(
     built: Built, cfg: ProjectConfig, role: frame.Role
@@ -473,6 +486,7 @@ def test_arrays_for_a_model_keep_a_missing_value_missing() -> None:
     assert arrays["landmark_index"].tolist() == [0.0, 1.0, 2.0]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_arrays_of_a_built_matrix_hold_every_model_feature(
     built: Built, cfg: ProjectConfig
 ) -> None:
@@ -493,6 +507,7 @@ def test_the_arrays_of_a_built_matrix_hold_every_model_feature(
     assert missing_somewhere > 5  # the test registry leaves fields empty, as the real one does
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_harness_gets_the_matrix_of_an_origin_through_its_loader(
     built: Built, cfg: ProjectConfig
 ) -> None:
@@ -525,6 +540,7 @@ def test_the_harness_gets_the_matrix_of_an_origin_through_its_loader(
         absent(ORIGIN, "training", None)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_cox_models_read_the_landmark_0_rows_of_the_cohort_as_of_the_origin(
     built: Built, cfg: ProjectConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

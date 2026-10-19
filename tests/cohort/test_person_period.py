@@ -4,6 +4,7 @@ import datetime as dt
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
 from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand
 from trialpulse.cohort.rules import CohortRules
@@ -119,6 +120,7 @@ def _discrete_cif(rows: dict[str, np.ndarray], intervals: int) -> float:
     return cif
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_no_covariate_discrete_cif_matches_aalen_johansen(rules: CohortRules) -> None:
     """Staggered entry and one cutoff, as in the real cohort: the hazards from person-period
     rows, pooled without covariates, give Aalen-Johansen's CIF at the interval boundaries

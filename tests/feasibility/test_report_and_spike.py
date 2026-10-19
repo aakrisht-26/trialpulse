@@ -218,6 +218,7 @@ def test_parse_parts() -> None:
         spike._parse_parts("z")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_no_module_outside_feasibility_uses_the_internal_endpoint() -> None:
     """CLAUDE.md Step 2 acceptance: nothing outside feasibility/ may import code that
     calls the internal history endpoint."""

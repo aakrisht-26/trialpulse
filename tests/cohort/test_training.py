@@ -57,6 +57,7 @@ def test_the_rules_as_of_an_origin(rules: CohortRules) -> None:
     assert then.lapse_months == rules.lapse_months
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_terminal_version_is_known_only_if_posted_before_the_origin(rules: CohortRules) -> None:
     """B is terminated in a version posted at month 20 (2016-09-01)."""
     terminated = month(20)
@@ -71,6 +72,7 @@ def test_a_terminal_version_is_known_only_if_posted_before_the_origin(rules: Coh
         assert result["terminal_status"] == ("TERMINATED" if known else None)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_reversal_posted_after_the_origin_does_not_exclude_the_trial(rules: CohortRules) -> None:
     """F completes at month 10 and is recruiting again at month 14. On 2016-01-01 the
     reopening is not posted yet: the trial is a completion with two landmark rows. The final
@@ -87,6 +89,7 @@ def test_a_reversal_posted_after_the_origin_does_not_exclude_the_trial(rules: Co
     assert landmarks(cohort(MINI, rules), "NCT00000006") == []
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_lapse_resolved_after_the_origin_is_still_a_lapse_on_the_origin(
     rules: CohortRules,
 ) -> None:
@@ -106,6 +109,7 @@ def test_a_lapse_resolved_after_the_origin_is_still_a_lapse_on_the_origin(
     assert (before["event"], before["censor_reason"]) == (0, "cutoff")
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_an_unknown_censoring_that_had_not_happened_yet_is_not_applied(rules: CohortRules) -> None:
     """I is censored in the final cohort at its last verification, 2016-07-01, because it
     lapsed on 2018-08-01. On 2018-01-01 it had not lapsed: it is an open trial, censored on
@@ -123,6 +127,7 @@ def test_an_unknown_censoring_that_had_not_happened_yet_is_not_applied(rules: Co
     assert (after["censor_reason"], after["event_date"]) == ("unknown", month(18))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_study_type_posted_after_the_origin_is_not_known(rules: CohortRules) -> None:
     """J is observational at registration and interventional from month 4."""
     assert outcome(as_of(MINI, rules, month(4)), "NCT00000011")["ever_in_population"] is False
@@ -181,6 +186,7 @@ def _rewritten_from(rows: list[dict[str, Any]], origin: dt.date) -> list[dict[st
     return out
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 @pytest.mark.parametrize("origin", ORIGINS)
 def test_a_training_label_cannot_change_when_later_versions_are_rewritten(
     rules: CohortRules, origin: dt.date
@@ -193,6 +199,7 @@ def test_a_training_label_cannot_change_when_later_versions_are_rewritten(
     assert dump(as_of(rewritten, rules, origin)) == dump(as_of(MINI, rules, origin))
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_final_cohort_does_change_when_those_versions_are_rewritten(rules: CohortRules) -> None:
     """The control: the same rewrite changes the final cohort, and it changes the training
     rows of a later origin, which is allowed to know those versions."""

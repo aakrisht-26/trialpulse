@@ -37,6 +37,7 @@ def _corpus(per_label: int = 12) -> tuple[list[str], list[str]]:
     return texts, labels
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_selection_covers_the_grid_and_the_model_learns() -> None:
     texts, labels = _corpus()
     pipeline, selection = select_and_fit(texts, labels, seed=42, folds=3)
@@ -73,6 +74,7 @@ def test_a_gold_text_is_refused_in_the_training_set() -> None:
     assert training_set(items, {items[0].key: "accrual"}, gold=set())[1] == ["accrual"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_every_early_stop_with_a_reason_gets_a_label(tmp_path: Path) -> None:
     texts, labels = _corpus()
     pipeline, _ = select_and_fit(texts, labels, seed=42, folds=3)
@@ -99,6 +101,7 @@ def test_every_early_stop_with_a_reason_gets_a_label(tmp_path: Path) -> None:
     assert count == (2,)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_model_and_its_metadata_round_trip(tmp_path: Path) -> None:
     texts, labels = _corpus(per_label=6)
     pipeline, selection = select_and_fit(texts, labels, seed=1, folds=2)
@@ -110,6 +113,7 @@ def test_the_model_and_its_metadata_round_trip(tmp_path: Path) -> None:
     assert load_metadata(tmp_path / "m.joblib")["training_texts"] == len(texts)
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_only_a_final_model_may_be_scored_on_test(tmp_path: Path) -> None:
     from trialpulse.nlp.distill import check_final, model_identity
 

@@ -178,6 +178,7 @@ def test_the_environment_is_left_as_it_was_by_the_test_above() -> None:
     assert os.environ.get("MLFLOW_TRACKING_USERNAME") != "someone"
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_git_state_is_the_commit_and_whether_tracked_files_changed(tmp_path: Path) -> None:
     def git(*args: str) -> str:
         done = subprocess.run(
@@ -273,6 +274,7 @@ def test_two_files_of_one_name_go_under_the_names_of_their_folders(tmp_path: Pat
     assert placed([tmp_path / "a" / "M4.json", tmp_path / "b" / "m4.json"]) == ["a", "b"]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_settings_file_is_asked_about_by_name(tmp_path: Path) -> None:
     """`git_state` counts changed tracked files only. A settings file the tuning has just
     written for the first time is not tracked yet, so `uncommitted` asks git about it."""
@@ -372,6 +374,7 @@ def test_the_source_of_a_run_is_a_path_inside_the_repository(tmp_path: Path) -> 
     assert not Path(tracking.source_name()).is_absolute()
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_the_address_of_the_git_remote_is_logged_without_credentials(tmp_path: Path) -> None:
     def git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, check=True)

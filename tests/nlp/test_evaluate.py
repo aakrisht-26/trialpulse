@@ -118,6 +118,7 @@ def test_dev_errors_list_only_the_wrong_items() -> None:
     ]
 
 
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_a_test_result_ever_committed_blocks_a_second_scoring(tmp_path: Path) -> None:
     import subprocess
 
