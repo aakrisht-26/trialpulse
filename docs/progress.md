@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 10 (discrete-time models and tuning)**, built and reviewed on 2026-10-11 and waiting for Aakrisht's review (see "Step 10" below; its report starts with the three answers). Step 11 is not started. **Step 6** is in progress: 5,250 of 10,000 sample texts are labeled (2026-10-10; LLM test result: macro-F1 0.842); the final distilled model waits for the sample. Since 2026-10-10 the daily labeling batch is run by Claude, once per session.
+Current step: **Step 11 (pre-registration, locked test and results)**: the pre-registration is drafted for Aakrisht's review (2026-10-20; see "Review of Step 10" below, which starts with the three answers). The locked run waits for Step 6 and for the two open decisions of the draft. **Step 6** is in progress: 9,000 of 10,000 sample texts are labeled; the Windows scheduled task "TrialPulse labeling batch" runs the batch daily since 2026-10-19.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -82,12 +82,12 @@ Current step: **Step 10 (discrete-time models and tuning)**, built and reviewed 
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
 | 4 | Cohort, outcomes and landmarks | Approved 2026-10-07 and verified by Aakrisht (ADRs 0013 to 0016 accepted); training labels as of each origin approved 2026-10-07 |
 | 5 | Exploratory data analysis | Approved 2026-10-07; merged from PR aakrisht-26/trialpulse#2. Rebuilt on the cohort as of 2018-01-01 on 2026-10-07, as decided in the review of the follow-up: no finding changed in substance |
-| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); the sample is labeled in daily batches, by Claude since 2026-10-10 (5,250 of 10,000 on 2026-10-10); distilled model provisional |
+| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); the sample is labeled in daily batches, by a Windows scheduled task since 2026-10-19 (9,000 of 10,000 on 2026-10-20); distilled model provisional |
 | 7 | Point-in-time features | Approved 2026-10-10 (ADRs 0018 to 0021 accepted). Personal-title sponsor names no longer stored (ADR 0022, warehouse schema version 3), decided in the same review |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
 | 9 | Baselines and Cox analysis | Approved 2026-10-10 (ADR 0023 accepted). Runs logged to DagsHub after the review |
-| 10 | Discrete-time models and tuning | Built and independently reviewed 2026-10-11 (ADR 0024 accepted, ADR 0025 proposed); waiting for Aakrisht's review |
-| 11 | Pre-registration, locked test and results | Not started |
+| 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
+| 11 | Pre-registration, locked test and results | Pre-registration drafted 2026-10-20 for review (not registered, no tag); the locked run waits for Step 6 |
 | 12 | Explainability, model card, data card | Not started |
 | 13 | Scoring pipeline and model registry | Not started |
 | 14 | Live ingestion and daily workflow | Not started |
@@ -130,6 +130,13 @@ Added on 2026-10-10, from Aakrisht's review of Step 9:
 16. **Step 10: calibration is reported by registration year and by sponsor class,** including the small classes where M1 overpredicts about twofold, and those tables are used to recommend a calibration remedy. Recommend only; none is applied.
 17. **Step 10: every run is logged to DagsHub.** Development origins only; the lock stays.
 18. **Analysis that informs a modeling decision ends on 2018-01-01,** also inside a diagnosis: the later-fate table of the calibration diagnosis was cut there (Section 10).
+
+Added on 2026-10-19, from Aakrisht's review of Step 10:
+
+19. **Step 11: one job per origin and per comparison pair, all from one clean commit** recorded in every result file.
+20. **A job expected to pass an hour is estimated and proposed first,** except the jobs of Step 11 under item 19.
+21. **The locked test waits for Step 6,** so that the operational and scientific results use the final labels.
+22. **Step 6: the Windows scheduled task "TrialPulse labeling batch" runs the batch daily** (since 2026-10-19; it replaces item 14's batch once per session). When the sample reaches 10,000, Step 6 is finished as specified and the task is removed.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -1776,6 +1783,92 @@ git status --short
 uv run python -m trialpulse.eval.compare
 uv run python -m trialpulse.eval.results_dev
 ```
+
+### Review of Step 10 (Aakrisht, 2026-10-19) and what was done
+
+**Approved.** His decisions, and what followed from each (the three answers: what was done with evidence is below; my own decisions are listed and flagged after it; nothing was skipped, and what waits is named at the end):
+
+- **ADR 0025 is accepted** and is in the Amendments of CLAUDE.md. **The 14 decisions are approved, including the three runs over an hour.** From now on a job expected to pass an hour is estimated and proposed first, except under the Step 11 rule below. Every job of this follow-up was under an hour (the longest, M4 at origin 2017, took 30 minutes).
+- **The champion is M4 without the text families** (ADR 0026, accepted, in the Amendments). The text families stay in the report as the ablation rung `m4-text` and leave the production pipeline (Steps 13 and 14 compute no text feature). The rung that Step 10 called `m4-sponsor` is the new M4. M4 keeps the settings tuned in Step 10, which were chosen for the same learner on every family (decision of mine, flagged: a new tuning would cost about an hour and was not asked for). M1 is unchanged. Done in commit `1577bb0`.
+  - **The runs** (ten jobs, all from commit `af27a17` with a clean tree, each logged to DagsHub): M4 for origin 2016 and for origin 2017; `m4-text` for each origin; the recalibration measurement; and the comparisons M4 against M1, M3, M0 and `m4-amendments`, and `m4-text` against M4. M4's AUC at 12 months over all landmark indices is 0.7196 at 2016 and 0.7295 at 2017, and `m4-text`'s 0.7138 and 0.7242: the numbers of `m4-sponsor` and of the old M4 in Step 10, as they should be (the fits are deterministic and only the names changed). The paired differences in AUC at 12 months, over both origins: M4 minus M1 at landmark 0 +0.0071 (-0.0092 to +0.0227); M4 minus M3 +0.0281 (+0.0218 to +0.0346); M4 minus M0 +0.1766 (+0.1655 to +0.1889); M4 minus `m4-amendments` +0.0146 (+0.0106 to +0.0184); `m4-text` minus M4 -0.0055 (-0.0101 to -0.0011). `docs/results_dev.md` was regenerated from these files.
+  - **The result files of Step 10 under the old names** (`m4_dev.json` with text, `m4-sponsor_dev.json`, their scores, the combined comparison file, and three probe files of Step 9 that were never logged) were moved to `data/results/superseded/step10/`, not deleted. The comparisons that do not involve M4 (M2 against M0, M3 against M2, `m4-amendments` against `m4-design`) were split from the combined file into one file per pair, keeping the record of the run that made them.
+- **Calibration: rule first, then the measurement.** The rule was committed as ADR 0027 (commit `a8ba38c`) before any measurement code existed: the candidate (per hazard a slope, and an intercept per landmark index, fitted on the last training year with the model that did not see it) is adopted only if, at both development origins, the 24-month slope is closer to 1, the 24-month intercepts at landmarks 0 and 6 are each closer to 0, the 12-month Brier score is not larger, and the 12-month AUC is not lower by more than 0.001. The last condition is mine, added to the rule you agreed to, so that calibration is never bought with ranking. The measurement code came next (commit `af27a17`, tested on synthetic data), and then the measurement on the development origins only. **It failed the rule, so M4 stays as it is.** At both origins the slope at 24 months moved toward 1 (0.824 to 0.958 at 2016, 0.851 to 0.927 at 2017) and the Brier score did not grow, but the 24-month intercept at landmark 0 moved away from 0 at both (+0.053 to +0.055, and +0.176 to +0.235), and at 2017 the AUC at 12 months fell by 0.00125, beyond the 0.001 allowed. The numbers are in the Result section of ADR 0027; nothing above that line was changed, so its status line still reads "Proposed" and the Result section says it was not adopted.
+- **Step 11 runs: one job per origin and per comparison pair, all from one clean commit.** Built in commit `8e69a93`: the comparison reads a model's scores from a run of one origin or of the development origins (both at once are refused) and writes one file per pair with a run of its own; the results document puts results by origin and comparisons by pair together, and lists every run. The check that every result file of the locked run names one commit is in the run plan of the pre-registration, to be built before the unlock.
+- **Step 6.** The batch of 2026-10-19 (started at 23:05 through the new script) took the sample from 5,250 to 7,200 labels and stopped at the provider's daily limit. The scheduled task's first run, on 2026-10-20, stopped on a network outage (ConnectError, no label lost), and I started the batch again by hand at 22:22. The sample now holds 9,000 of 10,000 labels. The Windows scheduled task **"TrialPulse labeling batch"** runs `scripts/labeling_batch.ps1` every day at 10:00, or at the next start when the laptop was off at 10:00 (it needs the network, runs only while Aakrisht is logged on, and stops itself after 3 hours). It logs to `data/logs/labeling/labeling_<date>.log`, and does nothing once the sample is complete. To remove it, in PowerShell: `Unregister-ScheduledTask -TaskName "TrialPulse labeling batch" -Confirm:$false`. Step 6 is then finished as specified, and the locked test waits for it.
+- **The pre-registration draft** is in `docs/preregistration.md` (commit `0e261b6`), from the development evidence only, for your review: H1 to H5 with statistics, development evidence, predicted values and acceptable ranges; the champion's predicted AUC, Brier score and lift at 10% on 2018 and 2019, at 12 and 24 months, with the derivation; the Step 11 run plan with an estimate per job; and two open decisions (section 5 of the draft, below). It says "not yet registered" and has no registration date, so the lock refuses it on two counts, and no tag was created.
+- **An independent check of the draft and of the ADR 0027 result** (three auditors, each followed by a verifier that tried to refute every finding; development files only, nothing written to the repository) confirmed 18 findings in my first draft (some of them one defect found by two auditors), all fixed before the commit. The ones that changed substance: the H5 disclosure said "no outcome of 2020 was examined", but the EDA's monthly rates include terminations and withdrawals of 2017 to 2023, which is now disclosed; the AUC range was said to be built from parts that did not add up to it (it is now derived per horizon, so the 24-month range is narrower, 0.689 to 0.725); the Brier prediction used the 2017 rate where every other prediction uses the mean of the origins (now 0.031); the run plan's times for M4 were below the measured development runs and its totals did not add up; H5's interval ignored that a trial has rows at several origins (now one cluster bootstrap); the UNKNOWN sensitivity analysis and the secondary target had no definition (now open decisions); the disclaimer was missing; and a sentence of the ADR 0027 result drew a cause from the intercepts that the numbers do not show (now descriptive). One finding was refuted; 13 minor ones were checked by me and applied.
+- **The default local test run** took 335 seconds here (365 on your machine). The tests that took half a second or more, and the tests that share a module fixture costing seconds, are marked slow (commit `8947465` and the commits after it): 671 tests run by default in about 51 seconds here, 208 are deselected by default here, and CI still runs all of them.
+
+Decisions of mine in this follow-up, besides the two flagged above:
+
+1. **The ablation rung of the text families is named `m4-text`**, and the rungs are `m4-design`, `m4-amendments`, M4, `m4-text`.
+2. **M4 and `m4-text` were run origin by origin** (one job each), so that `m4-text`, which took 74 minutes over both origins in Step 10, stays under an hour per job without a proposal. The other models keep their Step 10 runs over both origins: nothing about them changed.
+3. **`scipy` is not used:** the recalibration is fitted by a Newton iteration in numpy (16 parameters), because scipy is only an indirect dependency and adding it directly would need your approval.
+4. **H3's development evidence uses the provisional reason labels** of 2026-09-26 (a classifier trained on 1,375 LLM labels); the draft says so and is to be updated with the final labels before registration.
+5. **The scheduled task** runs as you, only while you are logged on, with a 3-hour limit, and starts late after a missed 10:00. I chose these settings; nothing else on the machine was changed.
+6. **In the draft:** H1's condition is on point estimates (both development intervals include 0); the drift allowance of the AUC ranges (0.009) and the base-rate band of the Brier ranges (a fifth either way) are judgments, labeled as such; the reason labels are pinned by their SHA-256 at registration, because they live in the uncommitted `data/` folder; and the registered code is the tagged commit itself, so every job runs with HEAD there.
+
+Open questions:
+
+1. **The pre-registration draft:** your review of the hypotheses, predictions and ranges, and of the run plan.
+2. **The UNKNOWN sensitivity analysis** (draft, section 5.1). **Recommended:** a cohort variant where a trial lapsed at the cutoff has an early stop at its lapse date and the rows the main cohort leaves out are added; the champion, trained as in the main run, scores it, per origin. ADR 0014 already says it cannot be done by relabeling the landmark table. The alternative, training on the variant's labels too, answers a different question.
+3. **The secondary target** (cause-specific CIFs, draft section 5.2). No model built so far predicts one. Options: (a) a cause-specific M4 with four outcomes per interval, fitted on the development origins after Step 6 and registered as a secondary model (about 35 to 46 minutes per locked origin), **recommended**, because Section 6 locks the target and Step 11 lists cause-specific results; (b) the H3 analysis as the cause-specific results and no such model, which needs an ADR.
+4. **A new tuning of M4** (about an hour): not recommended. The settings were tuned for this learner, and a second budget on the same development rows would make M4's development numbers more optimistic.
+5. **The recalibration:** none asked. The rule said a failed measurement leaves M4 as it is, and nothing is tuned; a second candidate would be a second measurement on the same rows. If calibration matters for the product (Step 13 serves the cumulative incidence as a risk), the honest remedy is to report H4's result as it comes and state the overconfidence at the top in the model card.
+
+Waiting, not skipped: Step 6 (the sample, then the final model, the reasons table and the EDA addendum); the code of the locked run (item 3 of the draft's run plan); the two decisions above; then the registration and the locked run.
+
+Files touched in this follow-up: `CLAUDE.md` (Amendments: ADRs 0025 and 0026), `docs/adr/0025-...md`, `docs/adr/0026-the-champion-leaves-out-the-text-families.md` (new), `docs/adr/0027-recalibration-of-m4.md` (new; its Result section added after the measurement), `src/trialpulse/models/discrete_time.py`, `src/trialpulse/models/recalibration.py` (new), `src/trialpulse/eval/compare.py`, `src/trialpulse/eval/results_dev.py`, `scripts/labeling_batch.ps1` (new), `tests/models/test_recalibration.py` (new), `tests/models/test_discrete_time.py`, `tests/models/test_tuned_files.py`, `tests/eval/test_compare.py`, `tests/eval/test_results_dev.py`, `tests/eval/test_walkforward.py`, the slow marks in 33 test modules (commit `8947465`), `docs/results_dev.md`, `docs/preregistration.md`, `docs/progress.md`, `docs/interview_notes.md`.
+
+#### Verify (PowerShell)
+
+What to expect:
+
+- The default `pytest` run takes about a minute; the full run (`-m "slow or not slow"`) about six.
+- `results_dev` reads the result files of your machine, which do not hold this follow-up's runs. Your files of Step 10 under the old names make it report the old M4 (with text) as M4, so it will refuse or will not reproduce the committed `docs\results_dev.md` until the runs below are made. That is expected; the committed document lists the runs it came from.
+- The scheduled task line should show the next run at 10:00 tomorrow. The labeler's status makes no API call.
+
+```powershell
+git switch main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+uv run pytest tests/models/test_recalibration.py -q -m "slow or not slow"
+Get-ScheduledTask -TaskName "TrialPulse labeling batch" | Get-ScheduledTaskInfo
+uv run python -m trialpulse.nlp.llm_labeler --status
+```
+
+To reproduce the new results (each job under an hour, about four hours in all; move any of your Step 10 files under the old names aside first, skipping a line whose file you do not have):
+
+```powershell
+New-Item -ItemType Directory -Force data\results\superseded\step10\predictions
+Move-Item data\results\walkforward\m4_dev.json data\results\superseded\step10\
+Move-Item data\results\walkforward\m4-sponsor_dev.json data\results\superseded\step10\
+Move-Item data\results\walkforward\predictions\m4_dev data\results\superseded\step10\predictions\
+Move-Item data\results\walkforward\predictions\m4-sponsor_dev data\results\superseded\step10\predictions\
+Move-Item data\results\compare\dev.json data\results\superseded\step10\
+uv run python -m trialpulse.eval.walkforward --model m4 --origins 2016
+uv run python -m trialpulse.eval.walkforward --model m4 --origins 2017
+uv run python -m trialpulse.eval.walkforward --model m4-text --origins 2016
+uv run python -m trialpulse.eval.walkforward --model m4-text --origins 2017
+uv run python -m trialpulse.models.recalibration --origins dev
+uv run python -m trialpulse.eval.compare --pairs m2:m0
+uv run python -m trialpulse.eval.compare --pairs m3:m2
+uv run python -m trialpulse.eval.compare --pairs m4-amendments:m4-design
+uv run python -m trialpulse.eval.compare --pairs m4:m1
+uv run python -m trialpulse.eval.compare --pairs m4:m3
+uv run python -m trialpulse.eval.compare --pairs m4:m0
+uv run python -m trialpulse.eval.compare --pairs m4:m4-amendments
+uv run python -m trialpulse.eval.compare --pairs m4-text:m4
+uv run python -m trialpulse.eval.results_dev
+git diff --stat docs/results_dev.md
+```
+
+`git diff` should then show changes in the "Runs" and "Run time and size" tables only. Do not run CLAUDE.md's Step 10 command with `--tune`: it would tune the new M4 again (about an hour) and rewrite `config/tuned/m4.json`, which ADR 0026 keeps as it is.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
