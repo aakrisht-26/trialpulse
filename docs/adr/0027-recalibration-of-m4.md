@@ -43,3 +43,17 @@ If any condition fails at either origin, M4 stays as it is, and Step 11 evaluate
 ## Result
 
 (Added after the measurement; nothing above this line changes.)
+
+**Not adopted.** Measured once, on 2026-10-20, from commit `af27a17` with a clean tree (MLflow run `recalibration-dev`, run id `b8a10a86`; result file `data/results/recalibration/dev.json`). The candidate failed condition 2 at both origins and condition 4 at origin 2017, so M4 stays as it is and Step 11 evaluates it without a recalibration.
+
+| Condition | 2016, without | 2016, with | 2017, without | 2017, with |
+| --- | --- | --- | --- | --- |
+| 1. Pooled slope, 24 months | 0.824 | 0.958 (holds) | 0.851 | 0.927 (holds) |
+| 2. Intercept at landmark 0, 24 months | +0.053 | +0.055 (fails) | +0.176 | +0.235 (fails) |
+| 2. Intercept at landmark 6, 24 months | -0.220 | -0.158 (holds) | -0.145 | -0.057 (holds) |
+| 3. Brier score, 12 months | 0.03159 | 0.03150 (holds) | 0.03006 | 0.03004 (holds) |
+| 4. AUC, 12 months | 0.71957 | 0.72029 (holds) | 0.72949 | 0.72824 (fails, -0.00125) |
+
+The fitted slopes of the early-stop hazard were 0.83 (2016) and 0.90 (2017): the last training year confirms that the model is overconfident about early stops, and the pooled slope moved toward 1 at both origins. The intercepts per landmark index did not all follow. At 24 months the intercepts at landmark indices 5 and 6 moved toward 0 at both origins (the predicted risk there came down, as intended), but at origin 2017 the intercepts at indices 0 to 4 moved away from 0, and at origin 2016 those at indices 0, 2 and 3 did (index 0 by 0.003). At 12 months the intercept at index 0 moved toward 0 at origin 2016 (+0.092 to +0.034) and away from 0 at origin 2017 (+0.271 to +0.294). The slopes and the completion intercepts act together with the early-stop intercepts, so the measurement does not show which part of the candidate causes the result at the early landmarks. The candidate was fitted on 216,307 and 236,031 person-period rows; the measurement took 7 to 8 minutes per origin (918 seconds for the whole command).
+
+What this leaves for Step 11: the calibration slope of H4 is predicted from the raw model, and the 24-month values (0.824 and 0.851 on the development origins) are the ones nearest the lower bound of 0.8.
