@@ -331,7 +331,7 @@ def test_the_models_rank_and_calibrate_on_later_trials(
     assert auc["m4 24"] > 0.63
     summary = fitted["m4"].summary
     assert summary["person_period_rows"] == sum(summary["outcomes"].values())
-    assert summary["features"] == 123
+    assert summary["features"] == 54  # ADR 0026: every family but text
     assert summary["model_bytes"] > 10_000
     assert summary["fit_seconds"] >= 0
     assert summary["predicted_rows"] == len(rows)
