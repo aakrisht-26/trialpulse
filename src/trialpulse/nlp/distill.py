@@ -16,6 +16,11 @@ production, and it labels every early stop in the cohort.
     uv run python -m trialpulse.nlp.distill --predict-test
     uv run python -m trialpulse.nlp.distill --label-all
 
+`--label-all` writes the labels of every early stop as CSV and Parquet, and as the table
+`stop_reasons` of the warehouse (data/warehouse.duckdb, CLAUDE.md Step 6), with how many of
+the cohort's early stops it covers. A warehouse build replaces the whole file, so after a
+rebuild `--label-all` is run again.
+
 Expected refusals (a provisional model sent to test prediction, a missing model or input, a
 gold text in the training set) print one "refused:" line and exit with code 2.
 """
@@ -217,6 +222,37 @@ def reason_rows(
     ]
 
 
+STOP_REASONS_TABLE = "stop_reasons"
+
+
+def write_warehouse_table(
+    parquet_path: Path, warehouse: Path, outcomes: Path
+) -> dict[str, int] | None:
+    """The reasons as the warehouse table `stop_reasons`, replaced as a whole, and how many of
+    the cohort's early stops (event 1 in the cohort's outcomes) have a label. None when there
+    is no warehouse."""
+    if not warehouse.is_file():
+        return None
+    source = parquet_path.as_posix().replace("'", "''")
+    with duckdb.connect(str(warehouse)) as con:
+        con.execute(
+            f"CREATE OR REPLACE TABLE {STOP_REASONS_TABLE} AS "
+            f"SELECT * FROM read_parquet('{source}') ORDER BY nct_id"
+        )
+        rows = con.execute(f"SELECT count(*) FROM {STOP_REASONS_TABLE}").fetchone()
+        coverage = {"rows": int(rows[0]) if rows else 0}
+        if outcomes.is_file():
+            found = con.execute(
+                f"""SELECT count(*), count(r.nct_id)
+                FROM read_parquet('{outcomes.as_posix()}') o
+                LEFT JOIN {STOP_REASONS_TABLE} r ON r.nct_id = o.trial_id
+                WHERE o.event = 1 AND NOT o.reversal"""
+            ).fetchone()
+            coverage["cohort_early_stops"] = int(found[0]) if found else 0
+            coverage["cohort_early_stops_labeled"] = int(found[1]) if found else 0
+    return coverage
+
+
 def write_reasons(rows: Sequence[Mapping[str, str]], folder: Path) -> tuple[Path, Path]:
     """The labels as CSV and as Parquet (through DuckDB)."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -321,6 +357,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"labeled {len(rows)} early stops: {dict(Counter(r['label'] for r in rows).most_common())}"
     )
     print(f"wrote {csv_path} and {parquet_path}")
+    from trialpulse.cohort.build import OUTCOMES_PATH
+    from trialpulse.warehouse.build import WAREHOUSE_PATH
+
+    coverage = write_warehouse_table(parquet_path, WAREHOUSE_PATH, OUTCOMES_PATH)
+    if coverage is None:
+        print(f"no warehouse at {WAREHOUSE_PATH}: the table {STOP_REASONS_TABLE} was not written")
+    else:
+        print(f"wrote the warehouse table {STOP_REASONS_TABLE}: {json.dumps(coverage)}")
     return 0
 
 

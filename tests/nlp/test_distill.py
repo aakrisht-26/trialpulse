@@ -135,3 +135,30 @@ def test_the_parquet_confidence_is_numeric(tmp_path: Path) -> None:
     source = f"read_parquet('{parquet_path.as_posix()}')"
     query = f"SELECT avg(confidence), typeof(confidence) FROM {source} GROUP BY 2"
     assert duckdb.sql(query).fetchone() == (0.91, "DOUBLE")
+
+
+def test_the_reasons_become_a_warehouse_table_with_their_coverage(tmp_path: Path) -> None:
+    """Step 6: the table stop_reasons of the warehouse, replaced as a whole, and how many of
+    the cohort's early stops (a reversal excluded) have a label."""
+    from trialpulse.nlp.distill import STOP_REASONS_TABLE, write_warehouse_table
+
+    rows = [
+        {"nct_id": nct, "status": "TERMINATED", "text_sha256": "a", "label": "accrual",
+         "reason_group": "operational", "confidence": "0.9", "model": "m"}
+        for nct in ("NCT1", "NCT2")
+    ]  # fmt: skip
+    _, parquet_path = write_reasons(rows, tmp_path / "reasons")
+    warehouse, outcomes = tmp_path / "warehouse.duckdb", tmp_path / "outcomes.parquet"
+    assert write_warehouse_table(parquet_path, warehouse, outcomes) is None  # no warehouse yet
+    with duckdb.connect(str(warehouse)) as con:
+        con.execute(f"CREATE TABLE {STOP_REASONS_TABLE} AS SELECT 'stale' AS nct_id")
+        con.execute(
+            f"""COPY (SELECT * FROM (VALUES ('NCT1', 1, false), ('NCT3', 1, false),
+              ('NCT4', 2, false), ('NCT5', 1, true)) t(trial_id, event, reversal))
+            TO '{outcomes.as_posix()}' (FORMAT parquet)"""
+        )
+    coverage = write_warehouse_table(parquet_path, warehouse, outcomes)
+    assert coverage == {"rows": 2, "cohort_early_stops": 2, "cohort_early_stops_labeled": 1}
+    with duckdb.connect(str(warehouse)) as con:
+        names = con.execute(f"SELECT nct_id FROM {STOP_REASONS_TABLE} ORDER BY 1").fetchall()
+    assert names == [("NCT1",), ("NCT2",)]
