@@ -4,9 +4,7 @@ Research demo. Not medical advice. Not for patient decision-making.
 
 An elevated early-stop risk is an operational statement about a registry record; it says nothing about whether a treatment works.
 
-Status: draft, not yet registered.
-
-**Draft for Aakrisht's review, not yet registered, revised on 2026-10-21 from the development origins only (2016-01-01 and 2017-01-01).** It has no registration date, so the test lock cannot accept it (ADR 0004). It becomes the registration when, after review, a commit replaces the status line and this note with a `Registered:` line and adds the hashes of the reason labels (section 1), and the annotated tag `prereg-v1` is created on that commit and pushed (ADRs 0004 and 0009). No model has been scored on 2018-01-01, 2019-01-01 or 2020-01-01.
+Registered: 2026-10-21
 
 **Every exposure to the locked period so far.** These show numbers, outcomes or texts from 2018 on:
 
@@ -32,6 +30,8 @@ The models, their features and their tuned settings were chosen on the developme
 - **The cause-specific results** are the H3 analysis; no cause-specific model is fitted (ADR 0028).
 - **The UNKNOWN sensitivity analysis** (ADR 0029): a cohort variant in which a trial whose last state is lapsed at the data cutoff has an early stop at its lapse date instead of a censoring, holding the rows the main cohort leaves out, with features from the same code. The champion, trained exactly as in the main run, scores its evaluation rows; AUC, Brier score, lift at 10% and calibration slope at 12 and 24 months are reported per test origin beside the main results. Development evidence, from a dry run of the code on the development origins (runs `m4-2016-unknown-as-stop` and `m4-2017-unknown-as-stop`): AUC at 12 months 0.712 and 0.696, at 24 months 0.611 and 0.595, and calibration slope at 24 months 0.453 and 0.398 (2016 and 2017), against 0.720 and 0.729, 0.706 and 0.707, and 0.824 and 0.851 in the main run. No hypothesis rests on it.
 - **The reason labels** (H3): the final distilled classifier of Step 6, trained on the full 10,000-text sample, applied to every early stop. They live in the uncommitted `data/` folder, so the registration records their SHA-256 on two lines, each made of the file name, the word `sha256:` and the 64-character hash, as in a line `distilled.joblib sha256:` followed directly by the hash and a line `early_stop_reasons.parquet sha256:` followed directly by the hash (the H3 job also accepts spaces or backticks between the parts, and refuses two different hashes for one file); the H3 job refuses to run if either differs and records both in its result file.
+  - distilled.joblib sha256:b8ccf2750b6edb10a350aa34dc46817c4d5e98aac9286015ad0486928a1ccbea
+  - early_stop_reasons.parquet sha256:dc40e718e7bd33b7d88466c05f55db49342e253ec8fe5968c8f00c9454588410
 - **The code:** the commit tagged `prereg-v1`. Every job of Step 11 runs with HEAD at that commit and a clean tree, and every result file records that commit and the tag object (ADR 0004); `docs/results.md` is generated only from such files (`trialpulse.eval.results` refuses anything else). If a defect forces a code change after the unlock, every job is run again from the new commit, and the change and its reason are reported in `docs/results.md`.
 - **A prediction is falsified** when its observed value falls outside its acceptable range, or when the condition of its hypothesis fails. Falsified predictions are reported in `docs/results.md`, not hidden. The predictions and ranges are also given in a machine-readable block at the end of this file, which the generator of `docs/results.md` reads from the tagged commit.
 
