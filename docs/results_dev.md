@@ -58,6 +58,8 @@ Difference in AUC at 12 months, by landmark index:
 | 4 | +0.1296 (+0.1061 to +0.1516) | +0.0450 (+0.0316 to +0.0584) | +0.0214 (+0.0092 to +0.0343) |
 | 5 | +0.1145 (+0.0907 to +0.1434) | +0.0537 (+0.0393 to +0.0688) | +0.0317 (+0.0174 to +0.0461) |
 | 6 | +0.0768 (+0.0443 to +0.1096) | +0.0651 (+0.0462 to +0.0831) | +0.0303 (+0.0125 to +0.0482) |
+| Slope per landmark index |  | +0.0049 (+0.0021 to +0.0076) |  |
+| Landmarks 4 to 6 minus landmarks 0 and 1 |  | +0.0200 (+0.0074 to +0.0316) |  |
 
 Difference in AUC at 24 months, by landmark index:
 
@@ -70,6 +72,8 @@ Difference in AUC at 24 months, by landmark index:
 | 4 | +0.1269 (+0.1082 to +0.1458) | +0.0443 (+0.0339 to +0.0540) | +0.0159 (+0.0069 to +0.0255) |
 | 5 | +0.1226 (+0.1013 to +0.1455) | +0.0553 (+0.0435 to +0.0676) | +0.0242 (+0.0138 to +0.0349) |
 | 6 | +0.0953 (+0.0692 to +0.1223) | +0.0698 (+0.0558 to +0.0832) | +0.0280 (+0.0147 to +0.0417) |
+| Slope per landmark index |  | +0.0074 (+0.0052 to +0.0096) |  |
+| Landmarks 4 to 6 minus landmarks 0 and 1 |  | +0.0310 (+0.0208 to +0.0408) |  |
 
 ## Ablation of M4
 
@@ -635,11 +639,11 @@ A run is logged to MLflow with the commit it started from, the dataset revision,
 | M4-TEXT, origin 2016 | the MLflow server named by MLFLOW_TRACKING_URI | `m4-text-2016` in `trialpulse-development`, id `6bd982818e9845f3893c29c49868a182` | `af27a17` | no |
 | M4-TEXT, origin 2017 | the MLflow server named by MLFLOW_TRACKING_URI | `m4-text-2017` in `trialpulse-development`, id `8abd731d3af443c28a6aea6ef889d256` | `af27a17` | no |
 | Paired differences: M2 minus M0 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-dev` in `trialpulse-development`, id `10f78aece7854c5f98e40e3999b9b91a` | `085a6b8` | no |
-| Paired differences: M3 minus M2 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-dev` in `trialpulse-development`, id `10f78aece7854c5f98e40e3999b9b91a` | `085a6b8` | no |
+| Paired differences: M3 minus M2 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m3-vs-m2` in `trialpulse-development`, id `55849e463e09448b8d3d768bf4036829` | `008b42d` | no |
 | Paired differences: M4-AMENDMENTS minus M4-DESIGN | the MLflow server named by MLFLOW_TRACKING_URI | `compare-dev` in `trialpulse-development`, id `10f78aece7854c5f98e40e3999b9b91a` | `085a6b8` | no |
 | Paired differences: M4-TEXT minus M4 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m4-text-vs-m4` in `trialpulse-development`, id `4a47d33e57f24031baead52808c4fadf` | `af27a17` | no |
 | Paired differences: M4 minus M0 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m4-vs-m0` in `trialpulse-development`, id `e42d1ed69cf244cc8c9824ebc803c2b5` | `af27a17` | no |
-| Paired differences: M4 minus M1 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m4-vs-m1` in `trialpulse-development`, id `6a2c70f5df7047188eb56ee59bc9fd91` | `af27a17` | no |
+| Paired differences: M4 minus M1 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m4-vs-m1` in `trialpulse-development`, id `4650b4666d3d41e58156f472c998656d` | `082a380` | no |
 | Paired differences: M4 minus M3 | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m4-vs-m3` in `trialpulse-development`, id `31ebb5774d794af8a5c3b5b98965e03b` | `af27a17` | no |
 | Paired differences: M4 minus M4-AMENDMENTS | the MLflow server named by MLFLOW_TRACKING_URI | `compare-m4-vs-m4-amendments` in `trialpulse-development`, id `b7b5f7f5986e481c895224edd54be4cc` | `af27a17` | no |
 | Cox models at landmark 0 | the MLflow server named by MLFLOW_TRACKING_URI | `cox-l0` in `trialpulse-development`, id `c80457344dc74209a5c964dd89ff7b34` | `6d36e97` | no |
