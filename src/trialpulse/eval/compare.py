@@ -15,20 +15,30 @@ each other. For each pair and horizon: the difference in IPCW AUC and in IPCW Br
 on all landmark indices both models score, at landmark 0, and, for the rungs of the ladder,
 at each landmark index.
 
-**The number reported** is the mean of the difference over the development origins, the
-quantity the selection rule of Section 9 reads. A trial can have evaluation rows at two
-origins; it is one cluster, so the origins are resampled together.
+**The number reported** is the mean of the difference over the origins compared (the
+development origins, or the locked test origins), the quantity the selection rule of
+Section 9 reads. A trial can have evaluation rows at two origins; it is one cluster, so the
+origins are resampled together.
+
+**The trend over landmark indices** (H2 of `docs/preregistration.md`). For a pair compared
+at every landmark index, each resample also gives the seven differences in AUC, the slope
+of the least-squares line through them against the landmark index, and the mean
+difference at the late landmarks (4 to 6) minus the mean at the early ones (0 and 1). The
+weights of each landmark index are those of its own slice, as in the table by index.
 
 **The rows** come from the prediction files the walk-forward harness writes, from a run of
-the development origins (`data/results/walkforward/predictions/<model>_dev/`) or from a run
-of one origin (`<model>_2016/`), never both. Two models are compared only on rows that both
+the origins compared (`data/results/walkforward/predictions/<model>_dev/`) or from a run of
+one origin (`<model>_2016/`), never both. Two models are compared only on rows that both
 files hold with the same follow-up, event, landmark date and censoring group: anything else
 means the files are not from the same evaluation rows, and is refused.
 
-**One file per pair** (`data/results/compare/dev/<model>__<baseline>.json`), so that each
-pair can be its own job (`--pairs m4:m1`); `trialpulse.eval.results_dev` reads them all.
+**One file per pair** (`data/results/compare/<dev or test>/<model>__<baseline>.json`), so
+that each pair can be its own job (`--pairs m4:m1`); `trialpulse.eval.results_dev` reads the
+development ones.
 
-Development origins only. A prediction file of a locked origin is never read here.
+**The test lock.** `--origins test` compares on the locked test origins (2018 and 2019) and
+needs `--unlock-test` and every condition of ADR 0004; the lock is checked before any
+prediction file is read, and the unlock is recorded in each result file.
 """
 
 import argparse
@@ -37,7 +47,7 @@ import json
 import sys
 import time as clock
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,13 +61,19 @@ from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.dates import add_months, days_between
 from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap_many
 from trialpulse.eval.ipcw import FloatArray, IntArray, horizon_labels_and_weights
+from trialpulse.eval.lock import TestLockError, require_unlock
 from trialpulse.eval.metrics import weighted_auc
-from trialpulse.eval.walkforward import PREDICTIONS_DIR, predictions_path
+from trialpulse.eval.walkforward import PREDICTIONS_DIR, predictions_path, select_origins
 
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "compare"
 PAIR_SEPARATOR = "__"  # m4__m1.json: model names hold hyphens, never two underscores
 DEV = "dev"
+TEST = "test"
 ALL = "all"
+TREND = "trend"
+# The late-minus-early contrast of the trend (H2 of docs/preregistration.md).
+EARLY_INDICES: tuple[int, ...] = (0, 1)
+LATE_INDICES: tuple[int, ...] = (4, 5, 6)
 # (model, baseline, what the difference shows, also at every landmark index)
 PAIRS: tuple[tuple[str, str, str, bool], ...] = (
     ("m2", "m0", "the design family, the landmark index and a regression for a curve", True),
@@ -98,14 +114,14 @@ class Paired:
         )  # fmt: skip
 
 
-def prediction_file(folder: Path, model: str, origin: dt.date) -> Path:
-    """The scores of a model at a development origin: from a run of the development origins
-    or from a run of that origin alone. Both at once are two answers to one question, and
-    are refused."""
+def prediction_file(folder: Path, model: str, origin: dt.date, spec: str = DEV) -> Path:
+    """The scores of a model at an origin: from a run of the origins compared (`spec`, "dev"
+    or "test") or from a run of that origin alone. Both at once are two answers to one
+    question, and are refused."""
     found = [
         path
         for path in (
-            predictions_path(folder, model, DEV, origin),
+            predictions_path(folder, model, spec, origin),
             predictions_path(folder, model, str(origin.year), origin),
         )
         if path.is_file()
@@ -118,7 +134,7 @@ def prediction_file(folder: Path, model: str, origin: dt.date) -> Path:
     if not found:
         raise FileNotFoundError(
             f"no prediction file of {model} for origin {origin}. Create it with: uv run python "
-            f"-m trialpulse.eval.walkforward --model {model} --origins dev (or --origins "
+            f"-m trialpulse.eval.walkforward --model {model} --origins {spec} (or --origins "
             f"{origin.year} for that origin alone)"
         )
     return found[0]
@@ -129,13 +145,18 @@ def pair_path(folder: Path, model: str, baseline: str) -> Path:
 
 
 def load_pair(
-    folder: Path, model: str, baseline: str, origins: Sequence[dt.date], months: Sequence[int]
+    folder: Path,
+    model: str,
+    baseline: str,
+    origins: Sequence[dt.date],
+    months: Sequence[int],
+    spec: str = DEV,
 ) -> Paired:
     """The rows both models scored, for every origin, in one table."""
     parts: dict[str, list[npt.NDArray[Any]]] = {}
     for position, origin in enumerate(origins):
-        a = prediction_file(folder, model, origin)
-        b = prediction_file(folder, baseline, origin)
+        a = prediction_file(folder, model, origin, spec)
+        b = prediction_file(folder, baseline, origin, spec)
         scores = ", ".join(f"a.score_{m} AS model_{m}, b.score_{m} AS baseline_{m}" for m in months)
         with duckdb.connect() as con:
             shared = f"""landmark_index IN (
@@ -218,6 +239,53 @@ def differences(rows: Paired, months: int, idx: npt.NDArray[np.int64]) -> dict[s
     return {"delta_auc": float(np.mean(auc)), "delta_brier": float(np.mean(brier))}
 
 
+def slope(x: Sequence[float], y: Sequence[float]) -> float:
+    """The slope of the least-squares line through (x, y); NaN if any y is not finite."""
+    xs, ys = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+    if len(xs) < 2 or not np.all(np.isfinite(ys)):
+        return float("nan")
+    dx = xs - xs.mean()
+    return float(np.sum(dx * (ys - ys.mean())) / np.sum(dx**2))
+
+
+def trend(
+    rows: Paired, months: int, idx: npt.NDArray[np.int64], indices: Sequence[int]
+) -> dict[str, float]:
+    """On some rows (a resample of trials): the difference in AUC at each landmark index,
+    each with the weights of its own slice; the slope of the least-squares line through
+    them against the landmark index; and the late-minus-early contrast."""
+    k = rows.landmark_index[idx]
+    delta = {i: differences(rows, months, idx[k == i])["delta_auc"] for i in indices}
+    late = [delta[i] for i in LATE_INDICES if i in delta]
+    early = [delta[i] for i in EARLY_INDICES if i in delta]
+    contrast = float(np.mean(late) - np.mean(early)) if late and early else float("nan")
+    return {
+        "slope": slope(list(indices), [delta[i] for i in indices]),
+        "late_minus_early": contrast,
+    }
+
+
+def compare_trend(
+    rows: Paired, months: int, indices: Sequence[int], cfg: ProjectConfig, n_resamples: int
+) -> dict[str, Any]:
+    """The trend of one pair at one horizon, with paired intervals: trials are resampled
+    once, and both models are scored at every landmark index of each resample."""
+    if not np.all(np.isin(rows.landmark_index, indices)):
+        raise ValueError("the trend needs every landmark index of the rows")
+    return {
+        "landmark_indices": list(indices),
+        "late_indices": [i for i in LATE_INDICES if i in indices],
+        "early_indices": [i for i in EARLY_INDICES if i in indices],
+        **cluster_bootstrap_many(
+            rows.trial_id,
+            lambda idx: trend(rows, months, idx, indices),
+            n_resamples,
+            cfg.seeds.default,
+            cfg.evaluation.confidence_level,
+        ),
+    }
+
+
 def compare_slice(
     rows: Paired, months: int, origins: Sequence[dt.date], cfg: ProjectConfig, n_resamples: int
 ) -> dict[str, Any]:
@@ -256,9 +324,10 @@ def compare_pair(
     by_index: bool,
     origins: Sequence[dt.date],
     n_resamples: int,
+    spec: str = DEV,
 ) -> dict[str, Any]:
     months = tuple(cfg.horizons_months)
-    rows = load_pair(folder, model, baseline, origins, months)
+    rows = load_pair(folder, model, baseline, origins, months, spec)
     indices = [int(k) for k in np.unique(rows.landmark_index)]
     slices: dict[str, Paired] = {}
     if len(indices) > 1:
@@ -279,6 +348,15 @@ def compare_pair(
                     f"{model} against {baseline}, {m} months, slice {name}: {exc}"
                 ) from exc
         out["horizons"][str(m)] = per_slice
+    if by_index and len(indices) > 2:
+        out[TREND] = {}
+        for m in months:
+            try:
+                found = compare_trend(rows, m, indices, cfg, n_resamples)
+            except BootstrapError as exc:
+                where = f"{model} against {baseline}, {m} months, trend"
+                raise BootstrapError(f"{where}: {exc}") from exc
+            out[TREND][str(m)] = found
     return out
 
 
@@ -310,19 +388,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--pairs", default=None, help="for example m4:m1,m3:m2 (default: every pair with files)"
     )
+    parser.add_argument(
+        "--origins", default=DEV, choices=[DEV, TEST], help="the origins compared (default dev)"
+    )
+    parser.add_argument("--unlock-test", action="store_true", help="see ADR 0004")
     tracking.add_arguments(parser)
     args = parser.parse_args(argv)
     cfg = load_project_config()
     started = tracking.git_state()
-    origins = [o.date for o in cfg.walk_forward.origins if o.role == DEV]
-    if not origins:
-        raise RefusedError("config/project.yaml names no development origin")
+    selected = select_origins(cfg, args.origins)
+    try:  # before any prediction file is read
+        unlock = require_unlock({o.role for o in selected}, REPO_ROOT, args.unlock_test)
+    except TestLockError as exc:
+        raise RefusedError(str(exc)) from exc
+    origins = [o.date for o in selected]
+    spec = args.origins
     wanted = None if args.pairs is None else {tuple(p.split(":")) for p in args.pairs.split(",")}
     n = cfg.evaluation.bootstrap_resamples if args.resamples is None else args.resamples
     result: dict[str, Any] = {
-        "origins_spec": DEV,
+        "origins_spec": spec,
         "origins": [o.isoformat() for o in origins],
         "bootstrap_resamples": n,
+        "unlock": None
+        if unlock is None
+        else {**asdict(unlock), "registered": unlock.registered.isoformat()},
         "pairs": [],
         "skipped": [],
     }
@@ -332,8 +421,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             continue
         have = all(
             any(
-                predictions_path(args.predictions_dir, name, spec, origin).is_file()
-                for spec in (DEV, str(origin.year))
+                predictions_path(args.predictions_dir, name, kind, origin).is_file()
+                for kind in (spec, str(origin.year))
             )
             for name in (model, baseline)
             for origin in origins
@@ -344,7 +433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pair_started = clock.perf_counter()
         try:
             compared = compare_pair(
-                cfg, args.predictions_dir, model, baseline, by_index, origins, n
+                cfg, args.predictions_dir, model, baseline, by_index, origins, n, spec
             )
         except BootstrapError as exc:
             print(f"failed: {exc}", file=sys.stderr)
@@ -372,7 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         files = {args.out: result}
     else:
         files = {
-            pair_path(RESULTS_DIR / DEV, p["model"], p["baseline"]): {
+            pair_path(RESULTS_DIR / spec, p["model"], p["baseline"]): {
                 **{k: v for k, v in result.items() if k not in ("pairs", "skipped", "seconds")},
                 "pairs": [p],
                 "seconds": p["seconds"],
@@ -385,7 +474,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"wrote {path}")
     if not args.no_track:
         only = result["pairs"][0] if len(result["pairs"]) == 1 else None
-        name = f"compare-{only['model']}-vs-{only['baseline']}" if only else "compare-dev"
+        base = f"compare-{only['model']}-vs-{only['baseline']}" if only else "compare"
+        name = base if spec == DEV and only else f"{base}-{spec}"
+        lock_tags = {} if unlock is None else {
+            "test_lock": "unlocked", "unlock_tag_object": unlock.tag_object,
+            "unlock_commit": unlock.commit,
+        }  # fmt: skip
         try:
             logged = tracking.log_run(
                 name,
@@ -394,7 +488,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_metrics(result),
                 list(files),
                 cfg,
-                tags={"step": "10", "kind": "comparison", "roles": DEV},
+                tags={"step": "10" if unlock is None else "11", "kind": "comparison",
+                      "roles": spec, **lock_tags},
                 local=args.local_tracking,
                 state=started,
             )  # fmt: skip

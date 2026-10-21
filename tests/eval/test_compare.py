@@ -446,3 +446,161 @@ def test_scores_of_a_run_by_origin_are_read_and_two_runs_are_refused(
         compare.load_pair(tmp_path, "m4", "m3", ORIGINS, (12, 24))
     with pytest.raises(FileNotFoundError, match="--model m2 --origins dev"):
         compare.prediction_file(tmp_path, "m2", ORIGINS[0])
+
+
+# The trend over landmark indices (H2 of docs/preregistration.md) and the test lock.
+
+
+def test_the_slope_is_that_of_the_least_squares_line() -> None:
+    assert compare.slope([0, 1, 2, 3], [1.0, 3.0, 5.0, 7.0]) == pytest.approx(2.0)
+    assert compare.slope([0, 1, 2], [0.5, 0.5, 0.5]) == pytest.approx(0.0)
+    # Not the line through the end points: 0, 0, 3 has the least-squares slope 1.5.
+    assert compare.slope([0, 1, 2], [0.0, 0.0, 3.0]) == pytest.approx(1.5)
+    assert np.isnan(compare.slope([0, 1, 2], [0.1, float("nan"), 0.3]))
+    assert np.isnan(compare.slope([0], [0.1]))
+
+
+def _indexed(
+    n_trials: int, gain: float, level: float = 0.0, seed: int = 5, repeat: bool = False
+) -> compare.Paired:
+    """Rows at landmark indices 0 to 4 of two origins. The model sees the risk with a weight
+    of 0.3 + `level` + `gain` times the landmark index; the baseline with a weight of 0.3.
+    A third of the trials are at both origins (one cluster). With `repeat`, every index of
+    an origin holds the same rows."""
+    parts: dict[str, list[Any]] = {key: [] for key in (
+        "origin", "trial_id", "landmark_index", "time", "event", "groups", "h12", "h24",
+        "m12", "m24", "b12", "b24")}  # fmt: skip
+    for position in (0, 1):
+        for k in range(5):
+            rng = np.random.default_rng(seed + 10 * position + (0 if repeat else k))
+            risk = rng.normal(size=n_trials)
+            stop = rng.exponential(1.0 / (0.0008 * np.exp(1.0 * risk)))
+            complete = rng.exponential(1.0 / 0.0012, n_trials)
+            censor = rng.exponential(3000.0, n_trials)
+            end = np.minimum(np.minimum(stop, complete), censor)
+            event = np.where(censor <= np.minimum(stop, complete), 0,
+                             np.where(stop < complete, 1, 2))  # fmt: skip
+            noise = rng.normal(size=n_trials)
+            first = position * (2 * n_trials // 3)  # origin 1 shares a third of the trials
+            parts["origin"].append(np.full(n_trials, position))
+            parts["trial_id"].append(np.array([f"T{first + i:07d}" for i in range(n_trials)]))
+            parts["landmark_index"].append(np.full(n_trials, k))
+            parts["time"].append(np.floor(end) + 1.0)
+            parts["event"].append(event)
+            parts["groups"].append(np.where(risk > 0, "INDUSTRY", "OTHER"))
+            parts["h12"].append(np.full(n_trials, 365.0))
+            parts["h24"].append(np.full(n_trials, 730.0))
+            for months in (12, 24):
+                weight = 0.3 + level + gain * k
+                parts[f"m{months}"].append(1 / (1 + np.exp(-(weight * risk + noise - 3))))
+                parts[f"b{months}"].append(1 / (1 + np.exp(-(0.3 * risk + noise - 3))))
+    a = {key: np.concatenate(value) for key, value in parts.items()}
+    return compare.Paired(
+        a["origin"].astype(np.int64), a["trial_id"], a["landmark_index"].astype(np.int64),
+        a["time"], a["event"].astype(np.int64), a["groups"],
+        {12: a["h12"], 24: a["h24"]}, {12: a["m12"], 24: a["m24"]}, {12: a["b12"], 24: a["b24"]},
+    )  # fmt: skip
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_the_trend_is_the_slope_through_the_differences_at_each_index(cfg: ProjectConfig) -> None:
+    rows = _indexed(800, gain=0.25)
+    indices = [0, 1, 2, 3, 4]
+    found = compare.compare_trend(rows, 12, indices, cfg, 60)
+    every = np.arange(len(rows), dtype=np.int64)
+    deltas = [
+        compare.differences(rows, 12, every[rows.landmark_index == k])["delta_auc"] for k in indices
+    ]
+    assert found["slope"]["estimate"] == pytest.approx(compare.slope(indices, deltas))
+    late, early = np.mean(deltas[4:]), np.mean(deltas[:2])
+    assert found["late_minus_early"]["estimate"] == pytest.approx(late - early)
+    assert found["late_indices"] == [4]
+    assert found["early_indices"] == [0, 1]
+    assert found["landmark_indices"] == indices
+    # The gain grows with the index by construction, and 1,600 trials see it.
+    assert found["slope"]["ci_low"] > 0
+    assert found["slope"]["resamples"] == found["slope"]["valid_resamples"] == 60
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_a_level_is_not_a_trend(cfg: ProjectConfig) -> None:
+    """The same rows at every index and a model better by the same amount: the difference
+    is the same at every index of every resample, so the slope and the contrast are 0 in
+    each, while the difference itself is not."""
+    rows = _indexed(600, gain=0.0, level=0.4, repeat=True)
+    flat = compare.compare_trend(rows, 12, [0, 1, 2, 3, 4], cfg, 30)
+    for name in ("slope", "late_minus_early"):
+        for key in ("estimate", "ci_low", "ci_high"):
+            assert flat[name][key] == pytest.approx(0.0, abs=1e-12)
+    every = np.arange(len(rows), dtype=np.int64)
+    assert compare.differences(rows, 12, every[rows.landmark_index == 2])["delta_auc"] > 0.02
+
+
+def test_a_model_against_itself_has_no_trend(cfg: ProjectConfig) -> None:
+    rows = _indexed(300, gain=0.2)
+    same = compare.Paired(
+        rows.origin, rows.trial_id, rows.landmark_index, rows.time, rows.event, rows.groups,
+        rows.horizon, rows.model, rows.model,
+    )  # fmt: skip
+    found = compare.compare_trend(same, 24, [0, 1, 2, 3, 4], cfg, 20)
+    for name in ("slope", "late_minus_early"):
+        assert found[name]["estimate"] == found[name]["ci_low"] == found[name]["ci_high"] == 0
+
+
+def test_the_trend_refuses_rows_of_an_index_it_was_not_given(cfg: ProjectConfig) -> None:
+    with pytest.raises(ValueError, match="every landmark index"):
+        compare.compare_trend(_indexed(100, gain=0.1), 12, [0, 1, 2], cfg, 5)
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_a_pair_compared_at_every_index_carries_its_trend(
+    cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    """Through the files: three landmark indices or more give a trend at each horizon, whose
+    estimate is the slope through the differences of the slices by index."""
+    rows = _indexed(400, gain=0.25)
+    for position, origin in enumerate(ORIGINS):
+        mine = rows.origin == position
+        frame = pd.DataFrame({
+            "trial_id": rows.trial_id[mine], "landmark_index": rows.landmark_index[mine],
+            "landmark_date": np.datetime64(origin, "D")
+            + (30 + 183 * rows.landmark_index[mine]).astype("timedelta64[D]"),
+            "time": rows.time[mine], "event": rows.event[mine],
+            "censoring_group": rows.groups[mine],
+            **{f"up_{m}": rows.model[m][mine] for m in (12, 24)},
+            **{f"flat_{m}": rows.baseline[m][mine] for m in (12, 24)},
+        })  # fmt: skip
+        _save(tmp_path, "m3", origin, frame, "up")
+        _save(tmp_path, "m2", origin, frame, "flat")
+    result = compare.compare_pair(cfg, tmp_path, "m3", "m2", True, ORIGINS, 40)
+    assert set(result[compare.TREND]) == {"12", "24"}
+    for months in ("12", "24"):
+        by_index = result["horizons"][months]
+        deltas = [by_index[str(k)]["delta_auc"]["estimate"] for k in range(5)]
+        estimate = result[compare.TREND][months]["slope"]["estimate"]
+        assert estimate == pytest.approx(compare.slope(range(5), deltas))
+    # Without the comparison by index, no trend.
+    assert compare.TREND not in compare.compare_pair(cfg, tmp_path, "m3", "m2", False, ORIGINS, 5)
+
+
+def test_the_locked_origins_need_the_unlock_before_any_file_is_read(tmp_path: Path) -> None:
+    args = ["--predictions-dir", str(tmp_path / "nothing"), "--origins", "test", "--no-track"]
+    with pytest.raises(RefusedError, match="--unlock-test"):
+        compare.main(args)
+
+
+def test_the_unlock_flag_alone_does_not_open_the_locked_origins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The flag is one condition of ADR 0004; without the tag the comparison is refused,
+    before any prediction file is read (there are none here)."""
+    from trialpulse.eval import lock
+
+    def no_tag(repo: Path, unlock_flag: bool, remote: str = lock.REMOTE) -> lock.Unlock:
+        raise lock.TestLockError(f"git tag {lock.TAG} does not exist")
+
+    monkeypatch.setattr(lock, "check_unlock", no_tag)
+    args = ["--predictions-dir", str(tmp_path / "nothing"), "--origins", "test",
+            "--unlock-test", "--no-track"]  # fmt: skip
+    with pytest.raises(RefusedError, match="prereg-v1 does not exist"):
+        compare.main(args)

@@ -837,3 +837,34 @@ def _write_named(root: Path, stem: str, result: dict[str, Any]) -> None:
     path = root / "walkforward" / f"{stem}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result), encoding="utf-8")
+
+
+def test_the_trend_of_a_pair_is_shown_under_its_differences_by_index(
+    step10: tuple[Path, Path],
+) -> None:
+    """H2 of the pre-registration: the slope over the landmark indices and the late-minus-early
+    contrast, with their paired intervals, under the table by index; a pair without a trend
+    leaves its cells empty."""
+    root, tuned = step10
+    path = root / "compare" / "dev.json"
+    compared = json.loads(path.read_text(encoding="utf-8"))
+    trend = {
+        months: {
+            "slope": {"estimate": 0.0049 + shift, "ci_low": 0.0012, "ci_high": 0.0088},
+            "late_minus_early": {"estimate": 0.02 + shift, "ci_low": 0.004, "ci_high": 0.036},
+        }
+        for months, shift in (("12", 0.0), ("24", 0.001))
+    }
+    (pair,) = [p for p in compared["pairs"] if (p["model"], p["baseline"]) == ("m3", "m2")]
+    pair["trend"] = trend
+    path.write_text(json.dumps(compared), encoding="utf-8")
+    cfg = load_project_config()
+    text = results_dev.document(cfg, results_dev.load_results(root), root, tuned)
+    by_index = text.split("Difference in AUC at 12 months, by landmark index:")[1]
+    by_index = by_index.split("Difference in AUC at 24 months")[0]
+    assert "| Slope per landmark index |  | +0.0049 (+0.0012 to +0.0088) |" in by_index
+    assert (
+        "| Landmarks 4 to 6 minus landmarks 0 and 1 |  | +0.0200 (+0.0040 to +0.0360) |"
+    ) in by_index
+    later = text.split("Difference in AUC at 24 months, by landmark index:")[1]
+    assert "| Slope per landmark index |  | +0.0059 (+0.0012 to +0.0088) |" in later

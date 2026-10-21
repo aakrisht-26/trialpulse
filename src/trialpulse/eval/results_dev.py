@@ -28,7 +28,7 @@ from typing import Any
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
-from trialpulse.eval.compare import PAIRS
+from trialpulse.eval.compare import PAIRS, TREND
 from trialpulse.models import discrete_time
 from trialpulse.reports import markdown_table, write_text_if_changed
 
@@ -558,6 +558,15 @@ def _compare_section(compared: dict[str, Any] | None, horizons: Sequence[str]) -
             [k, *(_delta(p["horizons"][months].get(k), "delta_auc") for p in by_index)]
             for k in indices
         ]
+        # The trend over the indices, with its paired interval (H2 of the pre-registration).
+        if any(TREND in p for p in by_index):
+            table += [
+                [label, *(_delta(p.get(TREND, {}).get(months), key) for p in by_index)]
+                for label, key in (
+                    ("Slope per landmark index", "slope"),
+                    ("Landmarks 4 to 6 minus landmarks 0 and 1", "late_minus_early"),
+                )
+            ]
         lines += [
             f"Difference in AUC at {months} months, by landmark index:",
             "",
