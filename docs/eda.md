@@ -329,8 +329,67 @@ Table 13. Descriptive only: average monthly rates per 1,000 trials under follow-
 8. **Descriptive only: the first COVID months show as suspensions, not as stops.** New suspensions averaged 0.63 per 1,000 trials per month in 2017 to 2019 and reached 10.6 in April 2020 (Figure 9). Terminations averaged 1.94 per 1,000 in 2017 to 2019 and 2.03 in March to May 2020; withdrawals 1.11 and 1.19 (Table 13).
    *Implication for modeling:* Nothing here shapes a model (Section 10). Before 2018 a suspension on record marks elevated early-stop risk (finding 4). Whether that still held for the suspensions of 2020 cannot be read from monthly rates, and it was not examined, because it would read outcomes of the locked stress-test period. It is a natural hypothesis for the Step 11 pre-registration, which should then say that these descriptive aggregates prompted it. Monitoring should track the suspension rate as a drift signal.
 
+## 9. Addendum: why trials stop (descriptive only)
+
+*Descriptive only, not used for modeling.* The reason labels of Step 6 (the distilled classifier, `tfidf-logreg n=10000 trained 2026-10-21T06:54:51+00:00`) for the cohort's early stops of every year, the locked test and stress-test years included. The reason text is the one each record shows in the registry's current record (API v2, pulled for Step 6), which can differ from the text posted with the first terminal version; an early stop without a current record has none. A share is a share of the stops with a reason text; a stop without one has no label. Phase is the current record, as in section 2; the sponsor class is that of the version in effect at the stop. Operational reasons are accrual, business, funding, administrative and covid19; scientific reasons are safety and efficacy (Section 11).
+
+![Figure 10: Why trials stopped, by year of the stop](figures/eda_10_reasons_by_year_descriptive.png)
+
+*Figure 10. Why trials stopped, by year of the stop.*
+
+Table 14. Descriptive only: reasons by year of the stop.
+
+| Year of the stop | Early stops | With a reason | accrual | business | funding | administrative | covid19 | safety | efficacy | other |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2008 | 229 | 183 | 33.3% | 13.1% | 5.5% | 7.1% | 0.0% | 8.7% | 7.1% | 25.1% |
+| 2009 | 515 | 414 | 26.3% | 16.4% | 9.9% | 8.9% | 0.0% | 10.4% | 11.1% | 16.9% |
+| 2010 | 723 | 582 | 33.5% | 14.1% | 5.7% | 14.8% | 0.0% | 6.5% | 8.6% | 16.8% |
+| 2011 | 1,008 | 814 | 36.7% | 13.1% | 8.2% | 13.3% | 0.0% | 5.5% | 7.9% | 15.2% |
+| 2012 | 1,246 | 942 | 39.6% | 11.8% | 8.2% | 14.8% | 0.0% | 5.1% | 8.5% | 12.1% |
+| 2013 | 1,306 | 1,007 | 41.1% | 11.1% | 10.4% | 11.6% | 0.0% | 5.3% | 6.7% | 13.8% |
+| 2014 | 1,606 | 1,229 | 40.6% | 9.2% | 9.8% | 13.4% | 0.0% | 4.4% | 9.0% | 13.6% |
+| 2015 | 1,780 | 1,463 | 39.6% | 9.2% | 10.2% | 17.4% | 0.1% | 3.9% | 7.0% | 12.6% |
+| 2016 | 1,943 | 1,517 | 40.8% | 9.4% | 9.6% | 17.7% | 0.0% | 3.4% | 7.3% | 11.9% |
+| 2017 | 2,060 | 1,749 | 37.7% | 12.2% | 12.0% | 15.4% | 0.0% | 2.7% | 6.1% | 14.0% |
+| 2018 | 2,104 | 1,871 | 31.5% | 12.3% | 11.1% | 18.0% | 0.0% | 3.1% | 6.6% | 17.4% |
+| 2019 | 2,211 | 2,041 | 35.2% | 11.7% | 12.2% | 16.8% | 0.0% | 3.1% | 6.0% | 14.9% |
+| 2020 | 2,552 | 2,398 | 27.9% | 12.1% | 9.2% | 15.9% | 12.3% | 2.9% | 6.4% | 13.2% |
+| 2021 | 2,736 | 2,636 | 25.5% | 11.3% | 11.2% | 12.8% | 18.6% | 1.7% | 6.0% | 12.9% |
+| 2022 | 3,002 | 2,890 | 24.6% | 15.2% | 9.9% | 14.8% | 14.9% | 1.7% | 5.6% | 13.3% |
+| 2023 | 3,039 | 2,946 | 27.7% | 18.7% | 11.2% | 13.3% | 8.7% | 2.3% | 5.4% | 12.8% |
+| 2024 | 2,963 | 2,871 | 26.8% | 20.2% | 10.3% | 15.8% | 4.6% | 2.0% | 6.7% | 13.7% |
+| 2025 | 2,709 | 2,642 | 26.5% | 21.8% | 13.2% | 15.3% | 3.0% | 1.5% | 6.3% | 12.4% |
+| 2026 | 2,040 | 1,949 | 24.2% | 22.7% | 12.5% | 17.4% | 2.4% | 1.7% | 5.2% | 13.8% |
+| All | 35,772 | 32,144 | 30.9% | 14.8% | 10.7% | 15.2% | 5.4% | 2.9% | 6.5% | 13.7% |
+
+Table 15. Descriptive only: reasons by phase group (current record).
+
+| Phase group | Early stops | With a reason | accrual | business | funding | administrative | covid19 | safety | efficacy | other |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Early (Early Phase 1, Phase 1) | 5,167 | 4,542 | 21.8% | 29.0% | 9.8% | 12.7% | 2.8% | 5.2% | 5.7% | 13.0% |
+| Mid (Phase 1/2, Phase 2) | 9,442 | 8,504 | 30.6% | 19.5% | 9.9% | 10.7% | 3.0% | 4.0% | 9.4% | 12.7% |
+| Late (Phase 2/3, Phase 3) | 4,095 | 3,551 | 27.1% | 21.9% | 6.6% | 10.3% | 3.3% | 3.4% | 14.3% | 13.0% |
+| Post-approval (Phase 4) | 3,200 | 2,905 | 40.9% | 7.2% | 11.4% | 17.3% | 4.3% | 2.2% | 3.5% | 13.2% |
+| No phase (N/A) | 13,628 | 12,642 | 33.1% | 6.2% | 12.5% | 19.9% | 8.8% | 1.4% | 3.3% | 14.9% |
+| No current record | 240 | 0 | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| All | 35,772 | 32,144 | 30.9% | 14.8% | 10.7% | 15.2% | 5.4% | 2.9% | 6.5% | 13.7% |
+
+Table 16. Descriptive only: reasons by lead sponsor class at the stop.
+
+| Sponsor class | Early stops | With a reason | accrual | business | funding | administrative | covid19 | safety | efficacy | other |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| INDUSTRY | 10,737 | 9,228 | 18.2% | 41.2% | 2.2% | 6.3% | 2.9% | 4.2% | 11.3% | 13.7% |
+| OTHER | 23,604 | 21,730 | 36.0% | 4.1% | 14.3% | 18.7% | 6.4% | 2.4% | 4.6% | 13.7% |
+| NIH | 418 | 269 | 39.4% | 4.8% | 4.1% | 23.4% | 1.5% | 7.1% | 7.8% | 11.9% |
+| Remaining classes | 1,013 | 917 | 34.6% | 5.3% | 13.2% | 18.5% | 7.6% | 2.3% | 3.6% | 14.8% |
+| All | 35,772 | 32,144 | 30.9% | 14.8% | 10.7% | 15.2% | 5.4% | 2.9% | 6.5% | 13.7% |
+
+- Descriptive only: of 32,144 early stops with a reason (89.9% of 35,772), 76.9% give an operational reason (COVID-19 5.4% of them all), 9.4% a scientific one and 13.7% another (Table 14).
+- Descriptive only: COVID-19 reasons peak in 2021 at 18.6% of the stops with a reason, against at most 0.1% before 2020 (Figure 10, Table 14).
+- Descriptive only: scientific reasons are 17.7% of the stops with a reason in the phase group Late (Phase 2/3, Phase 3) and 4.7% in No phase (N/A) (Table 15).
+- Descriptive only: business reasons are 41.2% for INDUSTRY sponsors and 4.1% for OTHER sponsors; accrual 18.2% and 36.0% (Table 16).
+
 ## Not in this report
 
-- **Why trials stop.** The reasons section (distribution by year, phase and sponsor class) waits for the final Step 6 labels and will be added as an addendum.
 - **Therapeutic areas.** No point-in-time therapeutic area exists in the version history (ADR 0007), so there is no breakdown by area.
 - **Models.** Nothing here fits or evaluates a model, and no locked origin was evaluated.
