@@ -101,6 +101,15 @@ class Sources:
     final_outcomes: Path
     warehouse: Path
     current_fields: Path
+    reasons: Path | None = None  # the final reason labels of Step 6, when they exist
+
+
+# The reason labels of Step 6 (CLAUDE.md Section 11), in the taxonomy's order.
+REASON_LABELS: tuple[str, ...] = (
+    "accrual", "business", "funding", "administrative", "covid19", "safety", "efficacy", "other",
+)  # fmt: skip
+OPERATIONAL_REASONS: tuple[str, ...] = ("accrual", "business", "funding", "administrative")
+SCIENTIFIC_REASONS: tuple[str, ...] = ("safety", "efficacy")
 
 
 def connect(sources: Sources) -> duckdb.DuckDBPyConnection:
@@ -744,6 +753,66 @@ def covid_period_monthly(
         out[f"{key}_per_1000"] = np.divide(
             1000 * count, open_trials, out=np.zeros_like(count), where=open_trials > 0
         )
+    return out
+
+
+def reasons_breakdown(con: duckdb.DuckDBPyConnection, reasons: Path) -> dict[str, Rows]:
+    """DESCRIPTIVE ONLY: it reads early stops of every year, the locked years included, and
+    the final cohort's outcomes. For the cohort's early stops (the first terminal status is
+    TERMINATED or WITHDRAWN; trials in the window, interventional in some version, without a
+    reversal), the share of each reason label among the stops with a label, by year of the
+    stop, by phase group (the current record, as in section 2) and by the lead sponsor class
+    of the version in effect at the stop. A stop without a label had no reason text."""
+    data = con.execute(
+        f"""WITH stops AS (
+          SELECT trial_id, year(terminal_date) AS stop_year, terminal_date FROM final_outcomes
+          WHERE event = {EVENT_STOP} AND in_window AND ever_in_population AND NOT reversal
+        ),
+        at_stop AS (
+          SELECT s.trial_id, arg_max(v.lead_sponsor_class, v.nct_version) AS sponsor_class
+          FROM stops s JOIN wh.versions v
+            ON v.nct_id = s.trial_id AND v.effective_date <= s.terminal_date
+          GROUP BY s.trial_id
+        )
+        SELECT s.trial_id, s.stop_year, coalesce(a.sponsor_class, 'MISSING') AS sponsor_class,
+          c.nct_id IS NOT NULL AS has_record,
+          coalesce(array_to_string(list_sort(c.phases), '|'), '') AS phases, r.label
+        FROM stops s
+        LEFT JOIN at_stop a USING (trial_id)
+        LEFT JOIN current_fields c ON c.nct_id = s.trial_id
+        LEFT JOIN read_parquet('{reasons.as_posix()}') r ON r.nct_id = s.trial_id
+        ORDER BY s.trial_id"""
+    ).fetchnumpy()
+    label = np.array([x if isinstance(x, str) else "" for x in data["label"].tolist()])
+    sponsor = np.asarray(data["sponsor_class"]).astype(str)
+    phase = np.array([
+        phase_group(p.split("|") if p else []) if found else NO_CURRENT_RECORD
+        for p, found in zip(np.asarray(data["phases"]).tolist(),
+                            np.asarray(data["has_record"]).tolist(), strict=True)
+    ])  # fmt: skip
+    groupings = {
+        "year": (np.asarray(data["stop_year"], dtype=np.int64), None),
+        "phase": (phase, (*PHASE_ORDER, OTHER_PHASE, NO_CURRENT_RECORD)),
+        "sponsor": (
+            np.where(np.isin(sponsor, MAIN_CLASSES), sponsor, OTHER_CLASSES),
+            SPONSOR_ORDER,
+        ),
+    }
+    out: dict[str, Rows] = {}
+    for name, (values, order) in groupings.items():
+        keys = sorted(set(values.tolist())) if order is None else [k for k in order if k in values]
+        rows: Rows = []
+        for key in [*keys, ALL]:
+            mask = np.ones(len(values), dtype=bool) if key == ALL else values == key
+            labeled = mask & (label != "")
+            n = int(labeled.sum())
+            row: dict[str, Any] = {"group": key, "early_stops": int(mask.sum()), "labeled": n}
+            for reason in REASON_LABELS:
+                row[reason] = float(np.sum(labeled & (label == reason)) / n) if n else 0.0
+            row["operational"] = sum(row[r] for r in OPERATIONAL_REASONS)
+            row["scientific"] = sum(row[r] for r in SCIENTIFIC_REASONS)
+            rows.append(row)
+        out[name] = rows
     return out
 
 

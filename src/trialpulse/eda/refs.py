@@ -42,6 +42,10 @@ FIGURES: dict[str, tuple[str, str]] = {
         "eda_09_covid_period_descriptive.png",
         "Monthly suspensions and stops, 2017 to 2023",
     ),
+    "reasons": (
+        "eda_10_reasons_by_year_descriptive.png",
+        "Why trials stopped, by year of the stop",
+    ),
 }
 TABLES: tuple[str, ...] = (
     "sponsor",
@@ -57,8 +61,25 @@ TABLES: tuple[str, ...] = (
     "post_dates",
     "posting_lag",
     "covid",
+    "reasons_year",
+    "reasons_phase",
+    "reasons_sponsor",
 )
 FIGURE_KEYS: tuple[str, ...] = tuple(FIGURES)
+# The addendum of Step 6 exists only with the final reason labels; its figure and tables come
+# last, so no other number depends on it.
+REASON_FIGURES: tuple[str, ...] = ("reasons",)
+REASON_TABLES: tuple[str, ...] = ("reasons_year", "reasons_phase", "reasons_sponsor")
+
+
+def figure_keys(with_reasons: bool) -> tuple[str, ...]:
+    """The figures the document holds, in order."""
+    return FIGURE_KEYS if with_reasons else tuple(k for k in FIGURE_KEYS if k not in REASON_FIGURES)
+
+
+def table_keys(with_reasons: bool) -> tuple[str, ...]:
+    """The tables the document holds, in order."""
+    return TABLES if with_reasons else tuple(k for k in TABLES if k not in REASON_TABLES)
 
 
 def figure_number(key: str) -> int:

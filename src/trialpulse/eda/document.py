@@ -12,6 +12,7 @@ Rules the text follows:
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from trialpulse.cli import RefusedError
 from trialpulse.eda import analysis as an
 from trialpulse.eda.findings import findings
 from trialpulse.eda.refs import FIGURES, cite, figure_number, table_number
@@ -35,6 +36,8 @@ from trialpulse.reports import markdown_table
 DISCLAIMER = "Research demo. Not medical advice. Not for patient decision-making."
 MODELING = "modeling"
 DESCRIPTIVE_ONLY = DESCRIPTIVE.capitalize()
+REASON_YEAR_MIN = 100  # a year enters the figure and the COVID sentence with this many labels
+COVID_YEAR = 2020
 
 
 def pct(value: float | None, digits: int = 1) -> str:
@@ -592,12 +595,97 @@ def _findings(res: Results) -> list[str]:
     return lines
 
 
-def _not_here() -> list[str]:
+def _reason_rows(rows: an.Rows) -> list[list[str]]:
+    return [
+        [str(r["group"]), num(r["early_stops"]), num(r["labeled"]),
+         *[pct(r[label]) for label in an.REASON_LABELS]]
+        for r in rows
+    ]  # fmt: skip
+
+
+def _reasons(res: Results) -> list[str]:
+    """The addendum of Step 6: why trials stopped, by year, phase and sponsor class."""
+    if res.reasons is None:
+        return []
+    by_year, by_phase, by_sponsor = (
+        res.reasons["year"],
+        res.reasons["phase"],
+        res.reasons["sponsor"],
+    )
+    total = by_year[-1]
+    if total["labeled"] == 0:
+        raise RefusedError("no early stop of the cohort has a reason label; label all again")
+    years = [r for r in by_year[:-1] if r["labeled"] >= REASON_YEAR_MIN] or [
+        r for r in by_year[:-1] if r["labeled"]
+    ]
+    peak = max(years, key=lambda r: r["covid19"])
+    before_covid = [r for r in years if int(r["group"]) < COVID_YEAR]
+    phases = [r for r in by_phase[:-1] if r["group"] in an.PHASE_ORDER]
+    most, least = (
+        max(phases, key=lambda r: r["scientific"]),
+        min(phases, key=lambda r: r["scientific"]),
+    )
+    sponsor = {r["group"]: r for r in by_sponsor}
+    headers = ["Early stops", "With a reason", *an.REASON_LABELS]
+    return [
+        "## 9. Addendum: why trials stop (descriptive only)",
+        "",
+        f"*{DESCRIPTIVE_ONLY}, not used for modeling.* The reason labels of Step 6 (the "
+        f"distilled classifier, `{res.reasons_model}`) for the cohort's early stops of every "
+        "year, the locked test and stress-test years included. A share is a share of the stops "
+        "with a reason text; a stop without one has no label. Phase is the current record, as "
+        "in section 2; the sponsor class is that of the version in effect at the stop. "
+        "Operational reasons are accrual, business, funding and administrative (covid19 is "
+        "shown on its own); scientific reasons are safety and efficacy.",
+        "",
+        *_figure("reasons"),
+        "",
+        _table("reasons_year", f"{DESCRIPTIVE_ONLY}: reasons by year of the stop."),
+        "",
+        *markdown_table(["Year of the stop", *headers], _reason_rows(by_year)),
+        "",
+        _table("reasons_phase", f"{DESCRIPTIVE_ONLY}: reasons by phase group (current record)."),
+        "",
+        *markdown_table(["Phase group", *headers], _reason_rows(by_phase)),
+        "",
+        _table(
+            "reasons_sponsor", f"{DESCRIPTIVE_ONLY}: reasons by lead sponsor class at the stop."
+        ),
+        "",
+        *markdown_table(["Sponsor class", *headers], _reason_rows(by_sponsor)),
+        "",
+        f"- {DESCRIPTIVE_ONLY}: of {num(total['labeled'])} early stops with a reason "
+        f"({pct(total['labeled'] / total['early_stops'])} of {num(total['early_stops'])}), "
+        f"{pct(total['operational'])} give an operational reason, {pct(total['scientific'])} a "
+        f"scientific one, {pct(total['covid19'])} COVID-19 and {pct(total['other'])} another "
+        f"{cite(tables='reasons_year')}.",
+        f"- {DESCRIPTIVE_ONLY}: COVID-19 reasons peak in {peak['group']} at {pct(peak['covid19'])} "
+        f"of the stops with a reason, against at most "
+        f"{pct(max((r['covid19'] for r in before_covid), default=0.0))} before {COVID_YEAR} "
+        f"{cite('reasons', 'reasons_year')}.",
+        f"- {DESCRIPTIVE_ONLY}: scientific reasons are {pct(most['scientific'])} of the stops "
+        f"with a reason in the phase group {most['group']} and {pct(least['scientific'])} in "
+        f"{least['group']} {cite(tables='reasons_phase')}.",
+        f"- {DESCRIPTIVE_ONLY}: business reasons are {pct(sponsor['INDUSTRY']['business'])} for "
+        f"INDUSTRY sponsors and {pct(sponsor['OTHER']['business'])} for OTHER sponsors; accrual "
+        f"{pct(sponsor['INDUSTRY']['accrual'])} and {pct(sponsor['OTHER']['accrual'])} "
+        f"{cite(tables='reasons_sponsor')}.",
+    ]
+
+
+def _not_here(res: Results) -> list[str]:
+    reasons = (
+        []
+        if res.reasons is not None
+        else [
+            "- **Why trials stop.** The reasons section (distribution by year, phase and sponsor "
+            "class) waits for the final Step 6 labels and will be added as an addendum."
+        ]
+    )
     return [
         "## Not in this report",
         "",
-        "- **Why trials stop.** The reasons section (distribution by year, phase and sponsor "
-        "class) waits for the final Step 6 labels and will be added as an addendum.",
+        *reasons,
         "- **Therapeutic areas.** No point-in-time therapeutic area exists in the version "
         "history (ADR 0007), so there is no breakdown by area.",
         "- **Models.** Nothing here fits or evaluates a model, and no locked origin was evaluated.",
@@ -617,6 +705,7 @@ def render(res: Results) -> str:
         _post_dates(res),
         _covid(res),
         _findings(res),
-        _not_here(),
+        _reasons(res),
+        _not_here(res),
     ]
-    return "\n\n".join("\n".join(section) for section in sections) + "\n"
+    return "\n\n".join("\n".join(section) for section in sections if section) + "\n"

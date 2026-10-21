@@ -17,7 +17,7 @@ from trialpulse.config import load_project_config
 from trialpulse.eda import analysis as an
 from trialpulse.eda import charts
 from trialpulse.eda import figures as fg
-from trialpulse.eda.refs import FIGURES
+from trialpulse.eda.refs import FIGURES, figure_keys
 from trialpulse.eda.results import (
     DESCRIPTIVE,
     PHASE_LABEL,
@@ -52,9 +52,10 @@ def drawn(
 
         monkeypatch.setattr(charts.fg, primitive, record)
     paths = charts.draw(results, tmp_path)
-    assert paths == [tmp_path / name for name, _ in FIGURES.values()]
+    keys = figure_keys(results.reasons is not None)
+    assert paths == [tmp_path / FIGURES[key][0] for key in keys]
     assert [call["path"] for call in calls] == paths  # one figure per file, in report order
-    return dict(zip(FIGURES, calls, strict=True))
+    return dict(zip(keys, calls, strict=True))
 
 
 @pytest.mark.slow  # over half a second; CI runs every test

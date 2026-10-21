@@ -23,7 +23,7 @@ from trialpulse.eda import analysis as an
 from trialpulse.eda import document, report
 from trialpulse.eda.document import pct
 from trialpulse.eda.findings import BUILDERS, Finding, StaleFindingError
-from trialpulse.eda.refs import FIGURES, TABLES, cite
+from trialpulse.eda.refs import FIGURES, TABLES, cite, figure_keys, table_keys
 from trialpulse.eda.results import STATE_MONTHS, STATE_TABLE_MONTHS, Results, compute
 
 from .conftest import BEFORE, COVID_YEAR, World, cif, followed
@@ -95,6 +95,8 @@ def _args(world: World, out: Path) -> list[str]:
         "--cohort-dir", str(sources.final_landmarks.parent),
         "--current-fields", str(sources.current_fields),
         "--out", str(out),
+        # Not the real reason labels: the report of this made-up world has no addendum.
+        "--reasons", str(out.parent / "no_reasons.parquet"),
     ]  # fmt: skip
 
 
@@ -136,7 +138,8 @@ def test_the_numbers_of_a_statement_are_in_a_table_it_cites(text: str) -> None:
     """Each percentage and each rate with two decimals in a bullet appears in a table the
     bullet cites, so a bullet cannot cite the wrong table for its numbers."""
     tables = {
-        n: " ".join(" ".join(row) for row in _table(text, key)) for n, key in enumerate(TABLES, 1)
+        TABLES.index(key) + 1: " ".join(" ".join(row) for row in _table(text, key))
+        for key in table_keys("## 9. Addendum" in text)
     }
     body = text[text.index("\n## 1. ") : text.index("\n## 8. ")]
     checked = 0
@@ -151,13 +154,15 @@ def test_the_numbers_of_a_statement_are_in_a_table_it_cites(text: str) -> None:
 
 
 def test_figures_and_tables_are_numbered_in_order_and_cited_ones_exist(text: str) -> None:
+    with_reasons = "## 9. Addendum" in text
+    figures, table_names = figure_keys(with_reasons), table_keys(with_reasons)
     images = re.findall(r"!\[Figure (\d+): ([^\]]+)\]\(figures/([^)]+)\)", text)
-    assert [int(n) for n, _, _ in images] == list(range(1, len(FIGURES) + 1))
+    assert [int(n) for n, _, _ in images] == list(range(1, len(figures) + 1))
     assert [(caption, name) for _, caption, name in images] == [
-        (caption, name) for name, caption in FIGURES.values()
+        (FIGURES[key][1], FIGURES[key][0]) for key in figures
     ]
     tables = [int(n) for n in re.findall(r"^Table (\d+)\. ", text, flags=re.MULTILINE)]
-    assert tables == list(range(1, len(TABLES) + 1))
+    assert tables == list(range(1, len(table_names) + 1))
     for cited in re.findall(r"Table (\d+)", text):
         assert int(cited) in tables
     for cited in re.findall(r"Figures? (\d+)", text):
@@ -487,7 +492,7 @@ def test_the_command_writes_the_report_and_every_figure_the_same_way_twice(
     assert report.main(_args(world, out)) == 0
     assert out.read_bytes() == text.encode("utf-8")
     figures = sorted((out.parent / "figures").iterdir())
-    assert [p.name for p in figures] == sorted(name for name, _ in FIGURES.values())
+    assert [p.name for p in figures] == sorted(FIGURES[key][0] for key in figure_keys(False))
     first = {p.name: p.read_bytes() for p in figures}
     for name, content in first.items():
         assert content.startswith(PNG_SIGNATURE), name
@@ -526,7 +531,8 @@ def test_the_committed_report_is_reproduced_byte_for_byte(
     as_committed = (committed / "eda.md").read_bytes().replace(b"\r\n", b"\n")
     out.write_bytes(as_committed.replace(b"\n", line_ending))
     shutil.copytree(committed / "figures", tmp_path / "figures")
-    files = [out, *[tmp_path / "figures" / name for name, _ in FIGURES.values()]]
+    present = figure_keys(report.final_reasons() is not None)
+    files = [out, *[tmp_path / "figures" / FIGURES[key][0] for key in present]]
     before = {path: path.read_bytes() for path in files}
     for path in files:
         os.utime(path, ns=(LONG_AGO, LONG_AGO))

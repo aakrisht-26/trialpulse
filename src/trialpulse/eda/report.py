@@ -23,9 +23,12 @@ How the report keeps its promises:
 """
 
 import argparse
+import json
 import time
 from collections.abc import Sequence
 from pathlib import Path
+
+import duckdb
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.audit import MODELING_EDA_BEFORE
@@ -34,7 +37,7 @@ from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.eda.analysis import Sources
 from trialpulse.eda.charts import draw
 from trialpulse.eda.document import render
-from trialpulse.eda.refs import FIGURES
+from trialpulse.eda.refs import FIGURES, figure_keys
 from trialpulse.eda.results import compute
 from trialpulse.eval.rows import LANDMARKS_PATH, training_path
 from trialpulse.reports import write_text_if_changed
@@ -45,6 +48,29 @@ FIGURES_DIR_NAME = "figures"
 # The bulk API v2 snapshot of current-record fields, written by Step 2 part g. The path is
 # repeated here because no module outside feasibility/ may import from it (Step 2).
 CURRENT_FIELDS_PATH = REPO_ROOT / "data" / "spike" / "current_fields.parquet"
+# The reason labels of Step 6 and the metadata of the model that wrote them (the paths of
+# trialpulse.nlp.distill, repeated so that the report does not load the NLP stack; a test
+# holds them equal).
+REASONS_PATH = REPO_ROOT / "data" / "nlp" / "reasons" / "early_stop_reasons.parquet"
+REASON_MODEL_METADATA = REPO_ROOT / "data" / "nlp" / "models" / "distilled.json"
+
+
+def final_reasons(
+    reasons: Path = REASONS_PATH, metadata: Path = REASON_MODEL_METADATA
+) -> Path | None:
+    """The reason labels when they come from the final model of Step 6 (trained on the whole
+    LLM sample) and every row names that model; otherwise None, and the addendum waits."""
+    if not reasons.is_file() or not metadata.is_file():
+        return None
+    meta = json.loads(metadata.read_text(encoding="utf-8"))
+    if meta["training_texts"] < meta["sample_size"]:
+        return None
+    expected = f"tfidf-logreg n={meta['training_texts']} trained {meta['trained_at']}"
+    with duckdb.connect() as con:
+        names = con.execute(
+            f"SELECT DISTINCT model FROM read_parquet('{reasons.as_posix()}')"
+        ).fetchall()
+    return reasons if names == [(expected,)] else None
 
 
 def _content(path: Path) -> bytes | None:
@@ -68,7 +94,7 @@ def generate(sources: Sources, out: Path, figures_dir: Path, cfg: ProjectConfig)
             raise RefusedError(f"{path} is missing. Create it with: {command}")
     res = compute(sources, cfg, MODELING_EDA_BEFORE)
     text = render(res)
-    targets = [figures_dir / name for name, _ in FIGURES.values()]
+    targets = [figures_dir / FIGURES[key][0] for key in figure_keys(res.reasons is not None)]
     before = {path: _content(path) for path in targets}
     draw(res, figures_dir)
     changed = [path for path in targets if _content(path) != before[path]]
@@ -77,9 +103,11 @@ def generate(sources: Sources, out: Path, figures_dir: Path, cfg: ProjectConfig)
     return changed
 
 
-def cohort_sources(cohort_dir: Path, warehouse: Path, current_fields: Path) -> Sources:
+def cohort_sources(
+    cohort_dir: Path, warehouse: Path, current_fields: Path, reasons: Path | None = None
+) -> Sources:
     """The files the report reads from a cohort build: the cohort as of the modeling date,
-    and the final cohort."""
+    and the final cohort; with `reasons`, the final reason labels of Step 6."""
     as_of = training_path(cohort_dir / TRAINING_DIR_NAME, MODELING_EDA_BEFORE)
     return Sources(
         landmarks=as_of,
@@ -88,6 +116,7 @@ def cohort_sources(cohort_dir: Path, warehouse: Path, current_fields: Path) -> S
         final_outcomes=cohort_dir / OUTCOMES_PATH.name,
         warehouse=warehouse,
         current_fields=current_fields,
+        reasons=reasons,
     )
 
 
@@ -97,19 +126,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cohort-dir", type=Path, default=COHORT_DIR)
     parser.add_argument("--current-fields", type=Path, default=CURRENT_FIELDS_PATH)
     parser.add_argument("--out", type=Path, default=EDA_PATH)
+    parser.add_argument("--reasons", type=Path, default=REASONS_PATH)
+    parser.add_argument("--reason-metadata", type=Path, default=REASON_MODEL_METADATA)
     args = parser.parse_args(argv)
     started = time.monotonic()
     cohort_dir: Path = args.cohort_dir
     out: Path = args.out
-    sources = cohort_sources(cohort_dir, args.warehouse, args.current_fields)
+    reasons = final_reasons(args.reasons, args.reason_metadata)
+    sources = cohort_sources(cohort_dir, args.warehouse, args.current_fields, reasons)
     figures_dir = out.parent / FIGURES_DIR_NAME
     changed = generate(sources, out, figures_dir, load_project_config())
+    figures = len(figure_keys(reasons is not None))
     if changed:
-        print(f"Wrote {len(changed)} of {len(FIGURES) + 1} files:")
+        print(f"Wrote {len(changed)} of {figures + 1} files:")
         for path in changed:
             print(f"  {path}")
     else:
-        print(f"Up to date: {out} and its {len(FIGURES)} figures already hold this content.")
+        print(f"Up to date: {out} and its {figures} figures already hold this content.")
     print(f"Done in {time.monotonic() - started:.1f} s.")
     return 0
 

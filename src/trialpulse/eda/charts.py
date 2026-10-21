@@ -13,7 +13,8 @@ import numpy as np
 
 from trialpulse.eda import analysis as an
 from trialpulse.eda import figures as fg
-from trialpulse.eda.refs import FIGURES
+from trialpulse.eda.document import REASON_YEAR_MIN
+from trialpulse.eda.refs import FIGURES, figure_keys
 from trialpulse.eda.results import (
     AMENDMENT_LANDMARK_MONTHS,
     COVID_END,
@@ -238,4 +239,32 @@ def draw(res: Results, out_dir: Path) -> list[Path]:
         note=(float(covid_x[peak_at]), peak_rate, f"{peak_name}: {peak_rate:.1f}"),
         right=0.84,
     )
-    return [paths[key] for key in FIGURES]
+    if res.reasons is not None:
+        years = [r for r in res.reasons["year"][:-1] if r["labeled"] >= REASON_YEAR_MIN] or [
+            r for r in res.reasons["year"][:-1] if r["labeled"]
+        ]
+        x = np.array([int(r["group"]) for r in years], dtype=np.float64)
+        kinds = (
+            ("Operational", "operational", fg.BLUE),
+            ("COVID-19", "covid19", fg.ORANGE),
+            ("Scientific", "scientific", fg.AQUA),
+            ("Other", "other", fg.VIOLET),
+        )
+        ticks = list(range(int(x[0]), int(x[-1]) + 1, 2))
+        fg.line_chart(
+            paths["reasons"],
+            [(label, x, np.array([r[key] for r in years]), color) for label, key, color in kinds],
+            title="Why trials stopped, by year of the stop",
+            subtitle=(
+                f"{DESCRIPTIVE.capitalize()}, not used for modeling. Share of the cohort's early "
+                f"stops with a reason text, by the reason label of Step 6; years with at least "
+                f"{REASON_YEAR_MIN} labeled stops."
+            ),
+            source=source,
+            end_labels=[label for label, _, _ in kinds],
+            x_label="Year of the stop",
+            x_ticks=ticks,
+            x_tick_labels=[str(t) for t in ticks],
+            markers=True,
+        )
+    return [paths[key] for key in figure_keys(res.reasons is not None)]

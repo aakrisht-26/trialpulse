@@ -75,6 +75,8 @@ class Results:
     posting_lag: an.Rows
     covid: dict[str, Any]
     covid_summary: an.Rows
+    reasons: dict[str, an.Rows] | None = None  # None until the final Step 6 labels exist
+    reasons_model: str = ""
 
     @property
     def short(self) -> int:
@@ -149,6 +151,16 @@ def snapshot_date(current_fields: Path) -> str:
     return "date not recorded"
 
 
+def reasons_model(con: Any, reasons: Path) -> str:
+    """The name of the model that labeled the reasons (one name for the whole file)."""
+    names = con.execute(
+        f"SELECT DISTINCT model FROM read_parquet('{reasons.as_posix()}')"
+    ).fetchall()
+    if len(names) != 1:
+        raise RefusedError(f"{reasons} holds labels of {len(names)} models; label all again")
+    return str(names[0][0])
+
+
 def compute(sources: an.Sources, cfg: ProjectConfig, before: dt.date) -> Results:
     if cfg.dataset.cutoff is None:
         raise RefusedError("config/project.yaml has no dataset cutoff yet (Step 2 records it).")
@@ -202,4 +214,6 @@ def compute(sources: an.Sources, cfg: ProjectConfig, before: dt.date) -> Results
             posting_lag=an.posting_lag(con, before),
             covid=covid,
             covid_summary=an.covid_period_summary(covid, COVID_PERIODS),
+            reasons=None if sources.reasons is None else an.reasons_breakdown(con, sources.reasons),
+            reasons_model="" if sources.reasons is None else reasons_model(con, sources.reasons),
         )
