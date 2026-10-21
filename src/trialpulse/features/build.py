@@ -556,8 +556,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.cohort_dir = args.cohort_dir or COHORT_DIR
     args.out_dir = args.out_dir or FEATURES_DIR
     args.doc = args.doc or DOC_PATH
-    if args.variant is None and Path(args.out_dir).resolve() == VARIANT_FEATURES_DIR.resolve():
-        raise RefusedError("the folder of the UNKNOWN variant's features needs --variant")
+    cohort_log = Path(args.cohort_dir) / "build.json"
+    built_as = (
+        json.loads(cohort_log.read_text(encoding="utf-8")).get("variant")
+        if cohort_log.is_file()
+        else None
+    )
+    if args.variant is None and (
+        built_as is not None or Path(args.out_dir).resolve() == VARIANT_FEATURES_DIR.resolve()
+    ):
+        raise RefusedError("the UNKNOWN variant's cohort or features folder needs --variant")
+    if args.variant is not None:
+        mains = {Path(args.main_dir).resolve(), FEATURES_DIR.resolve()}
+        if Path(args.out_dir).resolve() in mains or Path(args.doc).resolve() == DOC_PATH.resolve():
+            raise RefusedError(
+                "the UNKNOWN variant's features go to a folder of their own, never to the main "
+                "features or docs/features.md"
+            )
+        if built_as != args.variant:
+            raise RefusedError(
+                f"{args.cohort_dir} is not the {args.variant} cohort; build it with: "
+                "uv run python -m trialpulse.cohort.build --unknown-as-stop"
+            )
     cfg = load_project_config()
     rules = CohortRules.from_config(cfg)
     started = time.monotonic()

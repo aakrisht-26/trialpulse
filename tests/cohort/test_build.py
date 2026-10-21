@@ -217,3 +217,6 @@ def test_the_unknown_variant_refuses_training_files_unlike_the_main_ones(built: 
             "--unknown-as-stop", "--main-dir", str(built / "cohort")]  # fmt: skip
     with pytest.raises(RefusedError, match="differs from the main cohort"):
         build.main(args)
+    # Nothing of the refused variant is left for a later step to read.
+    assert not (built / "variant").exists()
+    assert not (built / "variant.building").exists()

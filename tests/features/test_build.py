@@ -621,6 +621,30 @@ def test_the_unknown_variant_gets_features_in_a_folder_of_its_own(built: Built) 
 def test_the_variant_folder_is_written_only_with_the_variant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The main features and the variant's never cross (ADR 0029): each refusal comes before
+    anything is read or written."""
     monkeypatch.setattr(features_build, "VARIANT_FEATURES_DIR", tmp_path / "features_v")
+    variant_cohort, main_cohort = tmp_path / "cohort_v", tmp_path / "cohort"
+    variant_cohort.mkdir()
+    main_cohort.mkdir()
+    (variant_cohort / "build.json").write_text('{"variant": "unknown-as-stop"}', "utf-8")
+    (main_cohort / "build.json").write_text('{"variant": null}', "utf-8")
+    main_out = tmp_path / "features"
     with pytest.raises(RefusedError, match="needs --variant"):
         features_build.main(["--out-dir", str(tmp_path / "features_v")])
+    with pytest.raises(RefusedError, match="needs --variant"):  # the variant's cohort
+        features_build.main(["--cohort-dir", str(variant_cohort), "--out-dir", str(main_out),
+                             "--doc", str(tmp_path / "f.md")])  # fmt: skip
+    variant = ["--variant", "unknown-as-stop", "--main-dir", str(main_out)]
+    with pytest.raises(RefusedError, match="never to the main features"):
+        features_build.main([*variant, "--cohort-dir", str(variant_cohort),
+                             "--out-dir", str(main_out)])  # fmt: skip
+    with pytest.raises(RefusedError, match="never to the main features"):
+        features_build.main([*variant, "--cohort-dir", str(variant_cohort),
+                             "--out-dir", str(tmp_path / "fv"), "--doc",
+                             str(features_build.DOC_PATH)])  # fmt: skip
+    with pytest.raises(RefusedError, match="is not the unknown-as-stop cohort"):
+        features_build.main([*variant, "--cohort-dir", str(main_cohort),
+                             "--out-dir", str(tmp_path / "fv")])  # fmt: skip
+    assert not main_out.exists()
+    assert not (tmp_path / "fv").exists()

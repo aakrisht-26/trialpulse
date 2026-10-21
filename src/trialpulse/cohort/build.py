@@ -26,15 +26,17 @@ is deterministic: the same warehouse and config give the same files.
 **The UNKNOWN sensitivity variant** (`--unknown-as-stop`, Step 11; see
 `trialpulse.cohort.outcomes`) is written to its own folder (default
 data/cohort_unknown_as_stop/): the final cohort with a lapse at the cutoff counted as an
-early stop, and the training cohorts built with the main rules, because the champion is
-trained exactly as in the main run. The build refuses to finish unless those training files
-equal the main build's, file for file. It writes no part of docs/data_audit.md.
+early stop, and the training cohorts built with the main rules, which the feature build
+fits its transforms on. It is built in a folder beside the target and moved into place only
+when its training files equal the main build's, file for file; a refusal leaves no variant
+behind. It writes no part of docs/data_audit.md.
 """
 
 import argparse
 import csv
 import datetime as dt
 import json
+import shutil
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -288,9 +290,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     variant: bool = args.unknown_as_stop
-    out_dir: Path = args.out_dir or (VARIANT_COHORT_DIR if variant else COHORT_DIR)
-    if variant and out_dir.resolve() == Path(args.main_dir).resolve():
+    target: Path = args.out_dir or (VARIANT_COHORT_DIR if variant else COHORT_DIR)
+    if variant and target.resolve() == Path(args.main_dir).resolve():
         raise RefusedError("the UNKNOWN variant needs a folder of its own, not the main cohort's")
+    # The variant is built beside its target and moved into place only once it is checked.
+    out_dir = target.with_name(target.name + ".building") if variant else target
+    if variant and out_dir.exists():
+        shutil.rmtree(out_dir)
     cfg = load_project_config()
     rules = CohortRules.from_config(cfg)
     started = time.monotonic()
@@ -308,7 +314,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 as_of_con, rules, origins, out_dir / TRAINING_DIR_NAME, landmarks_path
             )
         if variant:
-            check_training_files(training, args.main_dir)
+            try:
+                check_training_files(training, args.main_dir)
+            except RefusedError:
+                shutil.rmtree(out_dir, ignore_errors=True)
+                raise
         else:
             replace_section(
                 args.audit,
@@ -325,13 +335,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 AUDIT_FAMILY,
             )
     log_path = out_dir / BUILD_LOG_PATH.name
+    previous_log = target / BUILD_LOG_PATH.name
     tables = {name: {"rows": rows, "checksum": checksum} for name, rows, checksum in outputs}
     for summary in training:
         for name, (rows, checksum) in summary["files"].items():
             tables[name] = {"rows": rows, "checksum": checksum}
     previous = (
-        json.loads(log_path.read_text(encoding="utf-8")).get("tables")
-        if log_path.is_file()
+        json.loads(previous_log.read_text(encoding="utf-8")).get("tables")
+        if previous_log.is_file()
         else None
     )
     identical = None if previous is None else previous == tables
@@ -345,6 +356,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tables": tables,
     }
     log_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    if variant:  # checked: into place
+        if target.exists():
+            shutil.rmtree(target)
+        out_dir.rename(target)
     print("Aalen-Johansen sanity table (sanity check only, not used for modeling): "
           "early-stop CIF from L0 by sponsor class, L0 before 2018-01-01")  # fmt: skip
     months = cfg.horizons_months
