@@ -499,6 +499,11 @@ def test_the_command_logs_each_run_unless_told_not_to(
     assert logged["metrics"]["auc_12m_2016"] == pooled["auc"]["estimate"]
     assert logged["metrics"]["auc_12m_mean"] == pooled["auc"]["estimate"]
     assert logged["metrics"]["calibration_slope_12m_2016"] == pooled["calibration_slope"]
+    # What a comparison or a hypothesis reads later is held against this (Step 11).
+    recorded = saved["origins"][0]["predictions"]
+    written = tmp_path / "predictions" / recorded["path"]
+    assert recorded["path"] == "m0_2016/origin_2016-01-01.parquet"
+    assert recorded["sha256"] == walkforward.sha256_of(written)
 
 
 def test_a_tracking_failure_keeps_the_results_and_fails_the_command(
@@ -517,7 +522,9 @@ def test_a_tracking_failure_keeps_the_results_and_fails_the_command(
     message = capsys.readouterr().err
     assert "not logged to MLflow" in message
     assert "the server did not answer" in message
-    assert json.loads((tmp_path / "m0_2016.json").read_text(encoding="utf-8")) == results
+    saved = json.loads((tmp_path / "m0_2016.json").read_text(encoding="utf-8"))
+    assert {k: v for k, v in saved.items() if k != "inputs"} == results
+    assert saved["inputs"]["cohort_variant"] is None
 
 
 def test_the_run_is_credited_to_the_commit_it_started_from_and_can_go_to_the_local_store(
@@ -871,10 +878,11 @@ def test_a_tuned_run_is_credited_to_the_tree_it_read_its_settings_from(
 def test_the_unknown_variant_reads_and_writes_folders_of_its_own(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
 ) -> None:
-    """`--variant unknown-as-stop` (Step 11): the variant's cohort and features are read, the
-    model's settings are not tuned again, and the result, the scores and the logged run are
-    named so that they never replace the main run's."""
-    seen: dict[str, Any] = {}
+    """`--variant unknown-as-stop` (Step 11, ADR 0029): the model is trained from the main
+    training rows and their features, scores the variant's evaluation rows with the variant's
+    features, is not tuned again, and its result, scores and logged run are named so that they
+    never replace the main run's. The run records what it read."""
+    seen: dict[str, Any] = {"loaders": []}
 
     def run(cfg: Any, model: str, spec: str, load_rows: Any, load_training: Any,
             **kwargs: Any) -> dict[str, Any]:  # fmt: skip
@@ -883,7 +891,7 @@ def test_the_unknown_variant_reads_and_writes_folders_of_its_own(
                 "training_labels": "as of each origin (ADR 0016)"}  # fmt: skip
 
     def loader(cfg: Any, features_dir: Path, cohort_dir: Path) -> None:
-        seen["features_dir"], seen["cohort_dir"] = features_dir, cohort_dir
+        seen["loaders"].append((features_dir, cohort_dir))
 
     monkeypatch.setattr(walkforward, "run", run)
     monkeypatch.setattr(walkforward, "feature_loader", loader)
@@ -892,18 +900,28 @@ def test_the_unknown_variant_reads_and_writes_folders_of_its_own(
     monkeypatch.setattr(walkforward, "VARIANT_COHORT_DIR", tmp_path / "cohort_v")
     monkeypatch.setattr(walkforward, "VARIANT_FEATURES_DIR", tmp_path / "features_v")
     args = ["--model", "m4", "--origins", "2016", "--variant", "unknown-as-stop"]
+    # A variant run needs the variant's cohort, as its build log names it.
+    assert walkforward.main(args) == 2
+    (tmp_path / "cohort_v").mkdir()
+    (tmp_path / "cohort_v" / "build.json").write_text('{"variant": "unknown-as-stop"}', "utf-8")
     assert walkforward.main(args) == 0
-    assert seen == {
-        "predictions_dir": tmp_path / "predictions" / "unknown-as-stop",
-        "features_dir": tmp_path / "features_v",
-        "cohort_dir": tmp_path / "cohort_v",
-    }
+    assert seen["predictions_dir"] == tmp_path / "predictions" / "unknown-as-stop"
+    assert seen["loaders"] == [
+        (tmp_path / "features_v", tmp_path / "cohort_v"),  # the evaluation rows
+        (walkforward.FEATURES_DIR, walkforward.TRAINING_DIR.parent),  # the training rows
+    ]
     out = tmp_path / "results" / "unknown-as-stop" / "m4_2016.json"
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["variant"] == "unknown-as-stop"
+    assert saved["inputs"]["cohort_variant"] == "unknown-as-stop"
+    assert saved["inputs"]["training_dir"] == walkforward.relative(walkforward.TRAINING_DIR)
+    assert saved["inputs"]["features_dir"].endswith("features_v")
     assert saved["tracking"]["run_name"] == "m4-2016-unknown-as-stop"
     (logged,) = tracked_runs
     assert logged["tags"]["variant"] == "unknown-as-stop"
     assert not (tmp_path / "results" / "m4_2016.json").exists()
-    # Tuning belongs to the main cohort.
+    # A main run refuses the variant's cohort, and tuning belongs to the main cohort.
+    variant_input = ["--input", str(tmp_path / "cohort_v" / "landmarks.parquet")]
+    assert walkforward.main(["--model", "m4", "--origins", "2016", *variant_input,
+                             "--no-track"]) == 2  # fmt: skip
     assert walkforward.main([*args, "--tune", "--no-track"]) == 2

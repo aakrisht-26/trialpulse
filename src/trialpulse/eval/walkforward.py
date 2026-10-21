@@ -51,6 +51,7 @@ and exits with code 5, and the results stay on disk.
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -306,6 +307,27 @@ def save_predictions(
         )
 
 
+def sha256_of(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def relative(path: Path) -> str:
+    """A path relative to the repository when it lies inside it, as recorded in results."""
+    try:
+        return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def cohort_variant(landmarks: Path) -> str | None:
+    """The variant a cohort folder was built as, from its build log (None for the main one)."""
+    log = landmarks.parent / "build.json"
+    if not log.is_file():
+        return None
+    value = json.loads(log.read_text(encoding="utf-8")).get("variant")
+    return None if value is None else str(value)
+
+
 def predictions_path(folder: Path, model: str, origins_spec: str, origin: dt.date) -> Path:
     spec = origins_spec.replace(",", "-")
     return folder / f"{model}_{spec}" / f"origin_{origin.isoformat()}.parquet"
@@ -396,14 +418,19 @@ def run(
                     cfg, resamples, f"{where}, landmark index {int(k)}", years[m],
                 )  # fmt: skip
             horizons[str(months)] = {"pooled": pooled, "by_landmark_index": by_index}
+        saved: dict[str, str] | None = None
         if predictions_dir is not None:
-            save_predictions(
-                predictions_path(predictions_dir, model_name, origins_spec, origin.date),
-                ev, ev_time, ev_event, groups, scores,
-            )  # fmt: skip
+            path = predictions_path(predictions_dir, model_name, origins_spec, origin.date)
+            save_predictions(path, ev, ev_time, ev_event, groups, scores)
+            # What a comparison or a hypothesis later reads is held against this (Step 11).
+            saved = {
+                "path": path.relative_to(predictions_dir).as_posix(),
+                "sha256": sha256_of(path),
+            }
         results["origins"].append(
             {
                 "origin": origin.date.isoformat(),
+                "predictions": saved,
                 "role": origin.role,
                 "n_train_rows": len(train),
                 "n_eval_rows": len(ev),
@@ -518,9 +545,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.input = args.input or (
         VARIANT_COHORT_DIR / LANDMARKS_PATH.name if variant else LANDMARKS_PATH
     )
-    args.training_dir = args.training_dir or (
-        VARIANT_COHORT_DIR / TRAINING_DIR.name if variant else TRAINING_DIR
-    )
+    # The variant is trained exactly as the main run: from the main training rows and their
+    # features (ADR 0029); only its evaluation rows and their features are the variant's.
+    args.training_dir = args.training_dir or TRAINING_DIR
     args.features_dir = args.features_dir or (VARIANT_FEATURES_DIR if variant else FEATURES_DIR)
     args.predictions_dir = args.predictions_dir or (
         PREDICTIONS_DIR / variant if variant else PREDICTIONS_DIR
@@ -528,6 +555,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if variant and args.tune:
         print("refused: --tune is for the main cohort; the variant uses the tuned settings",
               file=sys.stderr)  # fmt: skip
+        return 2
+    built_as = cohort_variant(args.input)
+    if built_as != variant:
+        needed = f"--variant {built_as}" if built_as else "no --variant"
+        print(
+            f"refused: {args.input} is the {built_as or 'main'} cohort, so the run needs "
+            f"{needed} (the variant's cohort: uv run python -m trialpulse.cohort.build "
+            "--unknown-as-stop)",
+            file=sys.stderr,
+        )
         return 2
     cfg = load_project_config()
     started = tracking.git_state()
@@ -577,6 +614,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         started = tracking.git_state()
         if tracking.uncommitted(discrete_time.TUNED_DIR / f"{args.model}.json"):
             started["git_dirty"] = "yes"
+    evaluation_features = feature_loader(cfg, args.features_dir, args.input.parent)
+    load_features: FeatureLoader = evaluation_features
+    if variant:
+        training_features = feature_loader(cfg, FEATURES_DIR, args.training_dir.parent)
+
+        def both(origin: dt.date, role: str, only: tuple[int, ...] | None) -> FeatureRows:
+            loader = training_features if role == TRAINING else evaluation_features
+            return loader(origin, role, only)
+
+        load_features = both
     try:
         results = run(
             cfg,
@@ -586,7 +633,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             lambda origin: load_landmark_rows(training_path(args.training_dir, origin)),
             unlock_flag=args.unlock_test,
             n_resamples=args.resamples,
-            load_features=feature_loader(cfg, args.features_dir, args.input.parent),
+            load_features=load_features,
             predictions_dir=args.predictions_dir,
         )
     except (TestLockError, FileNotFoundError, ValueError) as exc:
@@ -597,6 +644,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
     if variant:
         results["variant"] = variant
+    results["inputs"] = {
+        "landmarks": relative(args.input),
+        "training_dir": relative(args.training_dir),
+        "features_dir": relative(args.features_dir),
+        "training_features_dir": relative(FEATURES_DIR if variant else args.features_dir),
+        "predictions_dir": relative(args.predictions_dir),
+        "cohort_variant": built_as,
+    }
     folder = RESULTS_DIR / variant if variant else RESULTS_DIR
     folder.mkdir(parents=True, exist_ok=True)
     out = folder / f"{args.model}_{args.origins.replace(',', '-')}.json"
