@@ -1954,6 +1954,10 @@ uv run python -m trialpulse.eval.compare --pairs m3:m2
 uv run python -m trialpulse.eval.hypotheses h3 --origins dev
 ```
 
+#### Checkpoints
+
+- 2026-10-21 12:52: everything above is committed and pushed (`7810419`, CI running). The two-reviewer check of this round is running (workflow run `wf_3ebf9d23-5de`). Next: fix what it confirms, run the full suite, push, report. The rule for usage limits changed today: work until cut off and resume after the reset; stop if the weekly allowance passes 90%.
+
 Files touched in this round: `CLAUDE.md` (Amendments: ADRs 0028 and 0029), `docs/adr/0028-cause-specific-results-without-a-cause-specific-model.md` and `docs/adr/0029-the-unknown-sensitivity-analysis.md` (new), `src/trialpulse/eval/compare.py`, `src/trialpulse/eval/hypotheses.py` (new), `src/trialpulse/eval/results.py` (new), `src/trialpulse/eval/results_dev.py`, `src/trialpulse/eval/walkforward.py`, `src/trialpulse/eval/rows.py`, `src/trialpulse/cohort/outcomes.py`, `src/trialpulse/cohort/build.py`, `src/trialpulse/features/build.py`, `src/trialpulse/nlp/distill.py`, `src/trialpulse/eda/analysis.py`, `src/trialpulse/eda/results.py`, `src/trialpulse/eda/document.py`, `src/trialpulse/eda/charts.py`, `src/trialpulse/eda/refs.py`, `src/trialpulse/eda/report.py`, `tests/eval/test_compare.py`, `tests/eval/test_hypotheses.py` (new), `tests/eval/test_results.py` (new), `tests/eval/test_results_dev.py`, `tests/eval/test_walkforward.py`, `tests/models/test_discrete_time.py`, `tests/cohort/test_cohort.py`, `tests/cohort/test_build.py`, `tests/features/test_build.py`, `tests/nlp/test_distill.py`, `tests/eda/test_reasons.py` (new), `tests/eda/test_report.py`, `tests/eda/test_charts.py`, `docs/preregistration.md`, `docs/reason_labeling.md`, `docs/eda.md`, `docs/figures/eda_10_reasons_by_year_descriptive.png` (new), `docs/results/test_distilled.json` (new), `docs/progress.md`, `docs/interview_notes.md`.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
