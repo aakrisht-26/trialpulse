@@ -222,6 +222,16 @@ def check_one_commit(files: Mapping[Path, Mapping[str, Any]]) -> dict[str, str]:
     return {"commit": commit, "tag_object": tag_object, "registered": registered}
 
 
+def statistic_ids() -> frozenset[str]:
+    """Every statistic a registered prediction can name: the keys of `observed`."""
+    ids = {"h1_delta_auc_12", "h1_delta_auc_24", "h2_slope_12", "h3_difference_12", "h5_difference"}
+    for year in TEST_YEARS:
+        for months in ("12", "24"):
+            ids.add(f"h4_slope_{months}_{year}")
+            ids.update(f"{metric}_{months}_{year}" for metric in ("auc", "brier", "lift"))
+    return frozenset(ids)
+
+
 def observed(run: Run) -> dict[str, dict[str, float]]:
     """Every statistic a prediction can name, with its interval where it has one."""
 
@@ -341,7 +351,7 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
     unlock = check_one_commit(run.files)
     predictions = registered_predictions(registration)
     values = observed(run)
-    unknown = sorted(set(predictions) - set(values))
+    unknown = sorted(set(predictions) - statistic_ids())
     if unknown:
         raise RefusedError(
             f"the registration names predictions this code cannot compute: {unknown}"
@@ -575,7 +585,7 @@ def _cause_specific(run: Run) -> list[str]:
         "",
         "The champion's all-cause score held against operational and against scientific early "
         "stops (ADR 0028), with the censoring weights of all evaluation rows. Errors in the reason "
-        "labels push the difference toward zero.",
+        "labels push the difference toward zero, as long as they do not depend on the risk score.",
         "",
         *markdown_table(
             [

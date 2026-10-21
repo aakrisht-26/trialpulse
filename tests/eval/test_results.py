@@ -342,3 +342,26 @@ def test_the_command_writes_the_document_and_its_calibration_figures(
         "results_calibration_24m.png",
     ]
     assert results.main(args) == 0  # a second run finds the same document
+
+
+def test_the_statistics_a_prediction_can_name_are_those_computed(root: Path) -> None:
+    assert set(results.observed(results.load_run(root))) == results.statistic_ids()
+
+
+def test_the_draft_registration_names_computable_predictions_and_passes_the_text_check() -> None:
+    """docs/preregistration.md as committed: its block parses, every prediction names a
+    statistic the generator computes, every primary claim is registered, and once the
+    registration commit replaces the status line with a Registered line, the lock finds no
+    placeholder text (ADR 0004)."""
+    from trialpulse.eval.lock import find_placeholders
+
+    text = (results.REPO_ROOT / "docs" / "preregistration.md").read_text(encoding="utf-8")
+    predictions = results.registered_predictions(text)
+    assert set(predictions) <= results.statistic_ids()
+    assert set(results.PRIMARY) <= set(predictions)
+    for prediction in predictions.values():
+        assert prediction.low is None or prediction.high is None or prediction.low < prediction.high
+        assert prediction.holds(prediction.predicted), prediction.id
+    if "Status: draft, not yet registered." in text:
+        registered = text.replace("Status: draft, not yet registered.", "Registered: 2026-11-01")
+        assert find_placeholders(registered) == []
