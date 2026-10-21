@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 11 (pre-registration, locked test and results)**: the pre-registration is drafted for Aakrisht's review (2026-10-20; see "Review of Step 10" below, which starts with the three answers). The locked run waits for Step 6 and for the two open decisions of the draft. **Step 6** is in progress: 9,000 of 10,000 sample texts are labeled; the Windows scheduled task "TrialPulse labeling batch" runs the batch daily since 2026-10-19.
+Current step: **Step 11 (pre-registration, locked test and results)**: the pre-registration is revised for Aakrisht's last review (2026-10-21), and the code of the locked run is built and tested on synthetic data; it is not registered and no tag exists (see "Review of the Step 10 follow-up and the pre-registration draft" below, which starts with the three answers). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -82,12 +82,12 @@ Current step: **Step 11 (pre-registration, locked test and results)**: the pre-r
 | 3 | Warehouse, contracts and live schemas | Approved 2026-09-30 (ADR 0012 accepted); verified by Aakrisht except the two rebuilds, run in this session on the same machine |
 | 4 | Cohort, outcomes and landmarks | Approved 2026-10-07 and verified by Aakrisht (ADRs 0013 to 0016 accepted); training labels as of each origin approved 2026-10-07 |
 | 5 | Exploratory data analysis | Approved 2026-10-07; merged from PR aakrisht-26/trialpulse#2. Rebuilt on the cohort as of 2018-01-01 on 2026-10-07, as decided in the review of the follow-up: no finding changed in substance |
-| 6 | Why trials stop (NLP) | In progress: LLM scored on test (macro-F1 0.842); the sample is labeled in daily batches, by a Windows scheduled task since 2026-10-19 (9,000 of 10,000 on 2026-10-20); distilled model provisional |
+| 6 | Why trials stop (NLP) | Finished 2026-10-21, waiting for Aakrisht's review: LLM macro-F1 0.842 and distilled classifier 0.769 on test (each scored once); 35,198 early stops labeled, the warehouse table and the EDA addendum written |
 | 7 | Point-in-time features | Approved 2026-10-10 (ADRs 0018 to 0021 accepted). Personal-title sponsor names no longer stored (ADR 0022, warehouse schema version 3), decided in the same review |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
 | 9 | Baselines and Cox analysis | Approved 2026-10-10 (ADR 0023 accepted). Runs logged to DagsHub after the review |
 | 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
-| 11 | Pre-registration, locked test and results | Pre-registration drafted 2026-10-20 for review (not registered, no tag); the locked run waits for Step 6 |
+| 11 | Pre-registration, locked test and results | Pre-registration revised 2026-10-21 for the last review (ADRs 0028 and 0029 accepted); the code of the locked run built and tested on synthetic data; not registered, no tag |
 | 12 | Explainability, model card, data card | Not started |
 | 13 | Scoring pipeline and model registry | Not started |
 | 14 | Live ingestion and daily workflow | Not started |
@@ -136,7 +136,7 @@ Added on 2026-10-19, from Aakrisht's review of Step 10:
 19. **Step 11: one job per origin and per comparison pair, all from one clean commit** recorded in every result file.
 20. **A job expected to pass an hour is estimated and proposed first,** except the jobs of Step 11 under item 19.
 21. **The locked test waits for Step 6,** so that the operational and scientific results use the final labels.
-22. **Step 6: the Windows scheduled task "TrialPulse labeling batch" runs the batch daily** (since 2026-10-19; it replaces item 14's batch once per session). When the sample reaches 10,000, Step 6 is finished as specified and the task is removed.
+22. **Step 6: the Windows scheduled task "TrialPulse labeling batch" runs the batch daily** (since 2026-10-19; it replaces item 14's batch once per session). When the sample reaches 10,000, Step 6 is finished as specified and the task is removed. Done: the sample was complete on 2026-10-21, Step 6 was finished and the task removed that day.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -1869,6 +1869,92 @@ git diff --stat docs/results_dev.md
 ```
 
 `git diff` should then show changes in the "Runs" and "Run time and size" tables only. Do not run CLAUDE.md's Step 10 command with `--tune`: it would tune the new M4 again (about an hour) and rewrite `config/tuned/m4.json`, which ADR 0026 keeps as it is.
+
+### Review of the Step 10 follow-up and the pre-registration draft (Aakrisht, 2026-10-21) and what was done
+
+**The three answers.** (1) Everything asked for is done, with evidence below: the push and CI, the six changes of the draft, the code of the locked run, Step 6, and H3 with the final labels. (2) My own decisions are listed and flagged after the evidence. (3) Nothing is skipped; the locked run waits for your review, the registration and the tag, as you asked, and an independent review of this round's code and documents closes it (the last subsection below).
+
+**Decisions of the review and what followed from each:**
+
+- **Everything in the report of 2026-10-20 is approved.** The AUC condition of the recalibration rule was part of commit `a8ba38c` (2026-10-19 23:28:44 +0530): condition 4, "The AUC at 12 months, pooled, is not lower by more than 0.001", is line 29 of `docs/adr/0027-recalibration-of-m4.md` in that commit. The measurement code came in `af27a17` (23:33:37) and the only measurement ran on 2026-10-20 from 00:28 to 00:43.
+- **Section 5.1, the UNKNOWN sensitivity analysis, approved as proposed:** ADR 0029 (accepted, in the Amendments). Built as the cohort variant `cohort.build --unknown-as-stop` (in `data/cohort_unknown_as_stop/`, training cohorts built with the main rules and checked against the main build file for file, the data audit untouched), its features `features.build --variant unknown-as-stop` (in `data/features_unknown_as_stop/`, `docs/features.md` untouched) and the harness switch `walkforward --variant unknown-as-stop` (results, scores and run name of their own). On the mini histories of Step 4 the variant gives exactly the rows the main cohort leaves out (trial D: landmarks 0 to 4 instead of landmark 0 only; a trial censored at registration: landmarks 0 to 4 instead of none) and nothing else changes (tested).
+- **Section 5.2, option (b):** ADR 0028 (accepted, in the Amendments): no cause-specific model; the H3 analysis is the cause-specific result of Step 11 and replaces the secondary target of Section 6.
+
+**The order you set, step by step:**
+
+1. **Push and CI.** The 11 commits went to origin. The first CI run failed: a slow test still expected M4's 123 features of Step 10. The default local run deselects slow tests and I had not run the full suite before pushing; the fix is commit `7a788a9`, the full suite passed here (879 tests), and CI is green on it (run 39473801788). From now on the full suite runs before every push.
+2. **The six changes of the draft** (`docs/preregistration.md`, commit `13cece4`):
+   1. *H2:* the slope's paired bootstrap interval on the development origins, computed by the new trend of the comparison (run `compare-m3-vs-m2` from commit `008b42d`, 1,000 resamples): **+0.0049 per landmark index (+0.0021 to +0.0076)** at 12 months; +0.0074 (+0.0052 to +0.0096) at 24. The interval excludes 0, so the prediction needed no warning. The seven differences by index are those of Step 10, digit for digit.
+   2. *H3:* the labels and the censoring weights come from all evaluation rows of the origin, as in the main metric, and only then are the excluded rows left out (built in `trialpulse.eval.hypotheses`, tested against both the right and the wrong order). The draft says that errors in the reason labels push the difference toward zero, with the condition that the classifier's errors do not depend on the risk score.
+   3. *Ranges:* every acceptable range shows its arithmetic or is labeled a judgment: H1 at 24 months, H2 and H3 as the prediction plus the development half-width plus a judged allowance; H4's is the hypothesis's own; H5's prediction and range are judgments with their reasoning; the drift parts of the AUC, Brier and lift ranges are labeled judgments.
+   4. *Primary claims:* the champion's AUC at 12 months on 2018 and on 2019, and H2. Everything else is secondary (section 1, and in bold in section 3 and in the generated results).
+   5. *Brier score:* its range mostly tests the base rate; the model's skill is the factor of about 0.97 against p(1 - p), where a score that knew only the base rate has 1.
+   6. *Header:* six exposures to the locked period, among them the Step 4 sanity table (outcomes followed to the cutoff), the outcome counts by first-post year of the data audits and the feasibility report, the COVID aggregates, a Step 5 check against outcomes to the cutoff, the stop reasons of Step 6 (texts of every stop year, by design) and the checks against the registry; none was used to choose a model, a feature or a setting.
+3. **The code of the locked run**, tested on synthetic data only (no locked origin was read):
+   - `trialpulse.eval.compare`: `--origins test --unlock-test`, the lock checked before any prediction file is read and recorded in each file; the trend of H2 for every pair compared at each landmark index (commit `008b42d`).
+   - `trialpulse.eval.hypotheses`: H3 (weights of all rows first, the reason labels pinned by SHA-256 against the registration on locked origins) and H5 (one cluster bootstrap across 2018, 2019 and 2020) (commit `b72544c`).
+   - The UNKNOWN variant, above (commit `9cfa647`).
+   - `trialpulse.eval.results`: writes `docs/results.md` only from result files that all name one clean commit, unlocked by one tag object, equal to the tagged commit; reads the registered predictions from a machine-readable block of the registration in the tagged commit; names every falsified prediction and failed hypothesis; draws two calibration figures (commits `3a293ae`, `b9bd8f9`). Tests also hold the committed draft to it: its predictions parse and can be computed, and with the status line replaced by a `Registered:` line the lock finds no placeholder text.
+4. **Step 6, finished.** The sample reached 10,000 at 12:21 (the scheduled task's run had been killed at 11:18 with code 0xC000013A, most likely as the laptop woke, before it wrote its log; I started the batch by hand at 11:19 and let a retry loop wait out the provider's rolling limit). Then, from the final labels: the distilled classifier (C = 2, balanced; cross-validated macro-F1 0.812 against the LLM labels); dev macro-F1 0.790 (0.628 to 0.897); **one test scoring: macro-F1 0.769 (0.706 to 0.819), accuracy 0.767, kappa 0.723** (`docs/results/test_distilled.json`); all 35,198 early stops labeled, in the files and in the warehouse table `stop_reasons` (32,144 of the 35,772 early stops of the cohort have a label; the rest have no reason text); and the addendum of `docs/eda.md` (section 9, Tables 14 to 16, Figure 10: 76.9% operational reasons among the stops with one, COVID-19 peaking at 18.6% in 2021, business reasons 41.2% for INDUSTRY sponsors against 4.1% for OTHER). The scheduled task was removed (guidance item 22). The acceptance of Step 6:
+
+   | Criterion | Met? | Evidence |
+   | --- | --- | --- |
+   | Gold-test results for the LLM and the distilled model (accuracy, macro-F1 with CI, kappa, confusion matrix) | Yes | `docs/results/test_llm.json` (2026-09-26) and `docs/results/test_distilled.json` (2026-10-21), summarized in `docs/reason_labeling.md` |
+   | LLM macro-F1 of at least 0.80 on gold-test | Yes | 0.842 (0.791 to 0.883) |
+   | Gold-test never used for prompt or model tuning | Yes | prompt work on the 100 dev items only (ADR 0010); the distilled model chosen by cross-validation against the LLM labels; each model scored on test once, a second scoring refused by the code |
+   | A reasons table in the warehouse for every early stop | Yes | `stop_reasons`, 35,198 rows, written by `distill --label-all` |
+   | A reasons addendum in `docs/eda.md` (by year, phase and sponsor class) | Yes | section 9, regenerated by `uv run python -m trialpulse.eda.report` and stable on a second run |
+
+5. **H3 with the final labels** (run `h3-dev` from commit `74a020c`, 1,000 resamples): at 12 months **+0.086 (+0.054 to +0.117)**, by origin +0.094 (2016) and +0.079 (2017); at 24 months +0.071 (+0.046 to +0.097). The prediction is +0.09 and the acceptable range +0.03 to +0.15 (0.09 plus or minus the half-width 0.031 and a judged allowance of 0.02, rounded outward).
+
+**Decisions of mine in this round:**
+
+1. **H2's trend lives in the comparison** of M3 against M2: each resample scores both models at every landmark index with the weights of that index's rows, as the table by index does, so the slope and the seven differences come from one computation.
+2. **ADR 0029 records decision 5.1.** You asked for an ADR for 5.2 only; the working agreements ask for one for every accepted decision. In ADR 0028 the notes against option (a) are mine and say so.
+3. **The reasons table of the warehouse is written by `distill --label-all`.** A warehouse build replaces the whole file, so after a rebuild `--label-all` runs again; the alternative, the warehouse build reading the NLP outputs, would make Step 3 depend on Step 6.
+4. **The EDA addendum** reads the reason text of the current record (where the texts came from in Step 6), the current-record phase (descriptive, as in section 2 of the EDA) and the sponsor class of the version in effect at the stop; it counts covid19 among the operational reasons, as Section 11 does. It appears only for labels of the final model.
+5. **The registered predictions are also machine-readable** (section 5 of the draft), and `docs/results.md` holds observed values against that block as committed with the tag, not against the working tree.
+6. **The judged parts of the ranges:** 0.010 (H1 at 24 months), 0.004 (H2), 0.02 (H3), H5's whole range, and the a-fifth band of the Brier ranges. The draft labels each one.
+7. **Words in angle brackets were taken out of the draft** (for example a command written with a placeholder for the model), because the lock reads any such word as placeholder text and would refuse the registration.
+8. **The variant's job estimates** (2 minutes for its cohort, 15 for its features, 40 and 46 for the two runs) are scaled from the main runs; the H3 job (5 minutes) from today's run.
+
+**Open questions:** the revised draft, for your last review before the registration. Nothing else waits on you.
+
+#### Verify (PowerShell)
+
+What to expect:
+
+- The full test run takes about eight minutes; the default run about thirty seconds.
+- `llm_labeler --status` shows 10,000 labeled and 0 remaining, with no request. `distill --dev` reprints the dev score of the final model (macro-F1 0.790) without changing a file.
+- **Do not run `uv run python -m trialpulse.nlp.distill` with no flag** (CLAUDE.md's Step 6 verify command): it trains again, which rewrites the model file and its training time, changes the model's hash (which the registration will pin) and the model name in `docs/eda.md`. `--dev` checks the model without that.
+- `eda.report` should print "Up to date" and `git status --short` nothing.
+- The scheduled task is gone: `Get-ScheduledTask` prints an error that it cannot find it.
+
+```powershell
+git switch main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest -q
+uv run pytest -q -m "slow or not slow"
+uv run pytest tests/nlp -q
+uv run python -m trialpulse.nlp.llm_labeler --status
+uv run python -m trialpulse.nlp.distill --dev
+uv run python -m trialpulse.eda.report
+git status --short
+Get-ScheduledTask -TaskName "TrialPulse labeling batch"
+```
+
+To reproduce the two development runs behind the draft (about 16 minutes; each rewrites its result file and logs a run):
+
+```powershell
+uv run python -m trialpulse.eval.compare --pairs m3:m2
+uv run python -m trialpulse.eval.hypotheses h3 --origins dev
+```
+
+Files touched in this round: `CLAUDE.md` (Amendments: ADRs 0028 and 0029), `docs/adr/0028-cause-specific-results-without-a-cause-specific-model.md` and `docs/adr/0029-the-unknown-sensitivity-analysis.md` (new), `src/trialpulse/eval/compare.py`, `src/trialpulse/eval/hypotheses.py` (new), `src/trialpulse/eval/results.py` (new), `src/trialpulse/eval/results_dev.py`, `src/trialpulse/eval/walkforward.py`, `src/trialpulse/eval/rows.py`, `src/trialpulse/cohort/outcomes.py`, `src/trialpulse/cohort/build.py`, `src/trialpulse/features/build.py`, `src/trialpulse/nlp/distill.py`, `src/trialpulse/eda/analysis.py`, `src/trialpulse/eda/results.py`, `src/trialpulse/eda/document.py`, `src/trialpulse/eda/charts.py`, `src/trialpulse/eda/refs.py`, `src/trialpulse/eda/report.py`, `tests/eval/test_compare.py`, `tests/eval/test_hypotheses.py` (new), `tests/eval/test_results.py` (new), `tests/eval/test_results_dev.py`, `tests/eval/test_walkforward.py`, `tests/models/test_discrete_time.py`, `tests/cohort/test_cohort.py`, `tests/cohort/test_build.py`, `tests/features/test_build.py`, `tests/nlp/test_distill.py`, `tests/eda/test_reasons.py` (new), `tests/eda/test_report.py`, `tests/eda/test_charts.py`, `docs/preregistration.md`, `docs/reason_labeling.md`, `docs/eda.md`, `docs/figures/eda_10_reasons_by_year_descriptive.png` (new), `docs/results/test_distilled.json` (new), `docs/progress.md`, `docs/interview_notes.md`.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
