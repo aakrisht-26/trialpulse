@@ -166,6 +166,21 @@ def test_h3_on_the_development_origins(world: dict[str, Any], cfg: ProjectConfig
     }
     part = saved["horizons"]["12"]
     assert part["difference"]["ci_low"] > 0  # operational stops are the predictable ones
+    # Each origin has its own paired interval (ADR 0028), around its own values.
+    for by in part["by_origin"].values():
+        intervals = by["intervals"]
+        assert intervals["difference"]["estimate"] == pytest.approx(
+            by["operational"] - by["scientific"]
+        )
+        assert intervals["operational"]["estimate"] == pytest.approx(by["operational"])
+        assert intervals["difference"]["ci_low"] < intervals["difference"]["ci_high"]
+    # The scores files it read, with their hashes.
+    folder = world["root"] / "pred"
+    assert [(i["model"], i["origin"]) for i in saved["inputs"]] == [
+        ("m4", "2016-01-01"), ("m4", "2017-01-01"),
+    ]  # fmt: skip
+    for item in saved["inputs"]:
+        assert item["sha256"] == hypotheses.sha256(folder / item["path"])
     # The difference is the mean over the origins of the difference at each.
     by = part["by_origin"]
     expected = np.mean([by[d]["operational"] - by[d]["scientific"] for d in by])
@@ -257,3 +272,32 @@ def test_registered_hashes_are_read_from_their_lines() -> None:
                                    hypotheses.registered_hashes(text))  # fmt: skip
     with pytest.raises(RefusedError, match="early_stop_reasons"):
         hypotheses.registered_hashes(f"distilled.joblib sha256:{model}\n")
+
+
+def test_a_hash_line_is_read_in_its_usual_forms_and_only_once() -> None:
+    model, reasons = "1" * 64, "2" * 64
+    forms = [
+        f"distilled.joblib sha256:{model}",
+        f"distilled.joblib sha256: {model}",
+        f"`distilled.joblib sha256:` {model}",
+        f"`distilled.joblib` sha256: `{model}`",
+        f"- distilled.joblib sha256:{model.upper()}",
+    ]
+    for form in forms:
+        text = f"{form}\nearly_stop_reasons.parquet sha256:{reasons}\n"
+        assert hypotheses.registered_hashes(text)["model_sha256"] == model, form
+    # A hash with one hex character too many is no hash; two different hashes are refused.
+    with pytest.raises(RefusedError, match=r"names no distilled.joblib hash"):
+        hypotheses.registered_hashes(
+            f"distilled.joblib sha256:{model}f\nearly_stop_reasons.parquet sha256:{reasons}\n"
+        )
+    with pytest.raises(RefusedError, match="names 2 different early_stop_reasons"):
+        hypotheses.registered_hashes(
+            f"distilled.joblib sha256:{model}\nearly_stop_reasons.parquet sha256:{reasons}\n"
+            f"early_stop_reasons.parquet sha256:{'3' * 64}\n"
+        )
+    # The same hash named twice is one hash.
+    twice = (
+        f"distilled.joblib sha256:{model}\n" * 2 + f"early_stop_reasons.parquet sha256:{reasons}"
+    )
+    assert hypotheses.registered_hashes(twice) == {"model_sha256": model, "reasons_sha256": reasons}

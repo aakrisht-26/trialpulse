@@ -63,7 +63,13 @@ from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap_many
 from trialpulse.eval.ipcw import FloatArray, IntArray, horizon_labels_and_weights
 from trialpulse.eval.lock import TestLockError, require_unlock
 from trialpulse.eval.metrics import weighted_auc
-from trialpulse.eval.walkforward import PREDICTIONS_DIR, predictions_path, select_origins
+from trialpulse.eval.walkforward import (
+    PREDICTIONS_DIR,
+    predictions_path,
+    relative,
+    select_origins,
+    sha256_of,
+)
 
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "compare"
 PAIR_SEPARATOR = "__"  # m4__m1.json: model names hold hyphens, never two underscores
@@ -138,6 +144,26 @@ def prediction_file(folder: Path, model: str, origin: dt.date, spec: str = DEV) 
             f"{origin.year} for that origin alone)"
         )
     return found[0]
+
+
+def inputs_of(
+    folder: Path, models: Sequence[str], origins: Sequence[dt.date], spec: str
+) -> list[dict[str, str]]:
+    """The scores files a job reads, with their SHA-256: the generator of docs/results.md
+    holds them against the files the walk-forward runs wrote (Step 11)."""
+    out = []
+    for model in models:
+        for origin in origins:
+            path = prediction_file(folder, model, origin, spec)
+            out.append(
+                {
+                    "model": model,
+                    "origin": origin.isoformat(),
+                    "path": path.relative_to(folder).as_posix(),
+                    "sha256": sha256_of(path),
+                }
+            )
+    return out
 
 
 def pair_path(folder: Path, model: str, baseline: str) -> Path:
@@ -412,6 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "unlock": None
         if unlock is None
         else {**asdict(unlock), "registered": unlock.registered.isoformat()},
+        "predictions_dir": relative(args.predictions_dir),
         "pairs": [],
         "skipped": [],
     }
@@ -440,6 +467,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
         result["pairs"].append(
             {"model": model, "baseline": baseline, "what": what, **compared,
+             "inputs": inputs_of(args.predictions_dir, (model, baseline), origins, spec),
              "seconds": round(clock.perf_counter() - pair_started, 1)}
         )  # fmt: skip
         primary = compared["horizons"][str(min(cfg.horizons_months))]

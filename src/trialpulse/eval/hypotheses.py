@@ -25,9 +25,9 @@ origins and computes both sides on each resample (ADR 0025).
 
 **The reason labels** live in the uncommitted `data/` folder. Every H3 result records the
 SHA-256 of the distilled model file and of the reasons table. On a locked origin, H3 runs
-only if both hashes equal those the registration names (lines of the form
-`distilled.joblib sha256:<hash>` and `early_stop_reasons.parquet sha256:<hash>` in
-docs/preregistration.md at the tag prereg-v1).
+only if both hashes equal those the registration names: in docs/preregistration.md at the
+tag prereg-v1, the file name, "sha256:" and the 64-character hash (spaces and backticks
+between them are allowed), one hash per file.
 
 **The test lock.** Locked origins need `--unlock-test` and every condition of ADR 0004,
 checked before any prediction file is read; H5 reads locked origins only.
@@ -54,11 +54,11 @@ from trialpulse import tracking
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.eval.bootstrap import BootstrapError, cluster_bootstrap_many
-from trialpulse.eval.compare import DEV, TEST, Paired, load_pair
+from trialpulse.eval.compare import DEV, TEST, Paired, inputs_of, load_pair
 from trialpulse.eval.ipcw import horizon_labels_and_weights
 from trialpulse.eval.lock import PREREG_PATH, TAG, TestLockError, Unlock, require_unlock
 from trialpulse.eval.metrics import weighted_auc
-from trialpulse.eval.walkforward import PREDICTIONS_DIR, select_origins
+from trialpulse.eval.walkforward import PREDICTIONS_DIR, relative, select_origins
 
 RESULTS_DIR = REPO_ROOT / "data" / "results" / "hypotheses"
 # Where trialpulse.nlp.distill writes them (held equal by a test; not imported here, so
@@ -71,8 +71,10 @@ NO_REASON = "none"  # an early stop without a reason text
 CHAMPION = "m4"
 H5_MONTHS = 12
 HASHED_FILES = {"model_sha256": MODEL_PATH.name, "reasons_sha256": REASONS_PATH.name}
+# A hash line: the file name, "sha256:" and the 64-character hash, with or without spaces
+# and backticks around them; a longer run of hex characters is not a hash.
 HASH_LINES = {
-    name: re.compile(re.escape(file) + r" sha256:([0-9a-f]{64})")
+    name: re.compile(re.escape(file) + r"[\s`]*sha256:[\s`]*([0-9a-fA-F]{64})(?![0-9a-fA-F])")
     for name, file in HASHED_FILES.items()
 }
 
@@ -97,13 +99,18 @@ def registered_hashes(text: str) -> dict[str, str]:
     """The hashes of the reason labels a registration names; refused if one is missing."""
     found = {}
     for name, pattern in HASH_LINES.items():
-        match = pattern.search(text)
-        if match is None:
+        values = {value.lower() for value in pattern.findall(text)}
+        if not values:
             raise RefusedError(
                 f"{PREREG_PATH} at {TAG} names no {HASHED_FILES[name]} hash, so the reason "
                 "labels of H3 cannot be checked against the registration"
             )
-        found[name] = match.group(1)
+        if len(values) > 1:
+            raise RefusedError(
+                f"{PREREG_PATH} at {TAG} names {len(values)} different {HASHED_FILES[name]} "
+                "hashes; a registration names one"
+            )
+        found[name] = values.pop()
     return found
 
 
@@ -170,11 +177,22 @@ def h3(
     cfg: ProjectConfig,
     n_resamples: int,
 ) -> dict[str, Any]:
+    """At each horizon: per origin the cases, the two AUCs and their difference, each with a
+    paired cluster-bootstrap interval over that origin's trials (ADR 0028); over the origins
+    together the means with one paired cluster bootstrap."""
     out: dict[str, Any] = {"horizons": {}}
     every = np.arange(len(rows), dtype=np.int64)
 
-    def statistic(months: int) -> Callable[[npt.NDArray[np.int64]], dict[str, float]]:
-        return lambda idx: h3_statistic(rows, months, reason, idx)
+    def statistic(
+        part: Paired, kinds: npt.NDArray[np.str_], months: int
+    ) -> Callable[[npt.NDArray[np.int64]], dict[str, float]]:
+        return lambda idx: h3_statistic(part, months, kinds, idx)
+
+    def boot(part: Paired, kinds: npt.NDArray[np.str_], months: int) -> dict[str, Any]:
+        return cluster_bootstrap_many(
+            part.trial_id, statistic(part, kinds, months), n_resamples, cfg.seeds.default,
+            cfg.evaluation.confidence_level,
+        )  # fmt: skip
 
     for months in cfg.horizons_months:
         by_origin = {}
@@ -190,16 +208,11 @@ def h3(
                 **cause_aucs(rows.time[i], rows.event[i], rows.model[months][i],
                              rows.horizon[months][i], rows.groups[i], reason[i]),
             }  # fmt: skip
-        out["horizons"][str(months)] = {
-            "by_origin": by_origin,
-            **cluster_bootstrap_many(
-                rows.trial_id,
-                statistic(months),
-                n_resamples,
-                cfg.seeds.default,
-                cfg.evaluation.confidence_level,
-            ),
-        }
+            mine = rows.origin == position
+            by_origin[origin.isoformat()]["intervals"] = boot(
+                rows.subset(mine), reason[mine], months
+            )
+        out["horizons"][str(months)] = {"by_origin": by_origin, **boot(rows, reason, months)}
     return out
 
 
@@ -320,6 +333,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                              args.origins)  # fmt: skip
             reason = reasons_of(rows.trial_id, args.reasons)
             result.update({"origins_spec": args.origins, "reason_labels": hashes,
+                           "predictions_dir": relative(args.predictions_dir),
+                           "inputs": inputs_of(args.predictions_dir, [args.model], origins,
+                                               args.origins),
                            **h3(rows, reason, origins, cfg, n)})  # fmt: skip
             name = f"h3-{args.origins}"
         else:
@@ -331,6 +347,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ]
             rows = concat(parts, [0, len(test)])
             result.update({"origins_spec": "test and stress",
+                           "predictions_dir": relative(args.predictions_dir),
+                           "inputs": inputs_of(args.predictions_dir, [args.model], test, TEST)
+                           + inputs_of(args.predictions_dir, [args.model], stress, STRESS),
                            **h5(rows, [*test, *stress], stress[0], cfg, n)})  # fmt: skip
             name = "h5"
     except BootstrapError as exc:

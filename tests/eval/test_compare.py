@@ -22,7 +22,7 @@ from trialpulse.eval.bootstrap import (
     resamples,
 )
 from trialpulse.eval.metrics import ipcw_auc, ipcw_brier
-from trialpulse.eval.walkforward import predictions_path
+from trialpulse.eval.walkforward import predictions_path, relative, sha256_of
 
 ORIGINS = (dt.date(2016, 1, 1), dt.date(2017, 1, 1))
 
@@ -415,6 +415,14 @@ def test_each_pair_gets_a_file_and_a_run_of_its_own(
     assert saved["seconds"] == saved["pairs"][0]["seconds"] >= 0
     assert "skipped" not in saved
     assert saved["tracking"]["run_name"] == "compare-m4-vs-m1"
+    # The scores files it read, with their hashes, for the generator of docs/results.md.
+    (pair,) = saved["pairs"]
+    assert [(i["model"], i["origin"]) for i in pair["inputs"]] == [
+        ("m4", "2016-01-01"), ("m4", "2017-01-01"), ("m1", "2016-01-01"), ("m1", "2017-01-01"),
+    ]  # fmt: skip
+    for item in pair["inputs"]:
+        assert item["sha256"] == sha256_of(folder / item["path"])
+    assert saved["predictions_dir"] == relative(folder)
     (logged,) = tracked_runs
     assert logged["name"] == "compare-m4-vs-m1"
     assert logged["artifacts"] == [str(one)]
