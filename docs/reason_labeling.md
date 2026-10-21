@@ -8,6 +8,8 @@ This page reports how the stop reasons of early-stopped trials are labeled. Ever
 
 **On the 300 held-out test texts, the LLM reached macro-F1 0.842 (95% bootstrap interval 0.791 to 0.883), accuracy 0.847 and Cohen's kappa 0.817. The point estimate meets the 0.80 target; the interval's lower end (0.791) is just below it.**
 
+**The distilled classifier, trained on the LLM labels of the full 10,000-text sample, reached macro-F1 0.769 (0.706 to 0.819), accuracy 0.767 and kappa 0.723 on the same 300 test texts, scored once (2026-10-21).** It is the only reason model used in production, and it labels every early stop.
+
 ## Setup
 
 | Item | Value |
@@ -61,27 +63,23 @@ The largest confusion is reference `other` labeled `administrative` (7 texts). E
 
 The sample holds 10,000 distinct normalized texts, drawn from the 24,534 distinct texts of the cohort's early stops (ClinicalTrials.gov API v2, pulled 2026-09-23) after removing all 400 gold texts. It is stratified by status and stop year (6,731 terminated, 3,269 withdrawn; stop years 2000 to 2026) with seed 42, and stored in a seeded random order, so the texts labeled on any one day are a random subset. A test checks that no gold text is in it after normalization.
 
-**Progress on 2026-09-26: 1,375 of 10,000 labeled**, with 0 failures, before Groq's free-tier limit of 200,000 tokens per day (TPD) stopped the run. Labeling costs about 129 tokens per text, so the remaining 8,625 texts need **about 5.5 more days**, roughly 1,550 texts per daily run. Each run resumes from the cache:
-
-```powershell
-uv run python -m trialpulse.nlp.llm_labeler --sample 10000
-uv run python -m trialpulse.nlp.llm_labeler --status
-```
+**Complete on 2026-10-21: 10,000 of 10,000 labeled**, in daily batches that stopped at Groq's free-tier limit of 200,000 tokens per day (TPD), from 2026-09-26 on (by a Windows scheduled task from 2026-10-19). Labeling cost about 129 tokens per text. The LLM labels: accrual 2,613, administrative 1,843, other 1,551, business 1,292, funding 888, efficacy 866, covid19 584, safety 363. `uv run python -m trialpulse.nlp.llm_labeler --status` reads the cache and makes no request.
 
 ## The distilled classifier
 
 TF-IDF (word 1- and 2-grams, character 3- to 5-grams) plus logistic regression, with C and class weighting chosen by 5-fold cross-validation on the LLM-labeled training texts only. It is the only reason model used in production.
 
-**Status: provisional.** The current model is trained on the 1,375 texts labeled so far (best C = 8 with balanced class weights; cross-validated macro-F1 0.748 against the LLM labels). On the 100 dev items it scores macro-F1 0.732 (95% CI 0.561 to 0.842) and accuracy 0.790. It has **not** been scored on the test items: each model gets one test scoring, kept for the model trained on the full 10,000 labels. The code enforces this: `--predict-test` and `evaluate --test distilled` refuse a model trained on fewer texts than the sample holds, and the evaluation checks that the test predictions came from the current model.
+**Status: final.** Trained on the LLM labels of all 10,000 sample texts (2026-10-21; best C = 2 with balanced class weights; cross-validated macro-F1 0.812 against the LLM labels). On the 100 dev items: macro-F1 0.790 (95% CI 0.628 to 0.897), accuracy 0.850, kappa 0.810. On the 300 test items, scored once: macro-F1 0.769 (0.706 to 0.819), accuracy 0.767, kappa 0.723 (`docs/results/test_distilled.json`). By label on test, F1: accrual 0.84 (n=72), business 0.77 (n=32), funding 0.81 (n=27), administrative 0.73 (n=49), covid19 0.94 (n=22), safety 0.70 (n=10), efficacy 0.69 (n=22), other 0.67 (n=66). The largest confusion is reference `other` labeled `administrative` (12 texts), as for the LLM. The distilled model is below the LLM on test (0.769 against 0.842 macro-F1), the price of a model that runs without an API.
 
-**All early stops labeled (provisional).** The provisional model labeled all 35,198 early stops with a non-blank reason (24,534 distinct texts) into `data/nlp/reasons/early_stop_reasons.parquet` and `.csv` (gitignored): accrual 11,297, business 5,299, administrative 5,270, other 4,994, funding 3,502, efficacy 2,110, covid19 1,760, safety 966. The `model` column names the training size (`n=1375`), so these labels are easy to tell from the final ones.
+**All early stops labeled.** The final model labeled all 35,198 early stops with a non-blank reason (24,534 distinct texts) into `data/nlp/reasons/early_stop_reasons.parquet` and `.csv` (gitignored) and the warehouse table `stop_reasons`: accrual 10,822, business 5,325, administrative 5,191, other 4,754, funding 3,669, efficacy 2,489, covid19 1,872, safety 1,076. Of the 35,772 early stops of the Section 6 cohort, 32,144 (89.9%) have a label; the rest have no reason text in the registry's current record. The reason text is the one each record showed when it was pulled (API v2, 2026-09-23), which can differ from the text posted with the first terminal version. The `model` column names the training size and time (`n=10000`). The descriptive breakdown by stop year, phase group and sponsor class is section 9 of `docs/eda.md`.
 
 Expected refusals in these commands (for example a test split already scored, a provisional model sent to test scoring, or a wrong API key) print one `refused:` line and exit with code 2. A labeling run stopped by the daily limit or a provider outage saves its labels, prints its summary and one `stopped:` line, and exits with code 4.
 
-When the sample is complete (`distill` with no flag also trains, as in the CLAUDE.md Step 6 verify list):
+The commands that made the final model and labels (`distill` with no flag also trains, as in the CLAUDE.md Step 6 verify list; the test scoring is refused a second time):
 
 ```powershell
 uv run python -m trialpulse.nlp.distill --train
+uv run python -m trialpulse.nlp.distill --dev
 uv run python -m trialpulse.nlp.distill --predict-test
 uv run python -m trialpulse.nlp.evaluate --test distilled
 uv run python -m trialpulse.nlp.distill --label-all
@@ -92,4 +90,5 @@ uv run python -m trialpulse.nlp.distill --label-all
 - Scores measure agreement with reference labels from an adjudicated model panel. The panel members are one model, so panel agreement is an upper bound on label reliability, and a gap between the LLM and the panel can be the panel's error as well as the LLM's.
 - The dev set is small (100 texts, two covid19 and two safety texts), so dev scores are noisy and v2's dev score is optimistic.
 - The test interval for the LLM (0.791 to 0.883) reaches below the 0.80 target.
+- The distilled classifier is less accurate than its teacher (macro-F1 0.769 against 0.842 on test), and its errors push the H3 difference of the pre-registration toward zero.
 - Reasons are self-reported free text; many give no usable reason (label `other`).
