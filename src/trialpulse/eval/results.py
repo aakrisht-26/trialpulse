@@ -8,6 +8,13 @@ H5) must name the same commit with a clean tree, be unlocked by the same tag obj
 name as its commit the commit the tag points at (the run rule of the review of Step 10 and
 `docs/preregistration.md`). A file that breaks this refuses the document, by name.
 
+**What each result read.** A comparison or a hypothesis file names the scores files it read,
+with their SHA-256; each must equal the file the walk-forward run of that model and origin
+wrote in the main folder. A walk-forward result of the main run must have read the main
+cohort and features, and the UNKNOWN variant's the variant's evaluation rows with the main
+training rows. Every interval must come from the registered number of resamples, and H3 and
+H5 must be the champion's.
+
 **The registered predictions** are read from `docs/preregistration.md` in the tagged commit,
 not from the working tree: the machine-readable block of the registration (a fenced block
 opened by "```json predictions") gives each prediction's value and acceptable range, and the
@@ -34,7 +41,8 @@ import numpy as np
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.eval.lock import PREREG_PATH
-from trialpulse.eval.rows import VARIANT
+from trialpulse.eval.rows import LANDMARKS_PATH, TRAINING_DIR, VARIANT, VARIANT_COHORT_DIR
+from trialpulse.eval.walkforward import FEATURES_DIR, PREDICTIONS_DIR, relative
 from trialpulse.reports import markdown_table, write_text_if_changed
 
 RESULTS_ROOT = REPO_ROOT / "data" / "results"
@@ -49,6 +57,8 @@ H4_BOUNDS = (0.8, 1.2)
 H1_BAND = 0.02
 PRIMARY = ("auc_12_2018", "auc_12_2019", "h2_slope_12")
 DIFFERENCES = ("h1_", "h2_", "h3_", "h5_")
+# The hypothesis whose condition a prediction also answers to, by the prefix of its id.
+HYPOTHESIS_OF = {"h1_": "H1", "h2_": "H2", "h3_": "H3", "h4_": "H4", "h5_": "H5"}
 BLOCK = re.compile(r"```json predictions\n(.*?)\n```", re.DOTALL)
 
 
@@ -135,11 +145,15 @@ class Run:
     h5: dict[str, Any]
     files: dict[Path, dict[str, Any]]  # every file, for the commit check and the runs list
     root: Path
+    walkforward_files: dict[tuple[str, str], Path]
+    variant_files: dict[str, Path]
 
 
 def load_run(root: Path) -> Run:
     files: dict[Path, dict[str, Any]] = {}
     walkforward: dict[tuple[str, str], dict[str, Any]] = {}
+    walkforward_files: dict[tuple[str, str], Path] = {}
+    variant_files: dict[str, Path] = {}
     missing: list[str] = []
     for model in MODELS:
         for year in (*TEST_YEARS, STRESS_YEAR):
@@ -153,6 +167,7 @@ def load_run(root: Path) -> Run:
                 continue
             files[path] = files.get(path) or _read(path)
             walkforward[model, year] = _origin(files[path], year)
+            walkforward_files[model, year] = path
     variant = {}
     for year in TEST_YEARS:
         path = _walkforward(root, CHAMPION, year, variant=True)
@@ -164,6 +179,7 @@ def load_run(root: Path) -> Run:
             continue
         files[path] = files.get(path) or _read(path)
         variant[year] = _origin(files[path], year)
+        variant_files[year] = path
     pairs = {}
     for path in sorted((root / "compare" / "test").glob("*.json")):
         files[path] = _read(path)
@@ -187,7 +203,8 @@ def load_run(root: Path) -> Run:
             "the locked run is incomplete; make the missing results with:\n  "
             + "\n  ".join(missing)
         )
-    return Run(walkforward, variant, pairs, hypothesis["h3-test"], hypothesis["h5"], files, root)
+    return Run(walkforward, variant, pairs, hypothesis["h3-test"], hypothesis["h5"], files, root,
+               walkforward_files, variant_files)  # fmt: skip
 
 
 def check_one_commit(files: Mapping[Path, Mapping[str, Any]]) -> dict[str, str]:
@@ -220,6 +237,95 @@ def check_one_commit(files: Mapping[Path, Mapping[str, Any]]) -> dict[str, str]:
         raise RefusedError("the locked run is not one clean commit:\n  " + "\n  ".join(problems))
     (tag_object, commit, registered) = tags.pop()
     return {"commit": commit, "tag_object": tag_object, "registered": registered}
+
+
+def _intervals(value: Any) -> list[Mapping[str, Any]]:
+    """Every interval record (a mapping with "ci_low") anywhere in a result."""
+    if isinstance(value, Mapping):
+        found = [value] if "ci_low" in value else []
+        return found + [i for v in value.values() for i in _intervals(v)]
+    if isinstance(value, list):
+        return [i for v in value for i in _intervals(v)]
+    return []
+
+
+def check_provenance(run: Run, cfg: ProjectConfig) -> None:
+    """What each result read, and with how many resamples (see the module docstring)."""
+    problems: list[str] = []
+    n = cfg.evaluation.bootstrap_resamples
+    for path, result in run.files.items():
+        if result.get("bootstrap_resamples") != n:
+            problems.append(
+                f"{path}: {result.get('bootstrap_resamples')} bootstrap resamples, not the "
+                f"registered {n}"
+            )
+        odd = {str(i.get("resamples")) for i in _intervals(result) if i.get("resamples", n) != n}
+        if odd:
+            problems.append(f"{path}: intervals from {sorted(odd)} resamples, not {n}")
+    main_inputs = {
+        "landmarks": relative(LANDMARKS_PATH),
+        "features_dir": relative(FEATURES_DIR),
+        "predictions_dir": relative(PREDICTIONS_DIR),
+        "cohort_variant": None,
+    }
+    variant_inputs = {
+        "landmarks": relative(VARIANT_COHORT_DIR / LANDMARKS_PATH.name),
+        "training_dir": relative(TRAINING_DIR),
+        "training_features_dir": relative(FEATURES_DIR),
+        "cohort_variant": VARIANT,
+    }
+    checked: set[Path] = set()
+    for expected, paths, is_variant in (
+        (main_inputs, set(run.walkforward_files.values()), False),
+        (variant_inputs, set(run.variant_files.values()), True),
+    ):
+        for path in paths - checked:
+            checked.add(path)
+            result = run.files[path]
+            inputs = result.get("inputs") or {}
+            wrong = {k: inputs.get(k) for k, v in expected.items() if inputs.get(k) != v}
+            if wrong or (result.get("variant") == VARIANT) != is_variant:
+                kind = "the UNKNOWN variant's" if is_variant else "the main"
+                problems.append(f"{path}: did not read {kind} inputs ({wrong or 'variant flag'})")
+    written = {
+        (model, year): record.get("predictions")
+        for (model, year), record in run.walkforward.items()
+    }
+    readers = [(path, result, [result]) for path, result in run.files.items()
+               if "inputs" in result and isinstance(result["inputs"], list)]  # fmt: skip
+    readers += [(path, result, result["pairs"]) for path, result in run.files.items()
+                if "pairs" in result]  # fmt: skip
+    for path, result, parts in readers:
+        if result.get("predictions_dir") != relative(PREDICTIONS_DIR):
+            problems.append(
+                f"{path}: read scores from {result.get('predictions_dir')}, not the main folder"
+            )
+        for part in parts:
+            if not part.get("inputs"):
+                problems.append(f"{path}: names no scores file it read")
+            for item in part.get("inputs") or []:
+                source = written.get((item["model"], item["origin"][:4]))
+                if not source or (source["path"], source["sha256"]) != (
+                    item["path"],
+                    item["sha256"],
+                ):
+                    problems.append(
+                        f"{path}: read {item['path']} ({item['sha256'][:12]}), not the scores of "
+                        f"the walk-forward result of {item['model']} at {item['origin']}"
+                    )
+    for name, result in (("h3-test", run.h3), ("h5", run.h5)):
+        if result.get("model") != CHAMPION:
+            problems.append(
+                f"{name}.json: the hypothesis of {result.get('model')}, not of the champion"
+            )
+    if run.h3.get("origins_spec") != "test":
+        problems.append(
+            f"h3-test.json: computed on {run.h3.get('origins_spec')}, not the test origins"
+        )
+    if problems:
+        raise RefusedError(
+            "the locked run's files do not hold together:\n  " + "\n  ".join(problems)
+        )
 
 
 def statistic_ids() -> frozenset[str]:
@@ -306,6 +412,10 @@ def _signed(d: Mapping[str, Any], digits: int = 4) -> str:
     return f"{d['estimate']:+.{digits}f} ({d['ci_low']:+.{digits}f} to {d['ci_high']:+.{digits}f})"
 
 
+def figure_paths(cfg: ProjectConfig, out_dir: Path) -> list[Path]:
+    return [out_dir / f"results_calibration_{m}m.png" for m in cfg.horizons_months]
+
+
 def calibration_figures(run: Run, cfg: ProjectConfig, out_dir: Path) -> list[Path]:
     """Observed against predicted risk by decile for the champion, one line per test origin,
     with the diagonal of perfect calibration."""
@@ -349,6 +459,7 @@ def calibration_figures(run: Run, cfg: ProjectConfig, out_dir: Path) -> list[Pat
 def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[Path] = ()) -> str:
     """The text of docs/results.md."""
     unlock = check_one_commit(run.files)
+    check_provenance(run, cfg)
     predictions = registered_predictions(registration)
     values = observed(run)
     unknown = sorted(set(predictions) - statistic_ids())
@@ -360,7 +471,13 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
     rows, falsified = [], []
     for p in predictions.values():
         value = values[p.id]
-        ok = p.holds(value["estimate"])
+        reasons = [] if p.holds(value["estimate"]) else ["outside the range"]
+        hypothesis = next(
+            (h for prefix, h in HYPOTHESIS_OF.items() if p.id.startswith(prefix)), None
+        )
+        if hypothesis and not verdicts[hypothesis][0]:
+            reasons.append(f"the condition of {hypothesis} failed")
+        ok = not reasons
         if not ok:
             falsified.append(p.id)
         rows.append(
@@ -370,7 +487,7 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
                 p.number(p.predicted),
                 p.range_text(),
                 _shown(value, p.difference),
-                "within the range" if ok else "**falsified**",
+                "within the range" if ok else "**falsified**: " + " and ".join(reasons),
             ]
         )
     failed = [name for name, (holds, _) in verdicts.items() if not holds]
@@ -398,8 +515,9 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
         "## The registered predictions against the observed values",
         "",
         "Primary claims in bold: the champion's AUC at 12 months on each test origin, and H2. "
-        "Everything else is secondary. A value outside its registered range falsifies the "
-        "prediction.",
+        "Everything else is secondary. A prediction is falsified when its value falls outside "
+        "its registered range, or when the condition of its hypothesis fails (section 1 of the "
+        "registration).",
         "",
         *markdown_table(
             ["Prediction", "What", "Predicted", "Acceptable range", "Observed", "Verdict"], rows
@@ -413,7 +531,7 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
         (
             "Falsified predictions: " + ", ".join(falsified) + "."
             if falsified
-            else "No prediction fell outside its registered range."
+            else "No prediction was falsified."
         ),
         "",
         (
@@ -426,7 +544,9 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
     lines += _headline(run)
     lines += _by_index(run)
     lines += _calibration(run, figures)
+    lines += _single_curve(run)
     lines += _pairs(run)
+    lines += _trend(run)
     lines += _cause_specific(run)
     lines += _unknown(run)
     lines += _stress(run)
@@ -531,6 +651,72 @@ def _calibration(run: Run, figures: Sequence[Path]) -> list[str]:
     return out
 
 
+def _single_curve(run: Run) -> list[str]:
+    rows = []
+    for year in TEST_YEARS:
+        for months in ("12", "24"):
+            pooled = run.walkforward[CHAMPION, year]["horizons"][months]["pooled"]
+            one = pooled["single_censoring_curve"]
+            rows.append([year, months, _ci(pooled["auc"]), f"{one['auc']:.3f}",
+                         _ci(pooled["brier"], 4), f"{one['brier']:.4f}", _ci(pooled["lift"], 2),
+                         f"{one['lift']:.2f}", f"{pooled['calibration_slope']:.3f}",
+                         f"{one['calibration_slope']:.3f}"])  # fmt: skip
+    return [
+        "## Sensitivity: one censoring curve for all rows",
+        "",
+        "The champion's metrics with the censoring weights by sponsor class (the registered "
+        "ones) beside the same metrics with one censoring curve for all rows (ADR 0017).",
+        "",
+        *markdown_table(
+            [
+                "Origin",
+                "Horizon (months)",
+                "AUC, by class",
+                "AUC, one curve",
+                "Brier, by class",
+                "Brier, one curve",
+                "Lift, by class",
+                "Lift, one curve",
+                "Slope, by class",
+                "Slope, one curve",
+            ],
+            rows,
+        ),
+        "",
+    ]
+
+
+def _trend(run: Run) -> list[str]:
+    """H2 and its secondary statistics: the slope and the late-minus-early contrast at both
+    horizons, for every pair compared at each landmark index."""
+    rows = []
+    for (model, baseline), pair in run.pairs.items():
+        for months, trend in sorted(pair.get("trend", {}).items()):
+            rows.append([f"{model.upper()} minus {baseline.upper()}", months,
+                         _signed(trend["slope"]), _signed(trend["late_minus_early"])])  # fmt: skip
+    if not rows:
+        return []
+    return [
+        "## The trend over landmark indices (H2)",
+        "",
+        "The slope of the least-squares line through the differences in AUC at landmark indices "
+        "0 to 6, and the mean difference at landmarks 4 to 6 minus the mean at 0 and 1, with "
+        "paired cluster-bootstrap intervals. The slope at 12 months is H2; the rest is "
+        "secondary.",
+        "",
+        *markdown_table(
+            [
+                "Difference",
+                "Horizon (months)",
+                "Slope per landmark index",
+                "Landmarks 4 to 6 minus 0 and 1",
+            ],
+            rows,
+        ),
+        "",
+    ]
+
+
 def _pairs(run: Run) -> list[str]:
     rows = []
     for (model, baseline), pair in run.pairs.items():
@@ -569,23 +755,21 @@ def _cause_specific(run: Run) -> list[str]:
     rows = []
     for months, part in run.h3["horizons"].items():
         for day, by in part["by_origin"].items():
-            rows.append(
-                [
-                    day[:4],
-                    months,
-                    f"{by['cases']['operational']:,}",
-                    f"{by['operational']:.3f}",
-                    f"{by['cases']['scientific']:,}",
-                    f"{by['scientific']:.3f}",
-                    f"{by['operational'] - by['scientific']:+.3f}",
-                ]
-            )
+            b = by["intervals"]
+            rows.append([day[:4], months, f"{by['cases']['operational']:,}", _ci(b["operational"]),
+                         f"{by['cases']['scientific']:,}", _ci(b["scientific"]),
+                         _signed(b["difference"], 3)])  # fmt: skip
+        rows.append([" and ".join(TEST_YEARS) + " (mean)", months, "", _ci(part["operational"]),
+                     "", _ci(part["scientific"]), _signed(part["difference"], 3)])  # fmt: skip
     return [
         "## Cause-specific results: operational and scientific stops (H3)",
         "",
         "The champion's all-cause score held against operational and against scientific early "
-        "stops (ADR 0028), with the censoring weights of all evaluation rows. Errors in the reason "
-        "labels push the difference toward zero, as long as they do not depend on the risk score.",
+        "stops (ADR 0028), with the censoring weights of all evaluation rows; paired "
+        "cluster-bootstrap intervals at each origin and over both. Errors between the operational "
+        "and scientific labels push the difference toward zero as long as they do not depend on "
+        "the risk score; errors into or out of the label other move a score toward the AUC of "
+        "the stops labeled other (section H3 of the registration).",
         "",
         *markdown_table(
             [
@@ -619,6 +803,8 @@ def _unknown(run: Run) -> list[str]:
                     _ci(alt["auc"]),
                     _ci(main["brier"], 4),
                     _ci(alt["brier"], 4),
+                    _ci(main["lift"], 2),
+                    _ci(alt["lift"], 2),
                     f"{main['calibration_slope']:.3f}",
                     f"{alt['calibration_slope']:.3f}",
                 ]
@@ -627,7 +813,7 @@ def _unknown(run: Run) -> list[str]:
         "## Sensitivity: UNKNOWN as an early stop",
         "",
         "The champion, trained as in the main run, scores a cohort in which a trial lapsed at "
-        "the data cutoff stops early at its lapse date (Section 6, ADR 0014).",
+        "the data cutoff stops early at its lapse date (Section 6, ADRs 0014 and 0029).",
         "",
         *markdown_table(
             [
@@ -639,6 +825,8 @@ def _unknown(run: Run) -> list[str]:
                 "AUC, variant",
                 "Brier, main",
                 "Brier, variant",
+                "Lift, main",
+                "Lift, variant",
                 "Slope, main",
                 "Slope, variant",
             ],
@@ -696,8 +884,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg = load_project_config()
     loaded = load_run(args.results)
     unlock = check_one_commit(loaded.files)
-    figures = calibration_figures(loaded, cfg, args.figures)
-    text = document(loaded, registration_at(unlock["commit"]), cfg, figures)
+    # The text first: a refusal leaves no figure of locked results behind.
+    text = document(loaded, registration_at(unlock["commit"]), cfg, figure_paths(cfg, args.figures))
+    calibration_figures(loaded, cfg, args.figures)
     changed = write_text_if_changed(args.doc, text)
     print(f"{args.doc}: {'written' if changed else 'up to date'}")
     return 0

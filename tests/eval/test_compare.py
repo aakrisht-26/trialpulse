@@ -591,8 +591,24 @@ def test_a_pair_compared_at_every_index_carries_its_trend(
     assert compare.TREND not in compare.compare_pair(cfg, tmp_path, "m3", "m2", False, ORIGINS, 5)
 
 
-def test_the_locked_origins_need_the_unlock_before_any_file_is_read(tmp_path: Path) -> None:
-    args = ["--predictions-dir", str(tmp_path / "nothing"), "--origins", "test", "--no-track"]
+def test_the_locked_origins_need_the_unlock_before_any_file_is_read(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prediction files exist for every pair (named as test runs here), and any read of one
+    fails the test: the refusal of the lock must come first."""
+    for model in ("m4", "m3", "m2", "m1"):
+        for origin in ORIGINS:
+            source = predictions_path(folder, model, "dev", origin)
+            target = predictions_path(folder, model, "test", origin)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+
+    def no_read(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a prediction file was read before the lock")
+
+    monkeypatch.setattr(compare, "load_pair", no_read)
+    monkeypatch.setattr(compare, "prediction_file", no_read)
+    args = ["--predictions-dir", str(folder), "--origins", "test", "--no-track"]
     with pytest.raises(RefusedError, match="--unlock-test"):
         compare.main(args)
 

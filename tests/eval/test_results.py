@@ -2,6 +2,7 @@
 No locked origin is evaluated: the files are written here as an unlocked run would write
 them."""
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,36 @@ def _tracking(name: str, commit: str = COMMIT, dirty: str = "no") -> dict[str, s
     }
 
 
+MAIN_INPUTS = {
+    "landmarks": results.relative(results.LANDMARKS_PATH),
+    "training_dir": results.relative(results.TRAINING_DIR),
+    "features_dir": results.relative(results.FEATURES_DIR),
+    "training_features_dir": results.relative(results.FEATURES_DIR),
+    "predictions_dir": results.relative(results.PREDICTIONS_DIR),
+    "cohort_variant": None,
+}
+VARIANT_INPUTS = {
+    **MAIN_INPUTS,
+    "landmarks": results.relative(results.VARIANT_COHORT_DIR / results.LANDMARKS_PATH.name),
+    "features_dir": "data/features_unknown_as_stop",
+    "predictions_dir": results.relative(results.PREDICTIONS_DIR / "unknown-as-stop"),
+    "cohort_variant": "unknown-as-stop",
+}
+
+
+def _sha(model: str, year: str) -> str:
+    return hashlib.sha256(f"{model} {year}".encode()).hexdigest()
+
+
+def _scores(model: str, year: str) -> dict[str, str]:
+    """A scores file as the walk-forward run of a model and origin records it."""
+    return {"path": f"{model}_{year}/origin_{year}-01-01.parquet", "sha256": _sha(model, year)}
+
+
+def _read_by(models: tuple[str, ...], years: tuple[str, ...]) -> list[dict[str, str]]:
+    return [{"model": m, "origin": f"{y}-01-01", **_scores(m, y)} for m in models for y in years]
+
+
 def _interval(value: float, half: float = 0.01) -> dict[str, float]:
     return {"estimate": value, "ci_low": value - half, "ci_high": value + half}
 
@@ -46,6 +77,13 @@ def _pooled(auc: float, slope: float, n: int = 50_000) -> dict[str, Any]:
         "lift": _interval(3.1, 0.2),
         "calibration_slope": slope,
         "calibration_intercept": 0.05,
+        "single_censoring_curve": {
+            "auc": auc - 0.005,
+            "brier": 0.0302,
+            "lift": 3.05,
+            "calibration_slope": slope + 0.01,
+            "calibration_intercept": 0.04,
+        },
         "calibration_table": [
             {"bin": b, "n": n // 10, "mean_predicted": 0.004 * b, "observed_cif": 0.0038 * b}
             for b in range(1, 11)
@@ -64,6 +102,7 @@ def _walkforward(model: str, year: str, auc: float, slope: float, **extra: Any) 
         }
         for m in ("12", "24")
     }
+    variant = extra.get("variant") == "unknown-as-stop"
     return {
         "model": model,
         "origins_spec": year,
@@ -73,9 +112,11 @@ def _walkforward(model: str, year: str, auc: float, slope: float, **extra: Any) 
             {
                 "origin": f"{year}-01-01",
                 "role": "stress" if year == "2020" else "test",
+                "predictions": _scores(model, f"{year} variant" if variant else year),
                 "horizons": horizons,
             }
         ],
+        "inputs": VARIANT_INPUTS if variant else MAIN_INPUTS,
         "tracking": _tracking(f"{model}-{year}"),
         **extra,
     }
@@ -179,9 +220,15 @@ def root(tmp_path: Path) -> Path:
             m: {"0": {"delta_auc": _interval(d)}} for m, d in (("12", 0.004), ("24", 0.012))
         },
     }
+    pair["inputs"] = _read_by(("m4", "m1"), ("2018", "2019"))
+    common = {
+        "unlock": UNLOCK,
+        "bootstrap_resamples": 1000,
+        "predictions_dir": results.relative(results.PREDICTIONS_DIR),
+    }
     _write(
         base / "compare" / "test" / "m4__m1.json",
-        {"pairs": [pair], "unlock": UNLOCK, "tracking": _tracking("compare-m4-vs-m1-test")},
+        {"pairs": [pair], **common, "tracking": _tracking("compare-m4-vs-m1-test")},
     )
     trend = {
         m: {"slope": _interval(0.006, 0.003), "late_minus_early": _interval(0.02)}
@@ -196,15 +243,21 @@ def root(tmp_path: Path) -> Path:
             for m in ("12", "24")
         },
     }
+    pair["inputs"] = _read_by(("m3", "m2"), ("2018", "2019"))
     _write(
         base / "compare" / "test" / "m3__m2.json",
-        {"pairs": [pair], "unlock": UNLOCK, "tracking": _tracking("compare-m3-vs-m2-test")},
+        {"pairs": [pair], **common, "tracking": _tracking("compare-m3-vs-m2-test")},
     )
     by_origin = {
         f"{y}-01-01": {
             "cases": {"operational": 1800, "scientific": 210, "other": 400, "none": 300},
             "operational": 0.74,
             "scientific": 0.67,
+            "intervals": {
+                "operational": _interval(0.74),
+                "scientific": _interval(0.67),
+                "difference": _interval(0.07, 0.05),
+            },
         }
         for y in ("2018", "2019")
     }
@@ -212,16 +265,30 @@ def root(tmp_path: Path) -> Path:
         base / "hypotheses" / "h3-test.json",
         {
             "horizons": {
-                m: {"difference": _interval(0.07, 0.04), "by_origin": by_origin}
+                m: {
+                    "operational": _interval(0.74),
+                    "scientific": _interval(0.67),
+                    "difference": _interval(0.07 - (0.01 if m == "24" else 0), 0.04),
+                    "by_origin": by_origin,
+                }
                 for m in ("12", "24")
             },
-            "unlock": UNLOCK,
+            "model": "m4",
+            "origins_spec": "test",
+            "inputs": _read_by(("m4",), ("2018", "2019")),
+            **common,
             "tracking": _tracking("h3-test"),
         },
     )
     _write(
         base / "hypotheses" / "h5.json",
-        {"difference": _interval(-0.03), "unlock": UNLOCK, "tracking": _tracking("h5")},
+        {
+            "difference": _interval(-0.03),
+            "model": "m4",
+            "inputs": _read_by(("m4",), ("2018", "2019", "2020")),
+            **common,
+            "tracking": _tracking("h5"),
+        },
     )
     return base
 
@@ -237,7 +304,7 @@ def test_the_document_holds_every_registered_prediction_against_its_value(root: 
     assert "| **auc_12_2018** |" in table
     assert "| **h2_slope_12** |" in table
     row = next(line for line in table.splitlines() if line.startswith("| **auc_12_2019**"))
-    assert row.endswith("| **falsified** |")
+    assert row.endswith("| **falsified**: outside the range |")
     row = next(line for line in table.splitlines() if line.startswith("| h1_delta_auc_24"))
     assert "| above 0 to +0.03 |" in row
     assert row.endswith("| within the range |")
@@ -248,7 +315,27 @@ def test_the_document_holds_every_registered_prediction_against_its_value(root: 
     assert "Hypotheses whose condition failed: H4." in table
     # The other sections read their files.
     assert "## Sensitivity: UNKNOWN as an early stop" in text
-    assert "| 2018 | 12 | 1,800 | 0.740 | 210 | 0.670 | +0.070 |" in text
+    assert (
+        "| 2018 | 12 | 1,800 | 0.740 (0.730 to 0.750) | 210 | 0.670 (0.660 to 0.680) | "
+        "+0.070 (+0.020 to +0.120) |" in text
+    )
+    # H3 over both origins at each horizon, with its interval (ADR 0028).
+    assert (
+        "| 2018 and 2019 (mean) | 24 |  | 0.740 (0.730 to 0.750) |  | 0.670 (0.660 to 0.680) "
+        "| +0.060 (+0.020 to +0.100) |" in text
+    )
+    # The UNKNOWN analysis has the lift (ADR 0029); the single-curve check and H2's
+    # secondary statistics are reported (ADR 0017, section H2 of the registration).
+    unknown = text.split("## Sensitivity: UNKNOWN as an early stop")[1].split("\n## ")[0]
+    assert "| Lift, main | Lift, variant |" in unknown
+    assert "ADRs 0014 and 0029" in unknown
+    single = text.split("## Sensitivity: one censoring curve for all rows")[1].split("\n## ")[0]
+    assert "| 2018 | 12 | 0.730 (0.720 to 0.740) | 0.725 |" in single
+    trend = text.split("## The trend over landmark indices (H2)")[1].split("\n## ")[0]
+    assert (
+        "| M3 minus M2 | 24 | +0.0060 (+0.0030 to +0.0090) | +0.0200 (+0.0100 to +0.0300) |"
+        in trend
+    )
     assert "H5: the AUC at 12 months minus the mean of 2018 and 2019 is -0.0300" in text
     assert "| M3 minus M2 | +0.0400 (+0.0300 to +0.0500) |" in text
     runs = text.split("## Runs")[1]
@@ -365,3 +452,72 @@ def test_the_draft_registration_names_computable_predictions_and_passes_the_text
     if "Status: draft, not yet registered." in text:
         registered = text.replace("Status: draft, not yet registered.", "Registered: 2026-11-01")
         assert find_placeholders(registered) == []
+
+
+def _edit(path: Path, change: Any) -> None:
+    content = json.loads(path.read_text(encoding="utf-8"))
+    change(content)
+    _write(path, content)
+
+
+def test_a_prediction_also_falls_with_the_condition_of_its_hypothesis(root: Path) -> None:
+    """Section 1 of the registration: falsified outside its range, or when the condition of
+    its hypothesis fails. H3's difference inside its range with an interval reaching below 0."""
+
+    def weak(content: dict[str, Any]) -> None:
+        content["horizons"]["12"]["difference"] = {
+            "estimate": 0.05,
+            "ci_low": -0.01,
+            "ci_high": 0.11,
+        }
+
+    _edit(root / "hypotheses" / "h3-test.json", weak)
+    text = results.document(results.load_run(root), _registration(), load_project_config())
+    row = next(line for line in text.splitlines() if line.startswith("| h3_difference_12"))
+    assert row.endswith("| **falsified**: the condition of H3 failed |")
+    assert "Falsified predictions: h3_difference_12, auc_12_2019." in text
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "change", "message"),
+    [
+        ("compare/test/m3__m2.json",
+         lambda c: c["pairs"][0]["inputs"][0].update(sha256="0" * 64),
+         "not the scores of the walk-forward result of m3 at 2018-01-01"),
+        ("hypotheses/h3-test.json",
+         lambda c: c.update(predictions_dir="data/results/walkforward/predictions/unknown-as-stop"),
+         "not the main folder"),
+        ("hypotheses/h3-test.json", lambda c: c.update(model="m3"), "not of the champion"),
+        ("hypotheses/h5.json", lambda c: c.update(model="m2"), "not of the champion"),
+        ("compare/test/m3__m2.json", lambda c: c.update(bootstrap_resamples=50),
+         "50 bootstrap resamples, not the registered 1000"),
+        ("compare/test/m3__m2.json",
+         lambda c: c["pairs"][0]["trend"]["12"]["slope"].update(resamples=50),
+         "intervals from ['50'] resamples"),
+        ("walkforward/m4_2018.json",
+         lambda c: c["inputs"].update(cohort_variant="unknown-as-stop"),
+         "did not read the main inputs"),
+        ("walkforward/unknown-as-stop/m4_2019.json",
+         lambda c: c.update(inputs=MAIN_INPUTS),
+         "did not read the UNKNOWN variant's inputs"),
+    ],
+)  # fmt: skip
+def test_files_that_did_not_read_what_the_run_wrote_are_refused(
+    root: Path, relative_path: str, change: Any, message: str
+) -> None:
+    _edit(root / relative_path, change)
+    with pytest.raises(RefusedError, match="do not hold together") as refused:
+        results.document(results.load_run(root), _registration(), load_project_config())
+    assert message in str(refused.value)
+
+
+def test_a_refused_document_leaves_no_figure_behind(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(results, "registration_at", lambda commit, repo=None: "# no block\n")
+    figures = tmp_path / "figures"
+    args = ["--results", str(root), "--doc", str(tmp_path / "r.md"), "--figures", str(figures)]
+    with pytest.raises(RefusedError, match="no ```json predictions block"):
+        results.main(args)
+    assert not figures.exists()
+    assert not (tmp_path / "r.md").exists()

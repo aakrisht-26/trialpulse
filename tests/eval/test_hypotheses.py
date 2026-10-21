@@ -194,7 +194,17 @@ def test_h3_on_the_development_origins(world: dict[str, Any], cfg: ProjectConfig
         assert by["2016-01-01"]["cases"][kind] == int((stop & (frame["kind"] == kind)).sum())
 
 
-def test_h3_on_the_locked_origins_needs_the_unlock_first(world: dict[str, Any]) -> None:
+def test_h3_on_the_locked_origins_needs_the_unlock_first(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The test files of the made-up world exist; any read of them, or of the reason labels,
+    fails the test: the refusal of the lock comes first."""
+
+    def no_read(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a file was read before the lock")
+
+    for name in ("load_pair", "reason_hashes", "reasons_of", "inputs_of"):
+        monkeypatch.setattr(hypotheses, name, no_read)
     with pytest.raises(RefusedError, match="--unlock-test"):
         hypotheses.main(["h3", *_args(world, "--origins", "test")])
     with pytest.raises(RefusedError, match="--unlock-test"):
