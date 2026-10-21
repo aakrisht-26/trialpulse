@@ -571,3 +571,56 @@ def test_the_cox_models_read_the_landmark_0_rows_of_the_cohort_as_of_the_origin(
     monkeypatch.setattr(cox.frame, "load", reversed_rows)
     with pytest.raises(RefusedError, match="hold different landmark 0 rows"):
         cox.load_rows(cfg, ORIGIN, built.features_dir, built.cohort_dir)
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_the_unknown_variant_gets_features_in_a_folder_of_its_own(built: Built) -> None:
+    """Step 11: the features of the UNKNOWN sensitivity cohort are built by the same code from
+    the variant's cohort folder. The main document and the main build are left alone; the
+    rows the variant adds get features; the fits on training rows are the main build's."""
+    root = built.root
+    args = dict(zip(built.args[::2], built.args[1::2], strict=True))
+    cohort_args = ["--warehouse", args["--warehouse"], "--out-dir", str(root / "cohort_v"),
+                   "--unknown-as-stop", "--main-dir", args["--cohort-dir"]]  # fmt: skip
+    assert cohort_build.main(cohort_args) == 0
+    doc_before = (root / "features.md").read_text(encoding="utf-8")
+    log_before = _log(root)
+    variant = ["--warehouse", args["--warehouse"], "--interventions", args["--interventions"],
+               "--current-fields", args["--current-fields"], "--temp-dir", args["--temp-dir"],
+               "--variant", "unknown-as-stop", "--cohort-dir", str(root / "cohort_v"),
+               "--out-dir", str(root / "features_v"), "--main-dir", args["--out-dir"]]  # fmt: skip
+    assert features_build.main(variant) == 0
+    assert (root / "features.md").read_text(encoding="utf-8") == doc_before
+    assert _log(root) == log_before
+    assert (root / "features_v" / "features.md").is_file()
+    log = json.loads((root / "features_v" / "build.json").read_text(encoding="utf-8"))
+    main_tables = log_before["tables"]
+    assert log["tables"]["features.parquet"]["rows"] > main_tables["features.parquet"]["rows"]
+    # The fits on the training rows are the main build's: the class rates are the same file,
+    # and every text both builds hold has the same components. The variant's files hold more
+    # texts, those of the evaluation rows it adds.
+    priors = [k for k in main_tables if k.endswith("sponsor_priors.json")]
+    assert len(priors) == 5
+    assert all(log["tables"][name] == main_tables[name] for name in priors)
+    gap = " + ".join(f"abs(m.{c} - v.{c})" for c in features_build.COMPONENT_COLUMNS)
+    for folder in sorted({k.split("/")[0] for k in priors}):
+        for field in ("eligibility", "summary"):
+            a = root / "features" / folder / f"{field}_components.parquet"
+            b = root / "features_v" / folder / f"{field}_components.parquet"
+            with duckdb.connect() as con:
+                missing, largest = con.execute(
+                    f"""SELECT count(*) FILTER (WHERE v.text_hash IS NULL),
+                      max({gap})
+                    FROM read_parquet('{a.as_posix()}') m
+                    LEFT JOIN read_parquet('{b.as_posix()}') v USING (text_hash)"""
+                ).fetchone() or (None, None)
+            assert missing == 0
+            assert largest == 0
+
+
+def test_the_variant_folder_is_written_only_with_the_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(features_build, "VARIANT_FEATURES_DIR", tmp_path / "features_v")
+    with pytest.raises(RefusedError, match="needs --variant"):
+        features_build.main(["--out-dir", str(tmp_path / "features_v")])

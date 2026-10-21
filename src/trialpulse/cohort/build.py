@@ -22,6 +22,13 @@ Outputs, in data/cohort/:
 
 It also writes part 2 of docs/data_audit.md. The build reads the warehouse read-only and
 is deterministic: the same warehouse and config give the same files.
+
+**The UNKNOWN sensitivity variant** (`--unknown-as-stop`, Step 11; see
+`trialpulse.cohort.outcomes`) is written to its own folder (default
+data/cohort_unknown_as_stop/): the final cohort with a lapse at the cutoff counted as an
+early stop, and the training cohorts built with the main rules, because the champion is
+trained exactly as in the main run. The build refuses to finish unless those training files
+equal the main build's, file for file. It writes no part of docs/data_audit.md.
 """
 
 import argparse
@@ -44,7 +51,7 @@ from trialpulse.cohort.outcomes import build_outcomes, build_states, check_versi
 from trialpulse.cohort.person_period import PERSON_PERIOD_COLUMNS, expand
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import load_project_config
-from trialpulse.eval.rows import LANDMARKS_PATH, training_path
+from trialpulse.eval.rows import LANDMARKS_PATH, VARIANT_COHORT_DIR, training_path
 from trialpulse.parquet import write_table as _write_table
 from trialpulse.reports import replace_section
 from trialpulse.warehouse.audit import AUDIT_FAMILY, AUDIT_PATH
@@ -78,11 +85,14 @@ OUTCOME_COLUMNS: tuple[str, ...] = (
 )
 
 
-def build_cohort(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
-    """From a `versions` table or view to the cohort_* tables in `con`."""
+def build_cohort(
+    con: duckdb.DuckDBPyConnection, rules: CohortRules, unknown_as_stop: bool = False
+) -> None:
+    """From a `versions` table or view to the cohort_* tables in `con`. With
+    `unknown_as_stop`, the UNKNOWN sensitivity variant (`trialpulse.cohort.outcomes`)."""
     check_version_order(con, rules)
     build_states(con, rules)
-    build_outcomes(con, rules)
+    build_outcomes(con, rules, unknown_as_stop)
     build_landmarks(con, rules)
     landmarks = con.execute(
         f"SELECT {', '.join(LANDMARK_COLUMNS)} FROM cohort_landmarks "
@@ -243,19 +253,50 @@ def warehouse_stamp(con: duckdb.DuckDBPyConnection) -> str:
     )
 
 
+def check_training_files(training: Sequence[dict[str, Any]], main_dir: Path) -> None:
+    """The variant's training files must equal the main build's, file for file."""
+    log = main_dir / BUILD_LOG_PATH.name
+    if not log.is_file():
+        raise RefusedError(
+            f"no build of the main cohort in {main_dir}; build it first: uv run python -m "
+            "trialpulse.cohort.build"
+        )
+    main_tables = json.loads(log.read_text(encoding="utf-8"))["tables"]
+    for summary in training:
+        for name, (rows, checksum) in summary["files"].items():
+            expected = main_tables.get(name)
+            if expected != {"rows": rows, "checksum": checksum}:
+                raise RefusedError(
+                    f"the variant's {name} differs from the main cohort's ({expected} there, "
+                    f"{rows} rows with checksum {checksum} here): rebuild the main cohort "
+                    "from the same warehouse first"
+                )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the cohort from the warehouse.")
     parser.add_argument("--warehouse", type=Path, default=WAREHOUSE_PATH)
-    parser.add_argument("--out-dir", type=Path, default=COHORT_DIR)
+    parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--audit", type=Path, default=AUDIT_PATH)
+    parser.add_argument(
+        "--unknown-as-stop",
+        action="store_true",
+        help="the UNKNOWN sensitivity variant (Step 11), in its own folder",
+    )
+    parser.add_argument(
+        "--main-dir", type=Path, default=COHORT_DIR, help="the main cohort, for the variant"
+    )
     args = parser.parse_args(argv)
+    variant: bool = args.unknown_as_stop
+    out_dir: Path = args.out_dir or (VARIANT_COHORT_DIR if variant else COHORT_DIR)
+    if variant and out_dir.resolve() == Path(args.main_dir).resolve():
+        raise RefusedError("the UNKNOWN variant needs a folder of its own, not the main cohort's")
     cfg = load_project_config()
     rules = CohortRules.from_config(cfg)
     started = time.monotonic()
     with duckdb.connect() as con:
         attach_warehouse(con, args.warehouse)
-        build_cohort(con, rules)
-        out_dir: Path = args.out_dir
+        build_cohort(con, rules, unknown_as_stop=variant)
         landmarks_path = out_dir / LANDMARKS_PATH.name
         outputs = write_outputs(con, out_dir, landmarks_path)
         aj_rows = aj_sanity_table(con, cfg.horizons_months)
@@ -266,14 +307,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             training = build_training_cohorts(
                 as_of_con, rules, origins, out_dir / TRAINING_DIR_NAME, landmarks_path
             )
-        replace_section(
-            args.audit,
-            PART_2_HEADING,
-            render_part_2(
-                con, rules, aj_rows, cfg.horizons_months, outputs, warehouse_stamp(con), training
-            ),
-            AUDIT_FAMILY,
-        )
+        if variant:
+            check_training_files(training, args.main_dir)
+        else:
+            replace_section(
+                args.audit,
+                PART_2_HEADING,
+                render_part_2(
+                    con,
+                    rules,
+                    aj_rows,
+                    cfg.horizons_months,
+                    outputs,
+                    warehouse_stamp(con),
+                    training,
+                ),
+                AUDIT_FAMILY,
+            )
     log_path = out_dir / BUILD_LOG_PATH.name
     tables = {name: {"rows": rows, "checksum": checksum} for name, rows, checksum in outputs}
     for summary in training:
@@ -290,6 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "duration_seconds": round(time.monotonic() - started, 1),
         "dataset_revision": cfg.dataset.revision,
         "data_cutoff": rules.cutoff.isoformat(),
+        "variant": "unknown-as-stop" if variant else None,
         "identical_to_previous": identical,
         "tables": tables,
     }

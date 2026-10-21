@@ -18,6 +18,13 @@ same DuckDB connection:
     too: the registry shows UNKNOWN only over an open status;
   - `lapse_date`: the day the last state lapsed, for the UNKNOWN sensitivity analysis.
 
+**The UNKNOWN sensitivity variant** (`unknown_as_stop`, Section 6 "a sensitivity analysis
+treats UNKNOWN as an early stop", ADR 0014): a trial whose last state is lapsed at the data
+cutoff has an early stop (`event` 1) at its `lapse_date` instead of a censoring at its status
+verified date; `censor_reason` is then NULL, as for any event. Nothing else changes, so the
+landmark rules then give the rows the main cohort leaves out: the landmarks between a
+trial's last verification and its lapse, and the trials censored at or before registration.
+
 Versions posted after the data cutoff are ignored, so the result depends only on the pinned
 revision.
 
@@ -80,9 +87,13 @@ def build_states(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
     )
 
 
-def build_outcomes(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
-    """Needs cohort_states (build_states)."""
+def build_outcomes(
+    con: duckdb.DuckDBPyConnection, rules: CohortRules, unknown_as_stop: bool = False
+) -> None:
+    """Needs cohort_states (build_states). With `unknown_as_stop`, the sensitivity variant."""
     cutoff = sql_date(rules.cutoff)
+    lapsed = f"ls.lapse_from <= {cutoff}"
+    as_stop = "true" if unknown_as_stop else "false"
     terminal = sql_list(rules.terminal)
     con.execute(
         f"""CREATE OR REPLACE TEMP TABLE cohort_outcomes AS
@@ -124,12 +135,15 @@ def build_outcomes(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
             THEN ls.lapse_from END AS lapse_date,
           CASE WHEN term.terminal_status IN {sql_list(rules.early_stop)} THEN 1
                WHEN term.terminal_status IN {sql_list(rules.competing)} THEN 2
+               WHEN term.terminal_status IS NULL AND {lapsed} AND {as_stop} THEN 1
                ELSE 0 END AS event,
           CASE WHEN term.terminal_status IS NOT NULL THEN term.terminal_date
-               WHEN ls.lapse_from <= {cutoff} THEN least(ls.verified, {cutoff})
+               WHEN {lapsed} AND {as_stop} THEN ls.lapse_from
+               WHEN {lapsed} THEN least(ls.verified, {cutoff})
                ELSE {cutoff} END AS event_date,
           CASE WHEN term.terminal_status IS NOT NULL THEN NULL
-               WHEN ls.lapse_from <= {cutoff} THEN 'unknown'
+               WHEN {lapsed} AND {as_stop} THEN NULL
+               WHEN {lapsed} THEN 'unknown'
                ELSE 'cutoff' END AS censor_reason,
           trial.registry_unknown
         FROM trial

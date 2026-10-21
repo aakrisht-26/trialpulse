@@ -26,6 +26,11 @@ FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
 LANDMARKS_PATH = REPO_ROOT / "data" / "cohort" / "landmarks.parquet"
 TRAINING_DIR = LANDMARKS_PATH.parent / "training"
+# The UNKNOWN sensitivity variant of Step 11: its cohort and its features, each in a folder
+# of its own (`cohort.build --unknown-as-stop`, `features.build --variant`).
+VARIANT = "unknown-as-stop"
+VARIANT_COHORT_DIR = REPO_ROOT / "data" / "cohort_unknown_as_stop"
+VARIANT_FEATURES_DIR = REPO_ROOT / "data" / "features_unknown_as_stop"
 REQUIRED_COLUMNS = ("trial_id", "landmark_index", "landmark_date", "event", "event_date")
 
 

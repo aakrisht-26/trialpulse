@@ -866,3 +866,44 @@ def test_a_tuned_run_is_credited_to_the_tree_it_read_its_settings_from(
     assert walkforward.main(argv) == 0
     assert [run["state"]["git_dirty"] for run in tracked_runs] == ["yes", "yes", "no"]
     assert asked == [discrete_time.TUNED_DIR / "m4.json"] * 3
+
+
+def test_the_unknown_variant_reads_and_writes_folders_of_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tracked_runs: list[Any]
+) -> None:
+    """`--variant unknown-as-stop` (Step 11): the variant's cohort and features are read, the
+    model's settings are not tuned again, and the result, the scores and the logged run are
+    named so that they never replace the main run's."""
+    seen: dict[str, Any] = {}
+
+    def run(cfg: Any, model: str, spec: str, load_rows: Any, load_training: Any,
+            **kwargs: Any) -> dict[str, Any]:  # fmt: skip
+        seen["predictions_dir"] = kwargs["predictions_dir"]
+        return {"model": model, "origins_spec": spec, "origins": [], "bootstrap_resamples": 20,
+                "training_labels": "as of each origin (ADR 0016)"}  # fmt: skip
+
+    def loader(cfg: Any, features_dir: Path, cohort_dir: Path) -> None:
+        seen["features_dir"], seen["cohort_dir"] = features_dir, cohort_dir
+
+    monkeypatch.setattr(walkforward, "run", run)
+    monkeypatch.setattr(walkforward, "feature_loader", loader)
+    monkeypatch.setattr(walkforward, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(walkforward, "PREDICTIONS_DIR", tmp_path / "predictions")
+    monkeypatch.setattr(walkforward, "VARIANT_COHORT_DIR", tmp_path / "cohort_v")
+    monkeypatch.setattr(walkforward, "VARIANT_FEATURES_DIR", tmp_path / "features_v")
+    args = ["--model", "m4", "--origins", "2016", "--variant", "unknown-as-stop"]
+    assert walkforward.main(args) == 0
+    assert seen == {
+        "predictions_dir": tmp_path / "predictions" / "unknown-as-stop",
+        "features_dir": tmp_path / "features_v",
+        "cohort_dir": tmp_path / "cohort_v",
+    }
+    out = tmp_path / "results" / "unknown-as-stop" / "m4_2016.json"
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved["variant"] == "unknown-as-stop"
+    assert saved["tracking"]["run_name"] == "m4-2016-unknown-as-stop"
+    (logged,) = tracked_runs
+    assert logged["tags"]["variant"] == "unknown-as-stop"
+    assert not (tmp_path / "results" / "m4_2016.json").exists()
+    # Tuning belongs to the main cohort.
+    assert walkforward.main([*args, "--tune", "--no-track"]) == 2

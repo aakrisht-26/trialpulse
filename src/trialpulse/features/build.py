@@ -32,6 +32,7 @@ import datetime as dt
 import hashlib
 import json
 import pickle
+import shutil
 import time
 import zlib
 from collections.abc import Iterator, Mapping, Sequence
@@ -48,6 +49,7 @@ from trialpulse.cohort.audit import MODELING_EDA_BEFORE
 from trialpulse.cohort.build import COHORT_DIR, TRAINING_DIR_NAME, check_warehouse_schema
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
+from trialpulse.eval.rows import VARIANT, VARIANT_COHORT_DIR, VARIANT_FEATURES_DIR
 from trialpulse.features import amendments, design
 from trialpulse.features.competition import COMPETITION_TABLE, build_competition
 from trialpulse.features.registry import (
@@ -522,13 +524,40 @@ def warehouse_stamp(con: duckdb.DuckDBPyConnection) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the point-in-time features.")
     parser.add_argument("--warehouse", type=Path, default=WAREHOUSE_PATH)
-    parser.add_argument("--cohort-dir", type=Path, default=COHORT_DIR)
+    parser.add_argument("--cohort-dir", type=Path, default=None)
     parser.add_argument("--interventions", default=None, help="glob of the interventions config")
     parser.add_argument("--current-fields", type=Path, default=CURRENT_FIELDS_PATH)
-    parser.add_argument("--out-dir", type=Path, default=FEATURES_DIR)
-    parser.add_argument("--doc", type=Path, default=DOC_PATH)
+    parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument("--doc", type=Path, default=None)
     parser.add_argument("--temp-dir", type=Path, default=TEMP_DIR, help="where DuckDB spills")
+    parser.add_argument(
+        "--variant",
+        choices=[VARIANT],
+        default=None,
+        help="the features of the UNKNOWN sensitivity cohort (Step 11), in a folder of their "
+        "own; docs/features.md is left alone",
+    )
+    parser.add_argument(
+        "--main-dir",
+        type=Path,
+        default=FEATURES_DIR,
+        help="with --variant: the main build, whose text counts start the variant's cache",
+    )
     args = parser.parse_args(argv)
+    if args.variant:
+        args.cohort_dir = args.cohort_dir or VARIANT_COHORT_DIR
+        args.out_dir = args.out_dir or VARIANT_FEATURES_DIR
+        args.doc = args.doc or args.out_dir / DOC_PATH.name
+        # The text counts of the main build serve as the start of this one's cache: the
+        # cache checks its own signature, so texts it does not hold are counted again.
+        cache, main_cache = args.out_dir / "text_cache", args.main_dir / "text_cache"
+        if not cache.exists() and main_cache.is_dir():
+            shutil.copytree(main_cache, cache)
+    args.cohort_dir = args.cohort_dir or COHORT_DIR
+    args.out_dir = args.out_dir or FEATURES_DIR
+    args.doc = args.doc or DOC_PATH
+    if args.variant is None and Path(args.out_dir).resolve() == VARIANT_FEATURES_DIR.resolve():
+        raise RefusedError("the folder of the UNKNOWN variant's features needs --variant")
     cfg = load_project_config()
     rules = CohortRules.from_config(cfg)
     started = time.monotonic()

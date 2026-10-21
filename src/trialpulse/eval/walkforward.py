@@ -83,6 +83,9 @@ from trialpulse.eval.metrics import (
 from trialpulse.eval.rows import (
     LANDMARKS_PATH,
     TRAINING_DIR,
+    VARIANT,
+    VARIANT_COHORT_DIR,
+    VARIANT_FEATURES_DIR,
     LandmarkRows,
     horizon_days,
     load_landmark_rows,
@@ -459,8 +462,9 @@ def track(
     """Log one walk-forward result to MLflow and return where it went."""
     unlock = results.get("unlock") or {}
     first = results["origins"][0] if results["origins"] else {}
+    variant = results.get("variant")
     return tracking.log_run(
-        f"{results['model']}-{results['origins_spec']}",
+        f"{results['model']}-{results['origins_spec']}" + (f"-{variant}" if variant else ""),
         {
             "model": results["model"],
             "origins": results["origins_spec"],
@@ -479,6 +483,7 @@ def track(
             "roles": ",".join(sorted({o["role"] for o in results["origins"]})),
             "test_lock": "unlocked" if unlock else "locked",
             **{f"unlock_{key}": str(value) for key, value in unlock.items()},
+            **({"variant": variant} if variant else {}),
         },
         local=local,
         state=state,
@@ -490,11 +495,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", required=True, choices=sorted(MODELS))
     parser.add_argument("--origins", default="dev", help="dev, test, stress, all, or years")
     parser.add_argument("--unlock-test", action="store_true", help="see ADR 0004")
-    parser.add_argument("--input", type=Path, default=LANDMARKS_PATH)
-    parser.add_argument("--training-dir", type=Path, default=TRAINING_DIR)
-    parser.add_argument("--features-dir", type=Path, default=FEATURES_DIR)
+    parser.add_argument("--input", type=Path, default=None)
+    parser.add_argument("--training-dir", type=Path, default=None)
+    parser.add_argument("--features-dir", type=Path, default=None)
     parser.add_argument("--resamples", type=int, default=None)
-    parser.add_argument("--predictions-dir", type=Path, default=PREDICTIONS_DIR)
+    parser.add_argument("--predictions-dir", type=Path, default=None)
+    parser.add_argument(
+        "--variant",
+        choices=[VARIANT],
+        default=None,
+        help="evaluate on the UNKNOWN sensitivity cohort (Step 11): the model is trained as in "
+        "the main run and scores the variant's evaluation rows",
+    )
     parser.add_argument(
         "--tune",
         action="store_true",
@@ -502,6 +514,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     tracking.add_arguments(parser)
     args = parser.parse_args(argv)
+    variant: str | None = args.variant
+    args.input = args.input or (
+        VARIANT_COHORT_DIR / LANDMARKS_PATH.name if variant else LANDMARKS_PATH
+    )
+    args.training_dir = args.training_dir or (
+        VARIANT_COHORT_DIR / TRAINING_DIR.name if variant else TRAINING_DIR
+    )
+    args.features_dir = args.features_dir or (VARIANT_FEATURES_DIR if variant else FEATURES_DIR)
+    args.predictions_dir = args.predictions_dir or (
+        PREDICTIONS_DIR / variant if variant else PREDICTIONS_DIR
+    )
+    if variant and args.tune:
+        print("refused: --tune is for the main cohort; the variant uses the tuned settings",
+              file=sys.stderr)  # fmt: skip
+        return 2
     cfg = load_project_config()
     started = tracking.git_state()
     if args.tune:
@@ -568,8 +595,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BootstrapError as exc:
         print(f"failed: {exc}", file=sys.stderr)
         return 3
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = RESULTS_DIR / f"{args.model}_{args.origins.replace(',', '-')}.json"
+    if variant:
+        results["variant"] = variant
+    folder = RESULTS_DIR / variant if variant else RESULTS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / f"{args.model}_{args.origins.replace(',', '-')}.json"
     out.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"wrote {out}")
     if not args.no_track:

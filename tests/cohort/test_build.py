@@ -164,3 +164,56 @@ def test_an_old_warehouse_is_refused(tmp_path: Path) -> None:
         build.main(["--warehouse", str(warehouse), "--out-dir", str(tmp_path / "out")])
     with pytest.raises(RefusedError, match="no warehouse"):
         build.main(["--warehouse", str(tmp_path / "missing.duckdb")])
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_the_unknown_variant_is_built_in_its_own_folder(built: Path) -> None:
+    """The variant's final cohort holds the rows of a lapse counted as an early stop; its
+    training cohorts are the main build's, file for file; the data audit is not touched."""
+    warehouse, audit = built / "warehouse.duckdb", built / "data_audit.md"
+    before = audit.read_text(encoding="utf-8")
+    out = built / "variant"
+    args = ["--warehouse", str(warehouse), "--out-dir", str(out), "--audit", str(audit),
+            "--unknown-as-stop", "--main-dir", str(built / "cohort")]  # fmt: skip
+    assert build.main(args) == 0
+    assert audit.read_text(encoding="utf-8") == before
+    log = json.loads((out / "build.json").read_text(encoding="utf-8"))
+    main_log = json.loads((built / "cohort" / "build.json").read_text(encoding="utf-8"))
+    assert log["variant"] == "unknown-as-stop"
+    assert main_log["variant"] is None
+    training = {k: v for k, v in log["tables"].items() if k.startswith("training/")}
+    assert training
+    assert all(main_log["tables"][name] == entry for name, entry in training.items())
+    assert log["tables"]["landmarks.parquet"] != main_log["tables"]["landmarks.parquet"]
+    with duckdb.connect() as con:
+        rows = con.execute(
+            f"""SELECT count(*) FILTER (WHERE trial_id = 'NCT00000008'),
+              count(*) FILTER (WHERE trial_id = 'NCT00000004' AND event = 1)
+            FROM read_parquet('{(out / "landmarks.parquet").as_posix()}')"""
+        ).fetchone()
+    assert rows == (5, 5)
+
+
+def test_the_unknown_variant_needs_a_main_build_and_a_folder_of_its_own(tmp_path: Path) -> None:
+    warehouse = _warehouse(tmp_path / "warehouse.duckdb")
+    main_dir = tmp_path / "cohort"
+    with pytest.raises(RefusedError, match="a folder of its own"):
+        build.main(["--warehouse", str(warehouse), "--unknown-as-stop", "--out-dir",
+                    str(main_dir), "--main-dir", str(main_dir)])  # fmt: skip
+    with pytest.raises(RefusedError, match="no build of the main cohort"):
+        build.main(["--warehouse", str(warehouse), "--unknown-as-stop", "--out-dir",
+                    str(tmp_path / "variant"), "--main-dir", str(main_dir),
+                    "--audit", str(tmp_path / "audit.md")])  # fmt: skip
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_the_unknown_variant_refuses_training_files_unlike_the_main_ones(built: Path) -> None:
+    log_path = built / "cohort" / "build.json"
+    log = json.loads(log_path.read_text(encoding="utf-8"))
+    name = next(k for k in log["tables"] if k.startswith("training/"))
+    log["tables"][name]["checksum"] = "0"
+    log_path.write_text(json.dumps(log), encoding="utf-8")
+    args = ["--warehouse", str(built / "warehouse.duckdb"), "--out-dir", str(built / "variant"),
+            "--unknown-as-stop", "--main-dir", str(built / "cohort")]  # fmt: skip
+    with pytest.raises(RefusedError, match="differs from the main cohort"):
+        build.main(args)

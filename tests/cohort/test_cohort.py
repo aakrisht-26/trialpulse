@@ -488,3 +488,59 @@ def test_the_cutoff_bounds_what_the_build_can_see(rules: CohortRules) -> None:
     reverified = [*rows, version("NCT00000313", 1, month(40), "RECRUITING")]
     mid = cohort(reverified, replace(rules, cutoff=D(2017, 6, 1)))
     assert outcome(mid, "NCT00000313")["censor_reason"] == "unknown"
+
+
+# The UNKNOWN sensitivity variant (Section 6, ADR 0014, the pre-registration).
+
+
+@pytest.fixture(scope="module")
+def variant() -> duckdb.DuckDBPyConnection:
+    from trialpulse.cohort.build import build_cohort
+    from trialpulse.config import load_project_config
+
+    from .conftest import load_versions
+
+    con = duckdb.connect()
+    load_versions(con, MINI)
+    build_cohort(con, CohortRules.from_config(load_project_config(), cutoff=CUTOFF), True)
+    return con
+
+
+def test_the_variant_counts_a_lapse_at_the_cutoff_as_an_early_stop(
+    variant: duckdb.DuckDBPyConnection,
+) -> None:
+    # D: censored at its verification (month 5) in the main cohort, with landmark 0 only.
+    # In the variant it stops early on its lapse date, and is open at every landmark before.
+    o = outcome(variant, "NCT00000004")
+    assert (o["event"], o["event_date"], o["censor_reason"]) == (1, month(30), None)
+    assert o["lapse_date"] == month(30)
+    assert [(r[0], r[2], r[3]) for r in landmarks(variant, "NCT00000004")] == [
+        (k, 1, month(30)) for k in range(5)
+    ]
+    # H1: censored at registration in the main cohort, so no landmark at all; lapsed from
+    # 2017-02-01, so landmarks 0 to 4 in the variant.
+    o = outcome(variant, "NCT00000008")
+    assert (o["event"], o["event_date"]) == (1, D(2017, 2, 1))
+    assert [r[0] for r in landmarks(variant, "NCT00000008")] == [0, 1, 2, 3, 4]
+    # I: landmarks 0 to 2 in the main cohort; lapsed from 2018-08-01, so 0 to 6 here.
+    o = outcome(variant, "NCT00000010")
+    assert (o["event"], o["event_date"]) == (1, D(2018, 8, 1))
+    assert [r[0] for r in landmarks(variant, "NCT00000010")] == list(range(7))
+
+
+def test_the_variant_changes_nothing_else(
+    con: duckdb.DuckDBPyConnection, variant: duckdb.DuckDBPyConnection
+) -> None:
+    """A lapse that a later version resolves (K), an open trial, every terminal outcome and
+    every landmark of a trial not lapsed at the cutoff are as in the main cohort."""
+    changed = {"NCT00000004", "NCT00000008", "NCT00000010"}
+    query = "SELECT * FROM {} WHERE trial_id NOT IN ({}) ORDER BY ALL".format
+    quoted = ", ".join(f"'{t}'" for t in changed)
+    for table in ("cohort_outcomes", "cohort_landmarks", "cohort_person_period"):
+        main = con.execute(query(table, quoted)).fetchall()
+        other = variant.execute(query(table, quoted)).fetchall()
+        assert main == other, table
+        assert main  # the comparison holds rows
+    # The lapse dates are the same everywhere; only what they mean differs.
+    lapses = "SELECT trial_id, lapse_date FROM cohort_outcomes ORDER BY trial_id"
+    assert con.execute(lapses).fetchall() == variant.execute(lapses).fetchall()
