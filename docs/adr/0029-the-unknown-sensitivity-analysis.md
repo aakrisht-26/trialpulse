@@ -24,3 +24,4 @@ ADR 0014 censors a trial whose last state is lapsed at the data cutoff at that s
 
 - The cohort build, the feature build and the harness each have a variant switch, writing to folders of their own; the main files, `docs/data_audit.md` and `docs/features.md` are never touched by them.
 - `docs/results.md` (Step 11) has a section for the analysis, generated with the rest.
+- Added after the review of 2026-10-21 (how, not what): the harness reads the variant's training rows and their features from the main folders, so the model is the main run's by construction; the variant cohort is built beside its folder and moved into place only after its training files match, the feature build refuses to cross between main and variant, and `docs/results.md` refuses a variant result that read other inputs.

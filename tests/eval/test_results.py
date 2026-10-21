@@ -4,6 +4,7 @@ them."""
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -450,8 +451,13 @@ def test_the_draft_registration_names_computable_predictions_and_passes_the_text
         assert prediction.low is None or prediction.high is None or prediction.low < prediction.high
         assert prediction.holds(prediction.predicted), prediction.id
     if "Status: draft, not yet registered." in text:
+        # What the registration commit does (section 4, item 4): the status line becomes a
+        # Registered line and the draft note goes. Forgetting the note fails the lock.
         registered = text.replace("Status: draft, not yet registered.", "Registered: 2026-11-01")
-        assert find_placeholders(registered) == []
+        assert find_placeholders(registered) != []
+        note = re.search(r"^\*\*Draft for Aakrisht's review.*\n\n", registered, re.MULTILINE)
+        assert note is not None
+        assert find_placeholders(registered.replace(note.group(0), "")) == []
 
 
 def _edit(path: Path, change: Any) -> None:

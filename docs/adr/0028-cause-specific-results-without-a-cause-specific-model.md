@@ -18,7 +18,7 @@ The pre-registration states H3, that operational stops are more predictable than
 
 ## Alternatives
 
-- **A cause-specific M4** (option (a) of the draft): four outcomes per interval (continue, complete, operational stop, scientific stop), fitted on the development origins after Step 6 and registered as a secondary model. It would give a predicted risk of each kind of stop, about 35 to 46 minutes per locked origin. Not chosen by Aakrisht, who gave no reason in the review. Claude's notes against it: scientific stops are few (177 to 389 per development origin and horizon), so their hazard would be estimated from little, and a predicted risk of a safety or efficacy stop invites the reading Section 2 forbids.
+- **A cause-specific M4** (option (a) of the draft): four outcomes per interval (continue, complete, operational stop, scientific stop), fitted on the development origins after Step 6 and registered as a secondary model. It would give a predicted risk of each kind of stop, about 35 to 46 minutes per locked origin. Not chosen by Aakrisht, who gave no reason in the review. Claude's notes against it: scientific stops are few (195 to 446 per development origin and horizon with the final labels; 177 to 389 with the interim labels of the first draft), so their hazard would be estimated from little, and a predicted risk of a safety or efficacy stop invites the reading Section 2 forbids.
 - **Leave the secondary target as written and defer it.** A quiet deferral of a locked definition, which the working agreements do not allow.
 
 ## Consequences

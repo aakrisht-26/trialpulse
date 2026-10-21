@@ -311,3 +311,20 @@ def test_a_hash_line_is_read_in_its_usual_forms_and_only_once() -> None:
         f"distilled.joblib sha256:{model}\n" * 2 + f"early_stop_reasons.parquet sha256:{reasons}"
     )
     assert hypotheses.registered_hashes(twice) == {"model_sha256": model, "reasons_sha256": reasons}
+
+
+def test_a_registration_names_the_reason_labels_on_disk() -> None:
+    """Once docs/preregistration.md holds a Registered line (the registration commit), its two
+    hash lines must parse and equal the reason labels on this machine, before the tag is made
+    (finding F2 of the review of 2026-10-21). Skipped before the registration and where the
+    labels are not on disk (CI)."""
+    import re
+
+    from trialpulse.config import REPO_ROOT
+
+    text = (REPO_ROOT / "docs" / "preregistration.md").read_text(encoding="utf-8")
+    if not re.search(r"^\s*Registered:", text, re.MULTILINE):
+        pytest.skip("not registered yet")
+    if not (hypotheses.MODEL_PATH.is_file() and hypotheses.REASONS_PATH.is_file()):
+        pytest.skip("the reason labels are not on this machine")
+    assert hypotheses.registered_hashes(text) == hypotheses.reason_hashes()

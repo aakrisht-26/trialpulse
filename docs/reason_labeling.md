@@ -90,5 +90,5 @@ uv run python -m trialpulse.nlp.distill --label-all
 - Scores measure agreement with reference labels from an adjudicated model panel. The panel members are one model, so panel agreement is an upper bound on label reliability, and a gap between the LLM and the panel can be the panel's error as well as the LLM's.
 - The dev set is small (100 texts, two covid19 and two safety texts), so dev scores are noisy and v2's dev score is optimistic.
 - The test interval for the LLM (0.791 to 0.883) reaches below the 0.80 target.
-- The distilled classifier is less accurate than its teacher (macro-F1 0.769 against 0.842 on test), and its errors push the H3 difference of the pre-registration toward zero.
+- The distilled classifier is less accurate than its teacher (macro-F1 0.769 against 0.842 on test), and its errors move the H3 difference of the pre-registration: swaps between the operational and scientific labels push it toward zero, and errors involving the label other pull a score toward the AUC of the stops labeled other (section H3 of `docs/preregistration.md`).
 - Reasons are self-reported free text; many give no usable reason (label `other`).
