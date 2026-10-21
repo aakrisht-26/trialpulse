@@ -192,3 +192,26 @@ def test_calibration_can_be_reported_by_another_label_than_the_censoring_group()
     assert table[1]["censored_before_horizon"] == 0.0
     by_group = calibration_by_group(time, event, score, 5.0, groups)
     assert [row["group"] for row in by_group] == ["a", "b"]  # unchanged without `by`
+
+
+def test_a_model_far_from_calibrated_still_gets_its_slope_and_intercept() -> None:
+    """Predicted risks of 0.1% to 2% against observed risks near 30%, as when the champion
+    scores the UNKNOWN variant (a dry run on 2026-10-21 stopped on a singular matrix): the
+    fit converges to the maximum of the likelihood, here near the slope and intercept that
+    made the outcomes."""
+    from trialpulse.eval.metrics import _weighted_logistic
+
+    rng = np.random.default_rng(11)
+    p = rng.uniform(0.001, 0.02, 40_000)
+    x = np.log(p / (1 - p))
+    true_a, true_b = 0.9, 0.45
+    y = (rng.random(len(x)) < 1 / (1 + np.exp(-(true_a + true_b * x)))).astype(np.float64)
+    w = rng.uniform(0.5, 2.0, len(x))
+    a, b = _weighted_logistic(x, y, w, fit_slope=True)
+    assert a == pytest.approx(true_a, abs=0.15)
+    assert b == pytest.approx(true_b, abs=0.04)
+    offset, slope = _weighted_logistic(x, y, w, fit_slope=False)
+    assert slope == 1.0
+    # With the slope fixed at 1, the intercept matches the observed share on average.
+    fitted = 1 / (1 + np.exp(-(offset + x)))
+    assert np.sum(w * fitted) == pytest.approx(np.sum(w * y), rel=1e-6)

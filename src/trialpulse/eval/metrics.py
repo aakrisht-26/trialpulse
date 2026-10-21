@@ -85,28 +85,49 @@ def lift_at(
     return float(top_rate / overall) if overall > 0 else float("nan")
 
 
+def _expit(eta: FloatArray) -> FloatArray:
+    """1 / (1 + exp(-eta)) without overflow for large |eta|."""
+    out: FloatArray = np.exp(-np.logaddexp(0.0, -eta))
+    return out
+
+
 def _weighted_logistic(
     x: FloatArray, y: FloatArray, w: FloatArray, fit_slope: bool, iterations: int = 100
 ) -> tuple[float, float]:
-    """Weighted logistic regression of y on a + b * x by Newton-Raphson. With
-    fit_slope=False, b is fixed at 1 (x is an offset) and only a is estimated."""
-    a, b = 0.0, 1.0
-    for _ in range(iterations):
+    """Weighted logistic regression of y on a + b * x by Newton-Raphson, the maximum of the
+    weighted log-likelihood. With fit_slope=False, b is fixed at 1 (x is an offset) and only a
+    is estimated. Each Newton step is halved until the log-likelihood does not fall, and a
+    singular Hessian is solved by least squares, so a model far from calibrated (predicted
+    risks far from the observed ones) converges instead of overshooting into saturated
+    probabilities; where plain Newton converges, the result is the same maximum."""
+
+    def loglik(a: float, b: float) -> float:
         eta = a + b * x
-        p = 1.0 / (1.0 + np.exp(-eta))
+        return float(np.sum(w * (y * eta - np.logaddexp(0.0, eta))))
+
+    a, b = 0.0, 1.0
+    current = loglik(a, b)
+    for _ in range(iterations):
+        p = _expit(a + b * x)
         r = w * (y - p)
         v = w * p * (1.0 - p)
         if fit_slope:
             grad = np.array([r.sum(), (r * x).sum()])
             hess = np.array([[v.sum(), (v * x).sum()], [(v * x).sum(), (v * x * x).sum()]])
-            step = np.linalg.solve(hess, grad)
-            a, b = a + step[0], b + step[1]
-            done = np.max(np.abs(step)) < 1e-10
+            step = np.linalg.lstsq(hess, grad, rcond=None)[0]
         else:
-            step_a = r.sum() / v.sum()
-            a += step_a
-            done = abs(step_a) < 1e-10
-        if done:
+            total = v.sum()
+            step = np.array([r.sum() / total if total > 0 else 0.0, 0.0])
+        scale = 1.0
+        while True:
+            trial_a, trial_b = a + scale * step[0], b + scale * step[1]
+            trial = loglik(trial_a, trial_b)
+            if trial >= current - 1e-12 or scale < 1e-10:
+                break
+            scale /= 2.0
+        moved = scale * float(np.max(np.abs(step)))
+        a, b, current = trial_a, trial_b, trial
+        if moved < 1e-10:
             break
     return float(a), float(b)
 
