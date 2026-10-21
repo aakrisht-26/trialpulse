@@ -245,7 +245,7 @@ def draw(res: Results, out_dir: Path) -> list[Path]:
         ]
         x = np.array([int(r["group"]) for r in years], dtype=np.float64)
         kinds = (
-            ("Operational", "operational", fg.BLUE),
+            ("Operational, COVID-19 aside", "operational_without_covid", fg.BLUE),
             ("COVID-19", "covid19", fg.ORANGE),
             ("Scientific", "scientific", fg.AQUA),
             ("Other", "other", fg.VIOLET),

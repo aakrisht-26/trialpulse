@@ -108,7 +108,10 @@ class Sources:
 REASON_LABELS: tuple[str, ...] = (
     "accrual", "business", "funding", "administrative", "covid19", "safety", "efficacy", "other",
 )  # fmt: skip
-OPERATIONAL_REASONS: tuple[str, ...] = ("accrual", "business", "funding", "administrative")
+# The groups of config/project.yaml (stop_reasons, Section 11; held equal by a test).
+OPERATIONAL_REASONS: tuple[str, ...] = (
+    "accrual", "business", "funding", "administrative", "covid19",
+)  # fmt: skip
 SCIENTIFIC_REASONS: tuple[str, ...] = ("safety", "efficacy")
 
 
@@ -810,6 +813,7 @@ def reasons_breakdown(con: duckdb.DuckDBPyConnection, reasons: Path) -> dict[str
             for reason in REASON_LABELS:
                 row[reason] = float(np.sum(labeled & (label == reason)) / n) if n else 0.0
             row["operational"] = sum(row[r] for r in OPERATIONAL_REASONS)
+            row["operational_without_covid"] = row["operational"] - row["covid19"]
             row["scientific"] = sum(row[r] for r in SCIENTIFIC_REASONS)
             rows.append(row)
         out[name] = rows

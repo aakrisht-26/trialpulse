@@ -139,7 +139,8 @@ def test_the_parquet_confidence_is_numeric(tmp_path: Path) -> None:
 
 def test_the_reasons_become_a_warehouse_table_with_their_coverage(tmp_path: Path) -> None:
     """Step 6: the table stop_reasons of the warehouse, replaced as a whole, and how many of
-    the cohort's early stops (a reversal excluded) have a label."""
+    the cohort's early stops (a reversal and a trial outside the window excluded) have a
+    label."""
     from trialpulse.nlp.distill import STOP_REASONS_TABLE, write_warehouse_table
 
     rows = [
@@ -153,8 +154,9 @@ def test_the_reasons_become_a_warehouse_table_with_their_coverage(tmp_path: Path
     with duckdb.connect(str(warehouse)) as con:
         con.execute(f"CREATE TABLE {STOP_REASONS_TABLE} AS SELECT 'stale' AS nct_id")
         con.execute(
-            f"""COPY (SELECT * FROM (VALUES ('NCT1', 1, false), ('NCT3', 1, false),
-              ('NCT4', 2, false), ('NCT5', 1, true)) t(trial_id, event, reversal))
+            f"""COPY (SELECT *, trial_id <> 'NCT6' AS in_window, true AS ever_in_population
+              FROM (VALUES ('NCT1', 1, false), ('NCT3', 1, false), ('NCT4', 2, false),
+                ('NCT5', 1, true), ('NCT6', 1, false)) t(trial_id, event, reversal))
             TO '{outcomes.as_posix()}' (FORMAT parquet)"""
         )
     coverage = write_warehouse_table(parquet_path, warehouse, outcomes)

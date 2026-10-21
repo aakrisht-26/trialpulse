@@ -632,11 +632,14 @@ def _reasons(res: Results) -> list[str]:
         "",
         f"*{DESCRIPTIVE_ONLY}, not used for modeling.* The reason labels of Step 6 (the "
         f"distilled classifier, `{res.reasons_model}`) for the cohort's early stops of every "
-        "year, the locked test and stress-test years included. A share is a share of the stops "
-        "with a reason text; a stop without one has no label. Phase is the current record, as "
-        "in section 2; the sponsor class is that of the version in effect at the stop. "
-        "Operational reasons are accrual, business, funding and administrative (covid19 is "
-        "shown on its own); scientific reasons are safety and efficacy.",
+        "year, the locked test and stress-test years included. The reason text is the one "
+        "each record shows in the registry's current record (API v2, pulled for Step 6), which "
+        "can differ from the text posted with the first terminal version; an early stop without "
+        "a current record has none. A share is a share of the stops with a reason text; a stop "
+        "without one has no label. Phase is the current record, as in section 2; the sponsor "
+        "class is that of the version in effect at the stop. Operational reasons are accrual, "
+        "business, funding, administrative and covid19; scientific reasons are safety and "
+        "efficacy (Section 11).",
         "",
         *_figure("reasons"),
         "",
@@ -656,9 +659,9 @@ def _reasons(res: Results) -> list[str]:
         "",
         f"- {DESCRIPTIVE_ONLY}: of {num(total['labeled'])} early stops with a reason "
         f"({pct(total['labeled'] / total['early_stops'])} of {num(total['early_stops'])}), "
-        f"{pct(total['operational'])} give an operational reason, {pct(total['scientific'])} a "
-        f"scientific one, {pct(total['covid19'])} COVID-19 and {pct(total['other'])} another "
-        f"{cite(tables='reasons_year')}.",
+        f"{pct(total['operational'])} give an operational reason (COVID-19 "
+        f"{pct(total['covid19'])} of them all), {pct(total['scientific'])} a scientific one and "
+        f"{pct(total['other'])} another {cite(tables='reasons_year')}.",
         f"- {DESCRIPTIVE_ONLY}: COVID-19 reasons peak in {peak['group']} at {pct(peak['covid19'])} "
         f"of the stops with a reason, against at most "
         f"{pct(max((r['covid19'] for r in before_covid), default=0.0))} before {COVID_YEAR} "

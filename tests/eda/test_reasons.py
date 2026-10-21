@@ -130,3 +130,9 @@ def test_the_report_reads_the_paths_the_distillation_writes() -> None:
 
     assert report.REASONS_PATH == distill.REASONS_DIR / "early_stop_reasons.parquet"
     assert distill.MODEL_PATH.with_suffix(".json") == report.REASON_MODEL_METADATA
+
+
+def test_the_reason_groups_are_those_of_the_configuration() -> None:
+    cfg = load_project_config()
+    assert set(an.OPERATIONAL_REASONS) == set(cfg.stop_reasons.operational)
+    assert set(an.SCIENTIFIC_REASONS) == set(cfg.stop_reasons.scientific)

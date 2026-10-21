@@ -230,7 +230,8 @@ def write_warehouse_table(
 ) -> dict[str, int] | None:
     """The reasons as the warehouse table `stop_reasons`, replaced as a whole, and how many of
     the cohort's early stops (event 1 in the cohort's outcomes) have a label. None when there
-    is no warehouse."""
+    is no warehouse. The cohort is that of Section 6: first posted in the window,
+    interventional in some version, without a reversal."""
     if not warehouse.is_file():
         return None
     source = parquet_path.as_posix().replace("'", "''")
@@ -246,7 +247,7 @@ def write_warehouse_table(
                 f"""SELECT count(*), count(r.nct_id)
                 FROM read_parquet('{outcomes.as_posix()}') o
                 LEFT JOIN {STOP_REASONS_TABLE} r ON r.nct_id = o.trial_id
-                WHERE o.event = 1 AND NOT o.reversal"""
+                WHERE o.event = 1 AND NOT o.reversal AND o.in_window AND o.ever_in_population"""
             ).fetchone()
             coverage["cohort_early_stops"] = int(found[0]) if found else 0
             coverage["cohort_early_stops_labeled"] = int(found[1]) if found else 0
