@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 11 (pre-registration, locked test and results)**: the pre-registration is revised for Aakrisht's last review (2026-10-21), and the code of the locked run is built and tested on synthetic data; it is not registered and no tag exists (see "Review of the Step 10 follow-up and the pre-registration draft" below, which starts with the three answers). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
+Current step: **Step 11 (pre-registration, locked test and results)**: registered on 2026-10-21 (tag `prereg-v1`), the locked run finished on 2026-10-23, and `docs/results.md` and the Results blocks are committed; waiting for Aakrisht's review (see "Step 11: Pre-registration, locked test and results" below, which starts with the three answers). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -87,7 +87,7 @@ Current step: **Step 11 (pre-registration, locked test and results)**: the pre-r
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
 | 9 | Baselines and Cox analysis | Approved 2026-10-10 (ADR 0023 accepted). Runs logged to DagsHub after the review |
 | 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
-| 11 | Pre-registration, locked test and results | Pre-registration revised 2026-10-21 for the last review (ADRs 0028 and 0029 accepted); the code of the locked run built and tested on synthetic data; not registered, no tag |
+| 11 | Pre-registration, locked test and results | Registered 2026-10-21 (ADRs 0028 and 0029 accepted); locked run finished 2026-10-23, waiting for Aakrisht's review: both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified |
 | 12 | Explainability, model card, data card | Not started |
 | 13 | Scoring pipeline and model registry | Not started |
 | 14 | Live ingestion and daily workflow | Not started |
@@ -1991,6 +1991,150 @@ Two reviewers, one on the code and one on the documents, each followed by a veri
 Nits, all applied: A7 (the lock-first tests now fail if a file is read before the refusal), A8 (a hash of 65 characters or two hashes for one file are refused), A11 (the text of `docs/results.md` is built before any figure is written), F1 (ADR 0028 quotes the scientific-stop counts of the final labels), F6 (the draft note says "not yet registered" too, so a registration that forgets to remove it fails the lock), F7 (the ADR 0014 evidence fixed details of the lapse rule, now said), F8 (the interview note says which check is a test on synthetic data).
 
 What the reviewers checked and found correct, among other things: every development number of the draft against its source file, the range arithmetic, the run-plan totals, the Step 6 metrics and coverage, the EDA addendum's percentages, every command and flag named in the draft and the verify block, the lock's order in every new command, and that the draft cannot satisfy the lock.
+
+## Step 11: Pre-registration, locked test and results
+
+Date: 2026-10-21 to 2026-10-23. Status: **run and reported, waiting for Aakrisht's review**. Registered on 2026-10-21 after his approval (registration commit `2ee8498`, annotated tag `prereg-v1`, tag object `b2af9c072fd1`, both pushed); the locked run went from 2026-10-21 19:02 to 2026-10-23 13:46; results committed in `4991ea5` (`docs/results.md` and its figures) and `9c635aa` (the Results blocks of the registration). Step 12 is not started.
+
+**The three answers first.**
+
+1. **Acceptance criteria:** met except one, with evidence in the table below. The registration's run plan says `docs/results.md` cites the tagged commit and the results commit; it cites the tagged commit only, because the generator is frozen at the tag and a file cannot name the commit that holds it (open question 1).
+2. **Decisions made without asking:** five, listed and flagged under "Decisions made without asking". The network retry in the chain script was approved after the fact on 2026-10-22.
+3. **Blocked, skipped or deferred:** nothing of the run. All 30 jobs of the run plan ran, the optional `m4-text` jobs included. The run was interrupted three times, by the network twice and once by the laptop shutting down on battery, never by a failing job; no code changed after the tag. Two small defects of the generated `docs/results.md` are deferred, because the generator is frozen at the tag (open questions 1 and 3).
+
+### What was done
+
+- **The registration** exactly as section 4 item 4 of the registration describes: commit `0490263` made your two edits (H5's disclosure names item 4 of the exposures; the UNKNOWN analysis gives its development evidence from the dry run); commit `2ee8498` replaced the status line and the draft note with `Registered: 2026-10-21` and added the two hash lines of the reason labels, nothing else. The annotated tag `prereg-v1` was put on it and both were pushed. Before any locked job, the lock's own check accepted the tag: tag object `b2af9c072fd1` on commit `2ee8498`, registered 2026-10-21, the same tag object on origin (`git ls-remote`). CI is green on the registration commit and on the tag (runs 39608866688 and 39608875008).
+- **The locked run:** one background chain from the tagged commit, in the order you set, each job refusing to start unless HEAD was the tagged commit and the tree was clean. 30 jobs: M4 at 2018 and 2019; M0 to M3 at 2018 and 2019; the comparisons for H1 and H2, H3, M4 against M3 and against M0; the five models at 2020 and H5; the UNKNOWN variant (its cohort, its features, its two runs); `m4-text` at the three origins and its comparison; then `docs/results.md`. Every job is logged in the chain's log; every one of the 27 result files is on DagsHub (run ids in `docs/results.md`, "Runs").
+- **The results:** `docs/results.md` and two calibration figures, written by `uv run python -m trialpulse.eval.results` from the 27 result files, after its checks: every file names commit `2ee8498` with a clean tree and the tag object `b2af9c072fd1`; every scores file a comparison or hypothesis read has the SHA-256 that the walk-forward file recorded when it wrote it; 1,000 resamples everywhere; the predictions read from the registration as committed with the tag.
+- **The Results blocks** of H1 to H5 filled in a new commit, and one Results paragraph added under section 3 (decision 4), with every prediction and range unchanged.
+
+### The predictions: what held and what was falsified
+
+Primary claims first. A prediction is falsified when its value is outside its range or the condition of its hypothesis fails (section 1 of the registration).
+
+| Prediction | Predicted (range) | Observed (95% interval) | Verdict |
+| --- | --- | --- | --- |
+| **Champion AUC at 12 months, 2018** | 0.725 (0.700 to 0.750) | 0.7303 (0.7191 to 0.7414) | held |
+| **Champion AUC at 12 months, 2019** | 0.725 (0.700 to 0.750) | 0.7231 (0.7122 to 0.7340) | held |
+| **H2: slope of M3 minus M2 per landmark index, 12 months** | +0.005 (above 0 to +0.012) | +0.0088 (+0.0060 to +0.0114) | held |
+| Champion AUC at 24 months, 2018 and 2019 | 0.707 (0.689 to 0.725) | 0.7099 and 0.6956 | held (2019 is 0.007 above the lower end) |
+| Brier score at 12 months, 2018 and 2019 | 0.031 (0.024 to 0.038) | 0.0300 and 0.0297 | held |
+| Brier score at 24 months, 2018 and 2019 | 0.057 (0.046 to 0.069) | 0.0567 and 0.0583 | held |
+| Lift at 10%, 12 months, 2018 and 2019 | 3.1 (2.6 to 3.7) | 3.23 and 3.06 | held |
+| Lift at 10%, 24 months, 2018 and 2019 | 2.7 (2.3 to 3.1) | 2.69 and 2.56 | held |
+| H5: AUC at 2020 minus the mean of 2018 and 2019 | -0.025 (-0.08 to -0.005) | -0.0334 (-0.0464 to -0.0198) | held |
+| H1: M4 minus M1 at landmark 0, 12 months | +0.007 (-0.02 to +0.02) | -0.0027 (-0.0166 to +0.0114) | **falsified** (in its range, but the condition of H1 failed at 24 months) |
+| H1: M4 minus M1 at landmark 0, 24 months | +0.009 (above 0 to +0.03) | -0.0013 (-0.0098 to +0.0075) | **falsified** (not above 0) |
+| H3: operational minus scientific AUC, 12 months | +0.09 (+0.03 to +0.15) | +0.0229 (-0.0025 to +0.0494) | **falsified** (below the range; the interval includes 0) |
+| H4: calibration slope, 12 months, 2018 and 2019 | 0.89 (0.8 to 1.2) | 0.855 and 0.803 | **falsified** (in the range, but the condition of H4 failed) |
+| H4: calibration slope, 24 months, 2018 and 2019 | 0.84 (0.8 to 1.2) | 0.782 and 0.732 | **falsified** (below 0.8) |
+
+In all: both primary claims held; 14 of the 21 machine-readable predictions held and 7 were falsified (both of H1, H3, all four of H4); hypotheses H2 and H5 held, H1, H3 and H4 failed.
+
+What else the run shows (secondary, in `docs/results.md`):
+
+- **The ladder on the test origins** (AUC at 12 months, 2018 and 2019): M0 0.543 and 0.541, M2 0.663 and 0.653, M3 0.702 and 0.693, M4 0.730 and 0.723; M1 at landmark 0 only, 0.688 and 0.684. M4 minus M3 +0.0290 (+0.0225 to +0.0351); M4 minus M0 +0.1848 (+0.1746 to +0.1951).
+- **The text families** make no measurable difference on the test origins: `m4-text` minus M4 +0.0001 (-0.0042 to +0.0045) at 12 months. On the development origins they lowered it, -0.0055 (-0.0101 to -0.0011), which is why ADR 0026 left them out of M4.
+- **One censoring curve for all rows** (the sensitivity check of ADR 0017) moves none of the champion's pooled AUCs on the test origins by more than 0.001 and none of its pooled calibration slopes by more than 0.002. Other models move more (M0's 24-month slope by up to 0.030 at 2018 and 2019), and `docs/results.md` reports the check for the champion only, as registered.
+- **The UNKNOWN sensitivity analysis** (ADR 0029): with lapsed trials counted as early stops, the AUC at 12 months falls to 0.667 and 0.655 and at 24 months to 0.568 and 0.555, and the calibration slope at 24 months to 0.268 and 0.218. That is the direction of the dry run on the development origins, but much further: there the AUC at 12 months fell only to 0.712 and 0.696 (from 0.720 and 0.729), and the slope at 24 months to 0.453 and 0.398 (from 0.824 and 0.851). Counted as early stops, the lapsed trials rank lower than the real early stops do, so every metric falls.
+- **The COVID stress origin:** AUC at 12 months 0.693 (0.683 to 0.704), calibration slopes 0.664 and 0.644.
+
+### Acceptance criteria
+
+| Criterion (CLAUDE.md Step 11, the registration and your instructions of 2026-10-21) | Met | Evidence |
+| --- | --- | --- |
+| The registration commit precedes the results commit, both hashes cited | Yes | Registration `2ee8498` (2026-10-21); results `4991ea5` and `9c635aa` (2026-10-23), both descendants of the tag. The hashes are cited in this report, not in `docs/results.md` (next row). `git log --oneline -- docs/preregistration.md docs/results.md` lists the two results commits above `2ee8498` (newest first) |
+| `docs/results.md` cites the tagged commit and the results commit (registration, section 4) | **No** | It cites the tagged commit only (its "Registration" line); the generator is frozen at the tag, and a file cannot name the commit that holds it. Open question 1 |
+| One command reproduces `docs/results.md` | Yes | Run on 2026-10-23 after both results commits (HEAD `9c635aa`): `uv run python -m trialpulse.eval.results` printed `E:\trialpulse\docs\results.md: up to date`, and the SHA-256 of `docs/results.md` and of both figures were the same before and after (the figures are drawn again on every run). The command reads the 27 result files in `data/results/` (not committed) and the registration from the tagged commit |
+| Predictions are not edited after the unlock | Yes | `git diff 2ee8498 -- docs/preregistration.md` changes the five Results lines and adds one Results paragraph to section 3, nothing else; the machine-readable block is identical (checked); `docs/results.md` reads the predictions from the tagged commit in any case |
+| `docs/results.md`: headline table with intervals, AUC by landmark index, calibration plots, lift, cause-specific results, the UNKNOWN sensitivity analysis, every falsified prediction | Yes | Its sections: the registered predictions against the observed values (with every falsified prediction and failed hypothesis named), every model on the test origins, the champion's AUC by landmark index, calibration with two figures, the single-curve check, paired differences, H2's trend, cause-specific results (H3, ADR 0028), the UNKNOWN analysis, the COVID stress test, the runs |
+| Every job from the tagged commit with a clean tree, logged (your instruction) | Yes | The chain checked HEAD and the tree before each job; the generator refuses any result file that names another commit, a dirty tree or another tag object, and it accepted all 27 |
+| Keep the laptop awake; log every job; stop the chain on a failure and change no code (your instruction) | Partly: see the interruptions below | Every job has its own log and a line in the chain's log; the chain stopped at each failure; no code changed after the tag (`git log 2ee8498..` shows documents only). Keeping awake held off idle sleep only: the laptop went into Modern Standby during M3 at 2020, and on 2026-10-23 it ran on battery from 00:33 and shut down without a clean shutdown after 02:44 (interruption 3) |
+| ruff, ruff format, mypy and pytest clean | Yes | No code changed. In my shell: the full suite, slow tests included (932 passed, none skipped, one deprecation warning from MLflow's own database code; after the last wording change to the registration, the 174 tests of `tests/eval`, the ones that read it, passed again); `ruff check`, `ruff format --check` and `mypy src` clean (82 source files) |
+
+### The interruptions of the locked run
+
+None was a failing job: twice the network, once the laptop shutting down. The lock runs before any file is read (tested), so a refused job read and wrote nothing.
+
+1. **2026-10-21 20:06 to 20:10.** M4 at 2019 finished, but its upload to DagsHub failed (exit 5) and so did the immediate retry. M0 at 2018 was then refused after 4 seconds: the lock could not list the tags on origin (no DNS for GitHub). The chain stopped, as you asked. After your "try again": M4 at 2019 was logged afterward from the tagged commit (run `074ec61a`), the chain was made to skip jobs whose result is written and logged, and it resumed on 2026-10-22 at 01:28.
+2. **2026-10-22 02:38.** M2 at 2019 was refused after 67 seconds: the lock's check of the tag on origin got "Connection was reset". The chain stopped. After your second "try again", I added a retry for this one case to the chain script (decision 1), and the chain resumed at 15:26. No retry was needed after that.
+3. **2026-10-23 02:44.** `m4-text` at 2019 finished (its scores file was written at 02:37), but its upload timed out (exit 5). During the first attempt to log it afterward, the laptop shut down without a clean shutdown: it had been on battery since 00:33 (Kernel-Power event 105), and the next boot, at 12:10, recorded Kernel-Power event 41 and EventLog event 6008. The cause is not recorded. That ended the session and the chain. At 12:39 the result was logged afterward from the tagged commit (run `93c5ec11`), and the chain resumed at 12:40 for its last three jobs (decision 3). It ended with 0 at 13:46. The comparison of `m4-text` against M4 read the 2019 scores file with the SHA-256 the job had recorded.
+
+**Timing.** The plan estimated 556 minutes (9.3 hours) for the 30 jobs; the jobs took 14.6 hours (52,632 seconds, the two refused attempts included). M3 at 2020 ran while the laptop was in Modern Standby (Windows power events 506 and 507 between 19:16 and 22:35 on 2026-10-22) and took 3.6 hours against 22 to 25 minutes at 2018 and 2019. `m4-text` at 2019 ran on battery, with no standby event, and took 1.7 hours against 52 and 50 minutes at 2018 and 2020: it wrote its scores 97 minutes after it started (51 and 50 minutes at the other origins), and the last 7 minutes were the failed upload. The cause of its slower computation is not confirmed. The timing does not change a result. Without those two, M4 took 30 to 33 minutes (estimated 35 to 46), M0 17 to 20 (7 to 9), M2 21 to 22 (9 to 12), M3 22 to 25 (10 to 11), the comparison of M4 against M3 34 minutes (10) and H3 17 minutes (5).
+
+### Decisions made without asking
+
+1. **A network-only retry in the chain script** (scratch, not repository code): a job refused only because the lock could not reach the tag on origin waits 5 minutes and runs again, at most 6 times; a failed upload is retried 3 times. Every other failure still stopped the chain. Your instruction was to stop on any failure; I read "try again" as allowing this one case. You approved keeping it on 2026-10-22. The retry of a refused job never fired. The upload retry started once, after `m4-text` at 2019 exited with 5: its first attempt was still running when the laptop shut down (interruption 3), so no second attempt was made.
+2. **How the two results were logged afterward** (your instruction said they are): a scratch script that checks HEAD is the tagged commit with a clean tree, records that commit and "no uncommitted changes" with the run, logs the same parameters, metrics and file as the command would have, and writes the tracking record into the result file. The two runs therefore carry the time they were logged, not the time the job ran.
+3. **On the last resume, the variant's cohort and feature builds were skipped**, because both variant runs were already written and logged. A rebuild would have rewritten files whose SHA-256 the variant runs had recorded; the builds are deterministic, but there was nothing to gain.
+4. **A Results paragraph under section 3 of the registration.** The registration asks for the Results block of each hypothesis; section 3 holds the primary claims and has no such block, so I added one paragraph after its derivations, marked as added after the run. Nothing in the section changed. It can be removed if you want the five blocks only.
+5. **Readings in the Results blocks.** Besides the numbers, a few sentences read them: H3's gap shrank because the scientific AUC rose (0.648 to 0.706) while the operational one held, and label errors cannot explain the change by themselves because the same classifier labeled the development origins; H4's slopes below 1 mean the predicted risks are spread too widely; H5 shows that the AUC fell, not why. These are my readings, not registered statements.
+
+**Correction.** In my message of 2026-10-23 I wrote "28 of the 31 locked jobs"; the run plan has 30 jobs, and 27 were done at that point. I also wrote that the session had ended; the laptop had shut down (interruption 3).
+
+### Open questions
+
+1. **`docs/results.md` does not cite the results commit.** Section 4 of the registration says it cites the tagged commit "and that results commit". The generator, frozen at the tag, writes only the tagged commit, and a file cannot name the commit it is committed in. Options:
+   - (a) Leave the generated file as it is; the hashes are cited here and in the Step 11 report. **Recommended:** nothing the registration protects is affected, and the generator stays the tagged code.
+   - (b) In Step 12, add a line to the generator that names the first commit after the tag that holds `docs/results.md`, and regenerate. The numbers cannot change, but the file would then come from code newer than the tag, which needs saying in the file.
+   - (c) Add the line by hand. Not recommended: the file says it is generated and must not be edited by hand.
+2. **CLAUDE.md's Step 11 verify command** `walkforward --model all --origins test --unlock-test` does not exist: the harness takes one model per run, and the approved run plan (section 4 of the registration) runs one job per origin and per comparison pair. The verify block below gives the commands that reproduce the results without running the models again.
+3. **One reading in `docs/results.md` prints a false inequality.** Its table of hypotheses reads H1 as "absolute difference 0.0027 < 0.02 at 12 months, and -0.0013 > 0 at 24 months": the generator fills a fixed template with the observed values whether or not the condition held. The verdict beside it ("Condition met: no") and every other place say it correctly ("not above 0"). Like open question 1, it needs a change to the frozen generator; I recommend fixing both in Step 12, with `docs/results.md` regenerated from the same result files and a line saying which commit generated it.
+
+### Files touched
+
+`docs/results.md` (new, generated), `docs/figures/results_calibration_12m.png` and `docs/figures/results_calibration_24m.png` (new, generated), `.gitattributes` (`docs/results.md` checks out with LF, as every other committed generated document), `docs/preregistration.md` (the Results blocks and the section 3 paragraph), `docs/progress.md`, `docs/interview_notes.md`. Before the run, on 2026-10-21: `docs/preregistration.md` (commits `0490263` and `2ee8498`). No code.
+
+### Verify (PowerShell)
+
+What to expect:
+
+- `git log` lists the two results commits above `2ee8498` (the registration, tagged `prereg-v1`), newest first.
+- `git diff` against the tag shows only the Results text of the registration: the five Results lines and the paragraph added to section 3.
+- `git ls-remote` shows the tag on origin as tag object `b2af9c072fd1...`.
+- `eval.results` reads the 27 locked result files under `data/results/` (not committed) and the registration from the tagged commit. In the working copy where the locked run ran (`E:\trialpulse` on your laptop, which holds all 27 files), it prints a line ending in `docs\results.md: up to date`, and `git status --short` stays empty. In a clone without those files it refuses with "the locked run is incomplete" and lists `--unlock-test` commands: do not run them, each starts a new locked run that logs to DagsHub, and none is needed for the review.
+- The full test run takes about twelve minutes.
+
+```powershell
+git switch main
+git pull
+uv sync
+git log --oneline -- docs/preregistration.md docs/results.md
+git diff prereg-v1 -- docs/preregistration.md
+git ls-remote --tags origin prereg-v1
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+uv run pytest -q -m "slow or not slow"
+uv run python -m trialpulse.eval.results
+git status --short
+```
+
+### The two-reviewer check of the results documents
+
+Two reviewers, one on the numbers and the registered rules, one on the claims and the documents, each finding then checked by a refuter that tried to disprove it from the files (workflow run `wf_4225b696-0b8`, read-only, before any commit). They re-derived every number in the Results blocks, the section 3 paragraph, this report and the interview notes from the 27 result files and found none wrong; every verdict agrees with the registered rules; the diff against the tag touches only Results text and the machine-readable block is byte-identical; all 27 files name commit `2ee8498`, a clean tree, tag object `b2af9c072fd1` and 1,000 resamples, and every scores file read by a comparison or a hypothesis still has the recorded SHA-256. The refuters confirmed 11 findings and 11 nits (5 of them raised by both reviewers) and rejected 2. All confirmed ones are fixed in the documents above.
+
+| Finding | What was wrong | Fix |
+| --- | --- | --- |
+| A1, B4 | The timing said two jobs ran in Modern Standby; the power log shows standby during M3 at 2020 only. `m4-text` at 2019 ran on battery, and the "session ended" of interruption 3 was the laptop shutting down without a clean shutdown | Timing and interruption 3 rewritten from the power log; the keep-awake row says "partly" |
+| A2, B14 | "One censoring curve moves no AUC by more than 0.001" is true for the champion's pooled values only | Says so, with the larger moves of M0 |
+| A5, B11 | The interview note said the champion was tested "on two years it never saw"; development outcomes reach into 2018 and 2019 (exposure item 1), and the 2019 model trains on 2018 landmarks | Says the test origins' landmarks were never scored in development, and that outcomes from those years informed it |
+| A6, B1 | The UNKNOWN result was said to be "foreshadowed" by the dry run; it matched in direction only, and the test falls are much larger | Both sets of levels given |
+| A9, B8 | The row "one command reproduces" quoted an output nobody had seen yet | The command was run after both results commits and its actual output is recorded |
+| B5 | Decision 1 said the retry "never fired"; the upload retry did start once and was cut off by the shutdown | Corrected |
+| B6 | The interview note called M4 "the boosted model" against "a static classifier" (M1 is LightGBM too) and gave an untested cause for H1 | Rewritten: both are LightGBM, the run does not say why they tie |
+| B7 | The acceptance table had no row for the one registered criterion not met (`docs/results.md` citing the results commit) | Row added, marked No; answer 1 says "met except one" |
+| B9 | The verify block's expectation for `eval.results` was right for one place and wrong for the other | Both outcomes given, with a warning not to run the commands a refusal lists |
+| Nits | A3 and A4 (two times rounded or off by a minute), A7 (H3's "on these origins" read per origin contradicts the 2019 interval), A8 (the false inequality in the generated H1 reading), A10 (git log lists newest first), B3 (the text families lowered the AUC on the development origins, not "as on"), B10 (`docs/results.md` missing from `.gitattributes`), B13 (a correction counted as a decision) | All applied; A8 is open question 3 |
+
+Rejected by the refuters: B2 (the sentence that the lapsed trials are mostly not ranked high was called unmeasured; the calibration tables of the main and variant files support it, but I replaced it with the plainer statement the AUC itself shows) and B12 (a forward note that H3's falsification limits what Steps 12 and 18 may claim; not a defect of Step 11, and CLAUDE.md Section 2 already binds those steps).
+
+#### Checkpoints
+
+- 2026-10-21 19:02: registered (`2ee8498`, tag `prereg-v1`, both pushed) and the locked run started from the tagged commit.
+- 2026-10-23 13:46: the locked run ended with 0 (30 jobs, three interruptions, none a failing job); `docs/results.md` written. Next: the Results blocks, the two-reviewer check, the full suite, the commits, the push and the report.
+- 2026-10-23: the two-reviewer check found no wrong number or verdict; its 22 confirmed findings and nits are fixed. Committed `4991ea5` (results) and `9c635aa` (Results blocks); `eval.results` reproduced the file and both figures byte for byte. Next: this report's commit, the push and CI.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
