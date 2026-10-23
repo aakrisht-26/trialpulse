@@ -7,4 +7,5 @@ docs/features.md text eol=lf
 docs/calibration_diagnosis.md text eol=lf
 docs/cox_report.md text eol=lf
 docs/results_dev.md text eol=lf
+docs/results.md text eol=lf
 docs/figures/*.png binary
