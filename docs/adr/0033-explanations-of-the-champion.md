@@ -18,7 +18,7 @@ M4 is a multiclass LightGBM model of each 6-month interval after a landmark (con
 
 ## Alternatives
 
-- **Model-agnostic SHAP on the cumulative incidence itself** (KernelSHAP or the permutation explainer, with a background sample). Its values are in risk units and add up to the served number, but they cost thousands of model evaluations per row (about two seconds a row here), far too slow for Step 13 to store drivers for every open trial each week, and they depend on the background sample.
+- **Model-agnostic SHAP on the cumulative incidence itself** (KernelSHAP or the permutation explainer, with a background sample). Its values are in risk units and add up to the served number, but each row costs thousands of model evaluations (at least two per feature for each sampled ordering of the 54 features, each over a background sample), against one pass of the trees for TreeSHAP; that is too slow for Step 13 to store drivers for every open trial each week (not measured here: an estimate from the number of evaluations). The values also depend on the background sample.
 - **TreeSHAP on the stop class's raw score alone.** A softmax class score means nothing without the others; the difference from the continue class is the log-odds the scores actually define.
 - **A linearization of the cumulative incidence around each prediction.** Approximate, and its values no longer add up.
 - **The shap package.** The same numbers on these trees, with a new dependency (numba and llvmlite) and nothing gained.
