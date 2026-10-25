@@ -38,6 +38,7 @@ VERSION_COLUMNS = (
     "enrollment_count",
     "enrollment_type",
     "lead_sponsor_class",
+    "study_first_post_date",
 )
 
 
@@ -65,6 +66,7 @@ class Timeline:
     sponsor_class: str = ""
     updates: list[Update] = field(default_factory=list)
     updates_not_listed: int = 0
+    first_post: dt.date | None = None  # t0, from the record (CLAUDE.md Section 6)
 
 
 def outcome_kind(event: int, event_date: dt.date, cutoff: dt.date) -> str | None:
@@ -194,11 +196,14 @@ def read_versions(warehouse: Path, trial_id: str) -> pd.DataFrame:
 
 def with_updates(line: Timeline, versions: pd.DataFrame) -> Timeline:
     """The timeline with the trial's registry updates up to its outcome (or the cutoff), the
-    first MAX_UPDATES of them listed and the rest counted, and its sponsor class at the last
-    landmark."""
+    first MAX_UPDATES of them listed and the rest counted, its sponsor class at the last
+    landmark and its first-post date (t0, the same in every version)."""
     every = updates_of(versions, line.outcome_date)
     line.updates = every[:MAX_UPDATES]
     line.updates_not_listed = len(every) - len(line.updates)
+    posted = versions["study_first_post_date"].dropna()
+    if not posted.empty:
+        line.first_post = pd.Timestamp(posted.iloc[0]).date()
     last = line.points[-1].landmark_date
     known = versions[pd.to_datetime(versions["effective_date"]).dt.date <= last]
     if not known.empty:

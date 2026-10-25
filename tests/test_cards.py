@@ -1,6 +1,10 @@
-"""The model card and the data card (Step 12) against the documents they summarize: every
-number they quote appears in a generated or registered document, and the rules of the Step
-11 review hold (H3 and H4 stated as falsified, the calibration trend and its monitoring)."""
+"""The model card and the data card (Step 12) against the documents they summarize.
+
+Every decimal, and every number written with a thousands separator, on a card must be a
+number of the documents it summarizes (whole numbers matched, not text: 0.78 does not pass
+for 0.782). Small whole numbers, which cell a number sits in and the order of a trend are not
+checked by that test; the rules of the Step 11 review (H1, H3 and H4 stated as falsified, the
+calibration trend and its monitoring) are checked by fixed phrases."""
 
 import re
 from pathlib import Path
@@ -12,7 +16,7 @@ from trialpulse.config import REPO_ROOT
 DOCS = REPO_ROOT / "docs"
 NOTICE = "Research demo. Not medical advice. Not for patient decision-making."
 # Decimals and numbers with thousands separators; dates, hashes and small counts are left out.
-NUMBER = re.compile(r"(?<![\w.,-])\d{1,3}(?:,\d{3})+(?![\d])|(?<![\w.])\d+\.\d+(?![\d.])")
+NUMBER = re.compile(r"(?<![\w.,-])\d{1,3}(?:,\d{3})+(?!\d|,\d)|(?<![\w.])\d+\.\d+(?!\d|\.\d)")
 SOURCES = {
     "model_card.md": ("results.md", "explanations.md", "preregistration.md", "data_audit.md"),
     "data_card.md": ("data_audit.md", "feasibility_report.md", "eda.md", "reason_labeling.md",
@@ -30,9 +34,20 @@ def _without_code(text: str) -> str:
 
 @pytest.mark.parametrize("card", sorted(SOURCES))
 def test_every_number_on_a_card_appears_in_the_documents_it_summarizes(card: str) -> None:
-    sources = "\n".join(_text(name) for name in SOURCES[card])
-    missing = sorted({n for n in NUMBER.findall(_without_code(_text(card))) if n not in sources})
-    assert missing == []
+    assert _missing(_text(card), SOURCES[card]) == []
+
+
+def _missing(card: str, sources: tuple[str, ...]) -> list[str]:
+    found = set(NUMBER.findall("\n".join(_text(name) for name in sources)))
+    return sorted({n for n in NUMBER.findall(_without_code(card)) if n not in found})
+
+
+def test_a_shortened_or_sentence_final_number_is_caught() -> None:
+    card = _text("model_card.md")
+    assert "+0.0060 to +0.0114" in card
+    assert _missing(card.replace("+0.0060 to", "+0.006 to"), SOURCES["model_card.md"]) == ["0.006"]
+    assert NUMBER.findall("lower by 0.644. Next") == ["0.644"]
+    assert NUMBER.findall("rows 90,985, and 1,046.") == ["90,985", "1,046"]
 
 
 @pytest.mark.parametrize("card", sorted(SOURCES))

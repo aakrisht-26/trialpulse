@@ -49,8 +49,10 @@ def test_the_target_is_the_stop_against_continue_log_odds_averaged_over_the_inte
     twelve = drivers.explain(m4, probe, 12)
     assert np.allclose(six.target, per_interval[0], atol=1e-9)
     assert np.allclose(twelve.target, (per_interval[0] + per_interval[1]) / 2, atol=1e-9)
-    # The interval column is kept apart, and its value is the same whatever the trial's.
+    # The expected value is the same for every row; the interval column, kept apart, varies
+    # by row, so the two are not swapped (additivity alone would not tell them apart).
     assert np.ptp(six.base) == pytest.approx(0.0)
+    assert np.ptp(six.interval) > 0
 
 
 def test_the_simulated_drivers_rank_first_with_their_direction(

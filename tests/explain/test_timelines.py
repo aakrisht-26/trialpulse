@@ -5,6 +5,7 @@ import datetime as dt
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -72,6 +73,24 @@ def test_eligible_trials_have_rows_at_both_origins_and_a_known_kind() -> None:
     }
 
 
+def test_the_draw_follows_the_declared_rule_exactly() -> None:
+    """One generator seeded once, used in the order stopped, completed, open, on sorted
+    pools (ADR 0033). The fixed triple relies on numpy's PCG64 stream for
+    Generator.integers; re-seeding per kind gives S0, C0, O0 and the reverse order S4, C3, O0."""
+    pools = {
+        tl.STOPPED: [f"S{i}" for i in (3, 0, 6, 1, 5, 2, 4)],
+        tl.COMPLETED: [f"C{i}" for i in (4, 1, 0, 3, 2)],
+        tl.OPEN: [f"O{i}" for i in (2, 0, 3, 1)],
+    }
+    assert tl.draw(pools, 42) == {tl.STOPPED: "S0", tl.COMPLETED: "C3", tl.OPEN: "O2"}
+    generator = np.random.default_rng(42)
+    expected = {}
+    for kind in tl.KINDS:
+        pool = sorted(pools[kind])
+        expected[kind] = pool[int(generator.integers(len(pool)))]
+    assert tl.draw(pools, 42) == expected
+
+
 def test_the_draw_is_seeded_and_takes_one_of_each_kind() -> None:
     pools = {tl.STOPPED: [f"NCT{i:08d}" for i in range(50)], tl.COMPLETED: ["B"], tl.OPEN: ["C"]}
     first, again = tl.draw(pools, 42), tl.draw(pools, 42)
@@ -112,7 +131,9 @@ def _versions() -> pd.DataFrame:
                  "enrollment_type"],
     ).assign(
         effective_date=lambda f: pd.to_datetime(f["effective_date"]).dt.date,
-        lead_sponsor_class=["OTHER"] * 4 + ["INDUSTRY"] * 3,
+        # Version 5 is the last on or before the last landmark (2019-03-01); 6 and 7 differ.
+        lead_sponsor_class=["OTHER"] * 4 + ["INDUSTRY"] + ["NIH"] * 2,
+        study_first_post_date=dt.date(2016, 1, 10),
     )  # fmt: skip
 
 
@@ -140,12 +161,23 @@ def test_the_updates_listed_are_capped_and_the_rest_counted(
     assert len(line.updates) == 2
     assert line.updates_not_listed == 2
     assert line.sponsor_class == "INDUSTRY"  # the class in effect at the last landmark
+    assert line.first_post == dt.date(2016, 1, 10)
+
+
+def test_the_first_post_date_is_the_records_own() -> None:
+    """Landmarks clamp the day to the month's length (2017-08-31 plus 6 months is
+    2018-02-28), so t0 is read from the record, not worked back from a landmark."""
+    point = tl.Point(ORIGINS[0], 1, dt.date(2018, 2, 28), 0.01, 0.02)
+    line = tl.Timeline(tl.OPEN, "NCT00000009", [point], CUTOFF)
+    versions = _versions().assign(study_first_post_date=dt.date(2017, 8, 31))
+    assert tl.with_updates(line, versions).first_post == dt.date(2017, 8, 31)
 
 
 def test_the_versions_are_read_without_names(tmp_path: Path) -> None:
     for column in tl.VERSION_COLUMNS:
         assert "name" not in column, column
         assert "contact" not in column, column
+        assert "official" not in column, column
     warehouse = tmp_path / "w.duckdb"
     frame = _versions().assign(nct_id="NCT00000001", lead_sponsor_name="A Person")  # noqa: F841
     with duckdb.connect(str(warehouse)) as con:

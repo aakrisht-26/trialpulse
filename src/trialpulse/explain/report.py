@@ -14,10 +14,11 @@ One command writes docs/explanations.md and its figures:
    explanation is of the model whose results are in docs/results.md.
 3. **SHAP values** (`trialpulse.explain.drivers`) of a seeded sample of each origin's
    evaluation rows at 12 and 24 months: the mean absolute value of each feature, the
-   direction of each number feature, and how closely the explained target ranks the rows as
-   the served risk does.
+   direction of each number feature (from the 12-month explanation of the first origin's
+   sample), and how closely the explained target ranks the rows as the served risk does.
 4. **Three example timelines** (`trialpulse.explain.timelines`), with the five drivers of
-   the 12-month risk at each landmark.
+   the 12-month log-odds at each landmark, each from the model of its origin; a point whose
+   saved scores that model does not reproduce is refused.
 
 Nothing is logged to MLflow: the models are the locked run's, already logged, and the
 command evaluates no metric. The document holds registry ids, dates, classes and scores; no
@@ -38,7 +39,6 @@ import pandas as pd
 
 from trialpulse.cli import RefusedError, run
 from trialpulse.config import REPO_ROOT, Origin, ProjectConfig, load_project_config
-from trialpulse.dates import add_months
 from trialpulse.eval.lock import TestLockError, require_unlock
 from trialpulse.eval.rows import (
     LANDMARKS_PATH,
@@ -97,8 +97,7 @@ class OriginExplanation:
 @dataclass
 class TimelineExplained:
     line: timelines.Timeline
-    drivers: list[list[drivers.Driver]]  # per point, the drivers of its 12-month risk
-    first_post: dt.date
+    drivers: list[list[drivers.Driver]]  # per point, the drivers of its 12-month log-odds
 
 
 # The saved scores and their provenance -----------------------------------------------------
@@ -128,7 +127,8 @@ def saved_scores(cfg: ProjectConfig, origin: Origin, unlock_commit: str) -> pd.D
 def parity(model: DiscreteTimeBoosting, rows: LandmarkRows, saved: pd.DataFrame,
            months: Sequence[int]) -> float:  # fmt: skip
     """The largest difference between the model's scores of the rows and the saved ones,
-    matched by registry id and landmark index."""
+    matched by registry id and landmark index. A score that is not a number, on either side,
+    is refused: it would compare as no difference at all."""
     keys = pd.MultiIndex.from_arrays(
         [rows.trial_id.astype(str), rows.landmark_index], names=["trial_id", "landmark_index"]
     )
@@ -138,7 +138,10 @@ def parity(model: DiscreteTimeBoosting, rows: LandmarkRows, saved: pd.DataFrame,
     worst = 0.0
     for m in months:
         theirs = indexed[f"score_{m}"].reindex(keys).to_numpy(dtype=np.float64)
-        worst = max(worst, float(np.max(np.abs(model.predict_months(rows, m) - theirs))))
+        gap = np.abs(model.predict_months(rows, m) - theirs)
+        if not np.isfinite(gap).all():
+            raise RefusedError(f"a {m}-month score is not a number, so parity cannot be checked")
+        worst = max(worst, float(gap.max()))
     return worst
 
 
@@ -218,9 +221,10 @@ def explain_timeline(
     models: Mapping[str, DiscreteTimeBoosting],
     rows: Mapping[str, LandmarkRows],
     months: int,
-    spacing_months: int,
 ) -> TimelineExplained:
-    """The drivers of each point's risk, from its origin's model and its own row."""
+    """The drivers of each point's log-odds, from its origin's model and its own row. The
+    model must give the point the scores the locked run saved, so the drivers are those of
+    the model that made them."""
     found: list[list[drivers.Driver]] = []
     for point in line.points:
         ev = rows[point.origin]
@@ -230,14 +234,17 @@ def explain_timeline(
         if int(mask.sum()) != 1:
             raise RefusedError(f"{line.trial_id} has no single row at {point.landmark_date}")
         own = ev.subset(mask)
-        explanation = drivers.explain(models[point.origin], own, months)
+        model = models[point.origin]
+        for m, saved in ((12, point.score_12), (24, point.score_24)):
+            gap = abs(float(model.predict_months(own, m)[0]) - saved)
+            if not gap <= PARITY_TOLERANCE:
+                raise RefusedError(
+                    f"the {point.origin} model does not give {line.trial_id} at landmark "
+                    f"{point.landmark_index} its saved {m}-month score"
+                )
+        explanation = drivers.explain(model, own, months)
         found.append(drivers.top_drivers(explanation, own.features, 0))
-    first = line.points[0]
-    first_post = add_months(
-        np.array([first.landmark_date], dtype="datetime64[D]"),
-        -spacing_months * first.landmark_index,
-    )[0]
-    return TimelineExplained(line, found, pd.Timestamp(first_post).date())
+    return TimelineExplained(line, found)
 
 
 # The document -------------------------------------------------------------------------------
@@ -280,7 +287,7 @@ def draw_figures(
     fg.ranked_bars(
         paths[0],
         top,
-        title="What moves the champion's 12-month early-stop risk",
+        title="What moves the champion's 12-month log-odds of an early stop",
         subtitle=f"Mean absolute SHAP value of each feature over a seeded sample of the "
         f"evaluation rows of the {origins} origins, averaged over the two origins, in log-odds "
         "of an early stop against continuing. The 15 largest of 54 features.",
@@ -341,12 +348,14 @@ def document(
         "treatment works. The registered results are in [results.md](results.md); nothing here "
         "changes them.",
         "",
-        f"- **Source:** ClinicalTrials.gov registry records, through the version-history "
-        f"dataset `brbk/clinical_trials_history` (license CC-BY-NC-4.0), revision "
-        f"{cfg.dataset.revision}. Data as of {cfg.dataset.cutoff}. TrialPulse normalizes the "
-        "records and derives every score and driver here.",
+        f"- **Source:** [ClinicalTrials.gov](https://clinicaltrials.gov) registry records, "
+        f"through the version-history dataset `brbk/clinical_trials_history` (license "
+        f"CC-BY-NC-4.0), revision {cfg.dataset.revision}. Data as of {cfg.dataset.cutoff}. "
+        "TrialPulse normalizes the records and derives every score and driver here; these are "
+        "not part of ClinicalTrials.gov (ADR 0008).",
         f"- **Model:** the champion, M4 (ADR 0026), of each locked test origin ({origins}), "
-        f"fitted as the locked run fitted it from commit `{unlock_commit[:12]}`.",
+        f"fitted again as the locked run fitted it from commit `{unlock_commit[:12]}`, and used "
+        "because it reproduces every score that run saved.",
         "",
         "## How the drivers are computed",
         "",
@@ -409,13 +418,14 @@ def _importance_section(
             + [f"{mean12[name]:.3f}", f"{mean24[name]:.3f}", direction.get(name, "")]
         )
     return [
-        "## What moves the risk",
+        "## What moves the explained log-odds",
         "",
         f"The mean absolute SHAP value of each feature over a seeded sample of the evaluation "
         f"rows of the {origins} origins. The direction says, for a number feature, whether "
-        f"higher values go with higher SHAP values over the {records[0].origin[:4]} sample "
-        "(Spearman's correlation of at least 0.1 in size; otherwise mixed); a category or "
-        "flag has none here. A feature can matter a lot and still go either way.",
+        "higher values go with higher SHAP values in the 12-month explanation of the "
+        f"{records[0].origin[:4]} sample (Spearman's correlation of at least 0.1 in size; "
+        "otherwise mixed); a category or flag has none here. A feature can matter a lot and "
+        "still go either way.",
         "",
         f"![{figure.stem}](figures/{figure.name})",
         "",
@@ -441,7 +451,8 @@ def _timeline_sections(
         "at both test origins: one that stopped early, one that completed and one still open "
         "at the data cutoff (ADR 0033). Each score is the one its origin's model gave with the "
         "information posted by the landmark, as the locked run saved it. The drivers are those "
-        "of the 12-month risk. The sponsor is shown by class only.",
+        "of the 12-month log-odds of an early stop against continuing, from the same model. "
+        "The sponsor is shown by class only.",
         "",
     ]
     for item, figure in zip(explained, figures, strict=True):
@@ -454,7 +465,8 @@ def _timeline_sections(
         lines += [
             f"### {line.trial_id} ({line.kind})",
             "",
-            f"First posted {item.first_post.isoformat()}; lead sponsor class "
+            f"First posted {line.first_post.isoformat() if line.first_post else 'not known'}; "
+            f"lead sponsor class "
             f"{line.sponsor_class or 'not given'}; {outcome}.",
             "",
             f"![{figure.stem}](figures/{figure.name})",
@@ -466,7 +478,7 @@ def _timeline_sections(
                     "Origin",
                     "Risk within 12 months",
                     "Risk within 24 months",
-                    "Top drivers of the 12-month risk",
+                    "Top drivers (12-month log-odds)",
                 ],
                 [
                     [
@@ -497,14 +509,18 @@ def _timeline_sections(
 # The command --------------------------------------------------------------------------------
 
 
+def parser() -> argparse.ArgumentParser:
+    out = argparse.ArgumentParser(description="Write docs/explanations.md (Step 12).")
+    out.add_argument("--unlock-test", action="store_true", help="see ADR 0004")
+    out.add_argument("--sample", type=int, default=SAMPLE_ROWS)
+    out.add_argument("--doc", type=Path, default=DOC_PATH)
+    out.add_argument("--figures", type=Path, default=FIGURES_DIR)
+    out.add_argument("--cache", type=Path, default=EXPLAIN_DIR)
+    return out
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Write docs/explanations.md (Step 12).")
-    parser.add_argument("--unlock-test", action="store_true", help="see ADR 0004")
-    parser.add_argument("--sample", type=int, default=SAMPLE_ROWS)
-    parser.add_argument("--doc", type=Path, default=DOC_PATH)
-    parser.add_argument("--figures", type=Path, default=FIGURES_DIR)
-    parser.add_argument("--cache", type=Path, default=EXPLAIN_DIR)
-    args = parser.parse_args(argv)
+    args = parser().parse_args(argv)
     cfg = load_project_config()
     origins = select_origins(cfg, "test")
     try:  # before any data is read
@@ -597,9 +613,7 @@ def explain_all(
     for kind in timelines.KINDS:
         line = timelines.timeline(scored, chosen[kind], kind)
         line = timelines.with_updates(line, timelines.read_versions(warehouse, line.trial_id))
-        explained.append(
-            explain_timeline(line, models, rows, min(months), cfg.landmarks.spacing_months)
-        )
+        explained.append(explain_timeline(line, models, rows, min(months)))
     figures = figure_paths(args.figures)
     text = document(cfg, records, explained, unlock_commit, figures)  # text first, as Step 11
     draw_figures(records, explained, cutoff, args.figures)
