@@ -332,6 +332,102 @@ def _rounded_bar(ax: Axes, x: float, height: float, width: float, color: str) ->
     ax.add_patch(PathPatch(outline, facecolor=color, edgecolor="none", zorder=3))
 
 
+def _rounded_hbar(ax: Axes, y: float, length: float, height: float, color: str) -> None:
+    """A horizontal bar that is square at the baseline and rounded at its data end."""
+    (x0, y0), (x1, y1) = ax.transData.transform([(0, 0), (1, 1)])
+    radius = 3.0 * DPI / 96  # pixels
+    rx = min(radius / abs(x1 - x0), length)
+    ry = min(radius / abs(y1 - y0), height / 2)
+    low, high = y - height / 2, y + height / 2
+    corners = [(length - rx, low), (length, low), (length, low + ry),
+               (length, high - ry), (length, high), (length - rx, high)]  # fmt: skip
+    line, curve = MplPath.LINETO, MplPath.CURVE3
+    codes = [MplPath.MOVETO, line, curve, curve, line, curve, curve, line, MplPath.CLOSEPOLY]
+    outline = MplPath([(0, low), *corners, (0, high), (0, low)], codes)
+    ax.add_patch(PathPatch(outline, facecolor=color, edgecolor="none", zorder=3))
+
+
+def ranked_bars(
+    path: Path,
+    rows: Sequence[tuple[str, float]],
+    *,
+    title: str,
+    subtitle: str,
+    source: str,
+    x_label: str,
+    color: str = BLUE,
+    digits: int = 3,
+) -> None:
+    """One thin horizontal bar per category from a zero baseline, largest first, each value
+    written at its bar's end. One series, so no legend: the title names it."""
+    lines = len(textwrap.wrap(subtitle, WRAP))
+    height = SUBTITLE_TOP + SUBTITLE_LINE * lines + PLOT_GAP + BOTTOM + 0.30 * len(rows) + 0.25
+    left = TEXT_LEFT + (0.068 * max(len(label) for label, _ in rows) + 0.15) / WIDTH
+    fig, ax = _figure(title, subtitle, source, height, legend=False, left=left, right=0.90)
+    _grid(ax, "x")
+    largest = max(value for _, value in rows)
+    ax.set_xlim(0, 1.15 * largest)
+    ax.set_ylim(len(rows) - 0.4, -0.6)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([label for label, _ in rows], color=INK)
+    _x_label(ax, x_label)
+    ax.spines["bottom"].set_visible(False)
+    fig.canvas.draw()
+    for i, (_, value) in enumerate(rows):
+        _rounded_hbar(ax, i, value, 0.55, color)
+        ax.annotate(f"{value:.{digits}f}", xy=(value, i), xytext=(5, 0),
+                    textcoords="offset points", va="center", ha="left", fontsize=LABEL_SIZE,
+                    color=INK)  # fmt: skip
+    _save(fig, path)
+
+
+def risk_timeline(
+    path: Path,
+    series: Sequence[Series],
+    *,
+    title: str,
+    subtitle: str,
+    source: str,
+    end_labels: Sequence[str],
+    x_label: str,
+    x_limits: tuple[float, float],
+    x_ticks: Sequence[float],
+    x_tick_labels: Sequence[str],
+    updates: Sequence[float],
+    outcome: tuple[float, str],
+) -> None:
+    """Risk at a few dates as lines with dots, each named at its end; a light hairline at
+    each registry update and a darker one, labeled, at the outcome. The legend names the
+    lines and the update mark."""
+    fig, ax = _figure(title, subtitle, source, 4.6, legend=True, right=0.80)
+    _grid(ax, "y")
+    top = 1.25 * max(float(np.max(y)) for _, _, y, _ in series)
+    ax.set_ylim(0, top)
+    ax.set_xlim(*x_limits)
+    ax.set_xticks(list(x_ticks))
+    ax.set_xticklabels(list(x_tick_labels))
+    _x_label(ax, x_label)
+    ax.yaxis.set_major_formatter(_percent())
+    for at in updates:
+        ax.axvline(at, color=NEUTRAL, linewidth=0.9, zorder=1)
+    ax.axvline(outcome[0], color=INK_SECONDARY, linewidth=1.1, zorder=2)
+    ax.annotate(outcome[1], xy=(outcome[0], top), xytext=(-5, -4), textcoords="offset points",
+                va="top", ha="right", fontsize=8.5, color=INK_SECONDARY)  # fmt: skip
+    for _, x, y, color in series:
+        ax.plot(x, y, color=color, linewidth=LINE_WIDTH, solid_capstyle="round",
+                solid_joinstyle="round", marker="o", markersize=6, markeredgecolor=SURFACE,
+                markeredgewidth=1.0, clip_on=False, zorder=3)  # fmt: skip
+    ends = [
+        (float(x[-1]), float(y[-1]), text, color)
+        for (_, x, y, color), text in zip(series, end_labels, strict=True)
+    ]
+    _side_labels(fig, ax, ends, dots=False)
+    handles = [_line_handle(color) for *_, color in series]
+    handles.append(Line2D([], [], color=NEUTRAL, linewidth=1.2))
+    _legend(fig, ax, handles, [s[0] for s in series] + ["registry update"])
+    _save(fig, path)
+
+
 def bars_by_year(
     path: Path,
     years: Sequence[int],
