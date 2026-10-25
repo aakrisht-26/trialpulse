@@ -160,8 +160,10 @@ def direction_of(
 
 
 def shown(name: str, value: Any) -> str:
-    """A feature's value as text: a level as it is, a flag as yes or no, a number with up to
-    three significant digits; "not given" when missing."""
+    """A feature's value as text: a level as it is, a flag as yes or no; a whole number as
+    it is (with thousands separators from 10,000), any other number with up to three
+    significant digits below 1,000 and rounded to a whole number above; "not given" when
+    missing."""
     kind = BY_NAME[name].kind
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return "not given"
@@ -172,7 +174,9 @@ def shown(name: str, value: Any) -> str:
         return "not given"
     if kind == FLAG:
         return "yes" if number >= 0.5 else "no"
-    return f"{number:.3g}"
+    if number.is_integer():
+        return f"{number:,.0f}" if abs(number) >= 10_000 else f"{number:.0f}"
+    return f"{number:,.0f}" if abs(number) >= 1_000 else f"{number:.3g}"
 
 
 def top_drivers(

@@ -28,7 +28,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, PathPatch
 from matplotlib.path import Path as MplPath
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from trialpulse.reports import write_bytes_if_changed
 
@@ -407,6 +407,7 @@ def risk_timeline(
     ax.set_xticks(list(x_ticks))
     ax.set_xticklabels(list(x_tick_labels))
     _x_label(ax, x_label)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6, steps=[1, 2, 5, 10]))
     ax.yaxis.set_major_formatter(_percent())
     for at in updates:
         ax.axvline(at, color=NEUTRAL, linewidth=0.9, zorder=1)
