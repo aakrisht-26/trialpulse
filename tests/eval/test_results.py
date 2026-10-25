@@ -5,6 +5,7 @@ them."""
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -527,3 +528,114 @@ def test_a_refused_document_leaves_no_figure_behind(
         results.main(args)
     assert not figures.exists()
     assert not (tmp_path / "r.md").exists()
+
+
+# The record of the locked run and the presentation of Step 12 (ADR 0031).
+
+
+def test_a_failed_comparison_is_written_as_failed(root: Path) -> None:
+    """H1's reading printed "-0.0013 > 0" although the comparison failed (Step 11 open
+    question 3). Each part of a condition says how it came out."""
+    values = results.observed(results.load_run(root))
+    values["h1_delta_auc_12"] = {"estimate": -0.0027}
+    values["h1_delta_auc_24"] = {"estimate": -0.0013}
+    holds, how = results.hypotheses(values)["H1"]
+    assert not holds
+    assert (
+        how
+        == "absolute difference 0.0027 < 0.02 at 12 months, and -0.0013 is not above 0 at 24 months"
+    )
+    values["h1_delta_auc_12"] = {"estimate": 0.03}
+    values["h1_delta_auc_24"] = {"estimate": 0.01}
+    assert results.hypotheses(values)["H1"] == (
+        False,
+        "absolute difference 0.0300 is not below 0.02 at 12 months, and +0.0100 > 0 at 24 months",
+    )
+    values["h5_difference"] = {"estimate": 0.01}
+    assert results.hypotheses(values)["H5"] == (False, "+0.0100 is not below 0")
+    values["h5_difference"] = {"estimate": -0.03}
+    assert results.hypotheses(values)["H5"] == (True, "-0.0300 < 0")
+
+
+def test_the_record_is_named_and_a_note_says_only_the_presentation_changed(root: Path) -> None:
+    run, cfg = results.load_run(root), load_project_config()
+    first = results.document(run, _registration(), cfg)
+    assert "Note:" not in first
+    assert "**Record:**" not in first
+    record = results.Record("a" * 40, "b" * 40)
+    again = results.document(run, _registration(), cfg, record=record)
+    head = again.split("## The registered predictions")[0]
+    assert head.index("**Note: presentation regenerated in Step 12.**") < head.index("**Source:**")
+    assert "this file as committed in `aaaaaaa`" in head
+    assert "`git diff aaaaaaa -- docs/results.md`" in head
+    assert (
+        "- **Record:** the results were committed in `aaaaaaaaaaaa`, and the Results blocks of "
+        "the registration were filled in `bbbbbbbbbbbb`." in head
+    )
+    # Nothing else moves: the rest of the document is the same text.
+    assert again.split("- **Origins:**")[1] == first.split("- **Origins:**")[1]
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.org", *args],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return done.stdout.strip()
+
+
+def test_the_record_is_the_first_commit_after_the_tag_that_added_the_document(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", str(repo))
+
+    def commit(path: str, text: str) -> str:
+        (repo / path).write_text(text, encoding="utf-8")
+        _git(repo, "add", path)
+        _git(repo, "commit", "-q", "-m", path)
+        return _git(repo, "rev-parse", "HEAD")
+
+    tagged = commit("docs/preregistration.md", "registered\n")
+    assert results.record_of(tagged, repo) is None  # nothing committed yet
+    added = commit("docs/results.md", "first\n")
+    blocks = commit("docs/preregistration.md", "registered\nResults\n")
+    commit("docs/results.md", "second\n")
+    commit("docs/preregistration.md", "registered\nResults\nlater\n")
+    assert results.record_of(tagged, repo) == results.Record(added, blocks)
+    assert results.record_of("0" * 40, repo) is None  # a commit the history does not hold
+
+
+_HASH = re.compile(r"`[0-9a-f]{7,40}`")
+_NUMBER = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?")
+
+
+def _numbers(text: str) -> list[str]:
+    """Every number of a results document, outside the note and the record line."""
+    kept = [
+        line
+        for line in text.splitlines()
+        if not line.startswith(("**Note: presentation regenerated", "- **Record:**"))
+    ]
+    return _NUMBER.findall(_HASH.sub("", "\n".join(kept)))
+
+
+def test_the_regenerated_document_changes_no_number_of_the_record() -> None:
+    """docs/results.md as regenerated in Step 12 against the record of the locked run:
+    the same numbers in the same order (ADR 0031). Skipped where the history is shallow."""
+    repo = results.REPO_ROOT
+    tagged = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "-q", "prereg-v1^{commit}"],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()  # fmt: skip
+    record = results.record_of(tagged, repo) if tagged else None
+    if record is None:
+        pytest.skip("the tag or the record of the locked run is not in this clone's history")
+    old = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{record.results}:docs/results.md"],
+        capture_output=True, text=True, encoding="utf-8", check=True,
+    ).stdout  # fmt: skip
+    new = results.DOC_PATH.read_text(encoding="utf-8")
+    assert _numbers(new) == _numbers(old)
+    assert len(_numbers(old)) > 500

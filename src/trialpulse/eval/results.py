@@ -25,6 +25,12 @@ named.
 Reading a locked result file evaluates nothing: the files exist only after an unlocked run
 (ADR 0004), and each carries its unlock. Before the unlock the command finds no file and
 says which runs make them.
+
+**The record** (ADR 0031). Once the results are committed, the first commit after the tag
+that added docs/results.md holds the record of the locked run, and the first commit after
+the tag that changed the registration filled its Results blocks. The document names both;
+when it is written again after the record exists, a note at its top says that only the
+presentation changed and how to compare it with the record.
 """
 
 import argparse
@@ -364,16 +370,28 @@ def observed(run: Run) -> dict[str, dict[str, float]]:
     return out
 
 
+def _below(value: str, bound: object, holds: bool) -> str:
+    """A comparison as it came out: "x < b" when it holds, "x is not below b" when not."""
+    return f"{value} < {bound}" if holds else f"{value} is not below {bound}"
+
+
+def _above(value: str, bound: object, holds: bool) -> str:
+    return f"{value} > {bound}" if holds else f"{value} is not above {bound}"
+
+
 def hypotheses(values: Mapping[str, Mapping[str, float]]) -> dict[str, tuple[bool, str]]:
-    """The condition of each hypothesis, as the registration states it."""
+    """The condition of each hypothesis, as the registration states it, and how it was read:
+    a comparison that failed is written as failed."""
     h1_12, h1_24 = values["h1_delta_auc_12"]["estimate"], values["h1_delta_auc_24"]["estimate"]
+    h5 = values["h5_difference"]["estimate"]
     slopes = [values[f"h4_slope_{m}_{y}"]["estimate"] for m in ("12", "24") for y in TEST_YEARS]
     low, high = H4_BOUNDS
+    band, positive = abs(h1_12) < H1_BAND, h1_24 > 0
     return {
         "H1": (
-            abs(h1_12) < H1_BAND and h1_24 > 0,
-            f"absolute difference {abs(h1_12):.4f} < {H1_BAND} at 12 months, and {h1_24:+.4f} > 0 "
-            "at 24 months",
+            band and positive,
+            f"absolute difference {_below(f'{abs(h1_12):.4f}', H1_BAND, band)} at 12 months, and "
+            f"{_above(f'{h1_24:+.4f}', 0, positive)} at 24 months",
         ),
         "H2": (
             values["h2_slope_12"]["ci_low"] > 0,
@@ -387,10 +405,7 @@ def hypotheses(values: Mapping[str, Mapping[str, float]]) -> dict[str, tuple[boo
             all(low <= s <= high for s in slopes),
             "slopes " + ", ".join(f"{s:.3f}" for s in slopes) + f" against [{low}, {high}]",
         ),
-        "H5": (
-            values["h5_difference"]["estimate"] < 0,
-            f"{values['h5_difference']['estimate']:+.4f} < 0",
-        ),
+        "H5": (h5 < 0, _below(f"{h5:+.4f}", 0, h5 < 0)),
     }
 
 
@@ -456,7 +471,47 @@ def calibration_figures(run: Run, cfg: ProjectConfig, out_dir: Path) -> list[Pat
     return paths
 
 
-def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[Path] = ()) -> str:
+@dataclass(frozen=True)
+class Record:
+    """The commits that hold the record of the locked run (ADR 0031)."""
+
+    results: str  # the first commit after the tag that added docs/results.md
+    blocks: str | None  # the first commit after the tag that changed the registration
+
+
+def _note(record: Record | None) -> list[str]:
+    if record is None:
+        return []
+    short = record.results[:7]
+    return [
+        f"**Note: presentation regenerated in Step 12.** The record of the locked run is this "
+        f"file as committed in `{short}`. In Step 12 the generator was changed for presentation "
+        "only, as decided in the review of Step 11 (ADR 0031): it now names the commits that "
+        "hold the record, and it writes a comparison that failed as failed (the reading of H1 "
+        "had printed a false inequality). The result files, the registration and every number "
+        f"are unchanged; `git diff {short} -- docs/results.md` shows the lines that changed.",
+        "",
+    ]
+
+
+def _record_line(record: Record | None) -> list[str]:
+    if record is None:
+        return []
+    blocks = (
+        f", and the Results blocks of the registration were filled in `{record.blocks[:12]}`"
+        if record.blocks
+        else ""
+    )
+    return [f"- **Record:** the results were committed in `{record.results[:12]}`{blocks}."]
+
+
+def document(
+    run: Run,
+    registration: str,
+    cfg: ProjectConfig,
+    figures: Sequence[Path] = (),
+    record: Record | None = None,
+) -> str:
     """The text of docs/results.md."""
     unlock = check_one_commit(run.files)
     check_provenance(run, cfg)
@@ -501,6 +556,7 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
         "early-stop risk is an operational statement about a registry record; it says nothing "
         "about whether a treatment works.",
         "",
+        *_note(record),
         f"- **Source:** ClinicalTrials.gov registry records, through the version-history "
         f"dataset `brbk/clinical_trials_history` (license CC-BY-NC-4.0), revision "
         f"{cfg.dataset.revision}. Data as of {cfg.dataset.cutoff}. TrialPulse normalizes the "
@@ -509,6 +565,7 @@ def document(run: Run, registration: str, cfg: ProjectConfig, figures: Sequence[
         f"`prereg-v1` (tag object `{unlock['tag_object'][:12]}`) on commit "
         f"`{unlock['commit'][:12]}`. Every result file below was made from that commit with a "
         "clean tree.",
+        *_record_line(record),
         f"- **Origins:** {', '.join(f'{y}-01-01' for y in TEST_YEARS)} (the locked test) and "
         f"{STRESS_YEAR}-01-01 (the COVID stress test, reported separately).",
         "",
@@ -875,6 +932,28 @@ def registration_at(commit: str, repo: Path = REPO_ROOT) -> str:
     return shown.stdout
 
 
+def first_commit_after(
+    commit: str, path: str, repo: Path = REPO_ROOT, added: bool = False
+) -> str | None:
+    """The first commit after `commit` (on the way to HEAD) that changed `path`, or that
+    added it; None when there is none or the history is not available."""
+    shown = subprocess.run(
+        ["git", "-C", str(repo), "log", "--reverse", "--format=%H",
+         *(["--diff-filter=A"] if added else []), f"{commit}..HEAD", "--", path],
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )  # fmt: skip
+    lines = shown.stdout.split()
+    return lines[0] if shown.returncode == 0 and lines else None
+
+
+def record_of(commit: str, repo: Path = REPO_ROOT) -> Record | None:
+    """The commits that hold the record of the locked run, if it is committed (ADR 0031)."""
+    results = first_commit_after(commit, "docs/results.md", repo, added=True)
+    if results is None:
+        return None
+    return Record(results, first_commit_after(commit, PREREG_PATH, repo))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write docs/results.md (Step 11).")
     parser.add_argument("--results", type=Path, default=RESULTS_ROOT)
@@ -885,7 +964,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     loaded = load_run(args.results)
     unlock = check_one_commit(loaded.files)
     # The text first: a refusal leaves no figure of locked results behind.
-    text = document(loaded, registration_at(unlock["commit"]), cfg, figure_paths(cfg, args.figures))
+    text = document(
+        loaded,
+        registration_at(unlock["commit"]),
+        cfg,
+        figure_paths(cfg, args.figures),
+        record_of(unlock["commit"]),
+    )
     calibration_figures(loaded, cfg, args.figures)
     changed = write_text_if_changed(args.doc, text)
     print(f"{args.doc}: {'written' if changed else 'up to date'}")
