@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 12 (explainability, model card, data card)**: built on 2026-10-25 with the follow-ups of the Step 11 review, waiting for Aakrisht's review (see "Step 12: Explainability, model card, data card" below, which starts with the three answers). Step 11 was approved on 2026-10-25. **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
+Current step: **Step 13 (scoring pipeline and model registry)**: not built yet; the options for scoring between landmarks and for trials registered more than 3 years ago wait for Aakrisht's decision. Step 12 was approved on 2026-10-26, and its follow-ups are done (see the end of "Step 12: Explainability, model card, data card" below). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -88,7 +88,7 @@ Current step: **Step 12 (explainability, model card, data card)**: built on 2026
 | 9 | Baselines and Cox analysis | Approved 2026-10-10 (ADR 0023 accepted). Runs logged to DagsHub after the review |
 | 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
-| 12 | Explainability, model card, data card | Built 2026-10-25, waiting for Aakrisht's review (ADR 0033 proposed) |
+| 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Not started |
 | 14 | Live ingestion and daily workflow | Not started |
 | 15 | API service | Not started |
@@ -97,6 +97,8 @@ Current step: **Step 12 (explainability, model card, data card)**: built on 2026
 | 18 | Documentation and polish | Not started |
 
 ## Guidance for later steps (recorded 2026-09-30)
+
+**Added 2026-10-26 (review of Step 12):** the dataset's new location, `anamnesis-data/clinical_trials_history`, lists `phases`, `conditions`, `arm_groups` and `locations` tables, and its page does not say whether they are per version. Using any of them would be a post-test change: an ADR, a per-version check like ADR 0020's, and the Step 17 promotion gate, never part of the registered results. Nothing is built for it now.
 
 Aakrisht's guidance from the Step 2 review. Each item is formalized with an ADR when its step starts; until then it is guidance, not a locked definition.
 
@@ -2138,7 +2140,7 @@ Rejected by the refuters: B2 (the sentence that the lapsed trials are mostly not
 
 ## Step 12: Explainability, model card, data card
 
-Date: 2026-10-25 to 2026-10-26. Status: **built and independently reviewed, waiting for Aakrisht's review** (the review is under "The two-reviewer check" below). Started on his approval of Step 11 (2026-10-25), with the follow-ups of that review first. Step 13 is not started.
+Date: 2026-10-25 to 2026-10-26. Status: **approved by Aakrisht on 2026-10-26** (ADR 0033 accepted, the nine decisions approved, `docs/preregistration.md` left unchanged; the follow-ups are at the end of this section). Started on his approval of Step 11 (2026-10-25), with the follow-ups of that review first. Step 13 is not started.
 
 **The three answers first.**
 
@@ -2270,6 +2272,20 @@ git status --short
 - 2026-10-26 02:05: the two-reviewer check finished: 32 findings and nits confirmed, 2 rejected. The code and test fixes are committed (`da146f0`). The usage limit then stopped the session.
 - 2026-10-26 07:38: resumed; the explanations regenerated with the new wording (no number changed), and the document fixes applied (`c3d7d1f`).
 - 2026-10-26 14:37: the full suite passed (973) and the explanations reproduced byte for byte from `c3d7d1f`. Next: this report's commit, the push and CI.
+
+### Review of Step 12 (Aakrisht, 2026-10-26) and what was done
+
+Approved. ADR 0033 is accepted as written (Amendments line added) and the nine decisions are approved; `docs/preregistration.md` stays unchanged (open question 2).
+
+- **Open question 3, the full ADR 0008 form in the older generated documents**, as one presentation-only commit: the source line of `docs/eda.md`, `docs/results_dev.md`, `docs/cox_report.md` and `docs/features.md` now links ClinicalTrials.gov and says the derived numbers are not part of it. Each was regenerated with its own command: `uv run python -m trialpulse.eval.results_dev`, `uv run python -m trialpulse.models.cox --no-track --out <scratch>` (with `--no-track` and a scratch result file, so `data/results/cox/cox_l0.json` keeps its MLflow record, which `results_dev.md` prints; the scratch result equals the recorded one apart from that record), `uv run python -m trialpulse.eda.report` (it rewrote `eda.md` only, of its 11 files) and `uv run python -m trialpulse.features.build` ("Identical to the previous build: yes"). `git diff` changes the source line of each document and the data-as-of line of `eda.md`, and nothing else. `docs/calibration_diagnosis.md` has the same short form; it was not in the approved list, so it is unchanged (open question 1 below).
+- **The dataset moved:** the data card's Sources and the README say that TrialPulse uses v2026.09.26, the last release at `brbk/clinical_trials_history`, cited as that release's card asks, and that later releases are only at `anamnesis-data/clinical_trials_history`, where access approvals do not carry over. The citation is unchanged.
+- **The two early-stop counts of the data card:** one sentence says what each counts. The 35,772 are the early stops of every eligible trial; the 22,446 terminated and 11,809 withdrawn are those of the trials with a landmark row. The difference, 1,517 trials, have no landmark row, and 1,374 of them were already terminated or withdrawn when first posted (counted from `data/cohort/outcomes.parquet`).
+- **The single censoring curve:** checked against the unrounded values. The largest AUC change is 0.00097 (M1 at 2018, 12 months), and the champion's is 0.00055, so "none by more than 0.001" holds; the card now says "by as much as 0.001, checked against the unrounded values in the result files".
+- **Guidance for later steps:** the new location's `phases`, `conditions`, `arm_groups` and `locations` tables, and what using any of them would take.
+
+**Open question:**
+
+1. `docs/calibration_diagnosis.md` (written by `trialpulse.eval.diagnosis`) still has the short attribution form. Its command refits the diagnosis and logs a run, so regenerating it is more than a presentation change; I left it. Options: (a) leave it (it is an internal diagnosis of Step 9); (b) change its source line and regenerate it with `--no-track` and a scratch result file, as for the Cox report.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 

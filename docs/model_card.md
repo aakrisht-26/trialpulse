@@ -56,7 +56,7 @@ Lift at 10% means that among the tenth of evaluation rows (a trial at a landmark
 
 **The ladder** (AUC at 12 months, 2018 and 2019): M0, the sponsor class alone, 0.543 and 0.541; M2, the design, 0.663 and 0.653; M3, plus the amendment signals, 0.702 and 0.693; M4 0.730 and 0.723. M4 minus M3: +0.0290 (+0.0225 to +0.0351). The AUC at 12 months is lowest at registration (0.680 and 0.687) and between 0.698 and 0.743 at the later landmarks.
 
-**Sensitivity analyses.** One censoring curve for all rows instead of one per sponsor class changes none of the AUCs above by more than 0.001. Counting the trials that lapsed into the registry's UNKNOWN status as early stops lowers the AUC at 12 months to 0.667 and 0.655 (ADR 0029): the model does not rank those trials as it ranks real early stops.
+**Sensitivity analyses.** One censoring curve for all rows instead of one per sponsor class changes none of the AUCs above by as much as 0.001, checked against the unrounded values in the result files. Counting the trials that lapsed into the registry's UNKNOWN status as early stops lowers the AUC at 12 months to 0.667 and 0.655 (ADR 0029): the model does not rank those trials as it ranks real early stops.
 
 **The COVID stress test** (2020 origin): AUC 0.693 (0.683 to 0.704) at 12 months and 0.680 (0.672 to 0.688) at 24 months; calibration slopes 0.664 and 0.644.
 

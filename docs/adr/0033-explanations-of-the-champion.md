@@ -1,7 +1,7 @@
 # 0033. Explanations of the champion and the example timelines
 
 - Date: 2026-10-25
-- Status: **Proposed** (Step 12), for Aakrisht's review.
+- Status: **Accepted.** Approved as written by Aakrisht in the review of Step 12 on 2026-10-26.
 - Refines CLAUDE.md Section 13 ("SHAP for M4. The top 5 drivers, with direction, are stored with every served prediction") and Step 12.
 
 ## Context
