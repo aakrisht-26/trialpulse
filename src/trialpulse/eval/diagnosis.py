@@ -585,10 +585,12 @@ def document(cfg: ProjectConfig, results: list[dict[str, Any]]) -> str:
         "Step 9, first task). Do not edit it by hand. It is a diagnosis on the development "
         "origins: nothing is changed by it, and no evaluation row of a locked origin is read.",
         "",
-        "- **Source:** ClinicalTrials.gov registry records, through the version-history "
+        "- **Source:** [ClinicalTrials.gov](https://clinicaltrials.gov) registry records, "
+        "through the version-history "
         f"dataset `{cfg.dataset.repo_id}` (license CC-BY-NC-4.0), revision "
         f"{cfg.dataset.revision}. Data as of {cfg.dataset.cutoff}. TrialPulse normalizes the "
-        "records and derives every number here.",
+        "records and derives every number here; these are not part of ClinicalTrials.gov "
+        "(ADR 0008).",
         "- **M0** is one Aalen-Johansen curve of early-stop risk per lead sponsor class, fitted "
         "on the training rows of an origin and scored on the landmarks of the following 12 "
         "months. A calibration slope above 1 means its predictions for the classes lie closer "
