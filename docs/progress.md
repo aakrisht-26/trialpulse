@@ -2138,13 +2138,13 @@ Rejected by the refuters: B2 (the sentence that the lapsed trials are mostly not
 
 ## Step 12: Explainability, model card, data card
 
-Date: 2026-10-25. Status: **built and independently reviewed, waiting for Aakrisht's review**. Started on his approval of Step 11 (2026-10-25), with the follow-ups of that review first. Step 13 is not started.
+Date: 2026-10-25 to 2026-10-26. Status: **built and independently reviewed, waiting for Aakrisht's review** (the review is under "The two-reviewer check" below). Started on his approval of Step 11 (2026-10-25), with the follow-ups of that review first. Step 13 is not started.
 
 **The three answers first.**
 
 1. **Acceptance criteria:** met, with evidence in the table below, and so are your four rules and the three follow-ups of the Step 11 review.
-2. **Decisions made without asking:** eight, listed and flagged under "Decisions made without asking". The ones that refine CLAUDE.md are in ADR 0033, which is proposed, not accepted.
-3. **Blocked, skipped or deferred:** nothing of Step 12. The card of the served model waits for Step 13, which trains it (the model card says so). Nothing was logged to MLflow, because Step 12 evaluates no metric (decision 7).
+2. **Decisions made without asking:** nine, listed and flagged under "Decisions made without asking". The ones that refine CLAUDE.md are in ADR 0033, which is proposed, not accepted.
+3. **Blocked, skipped or deferred:** nothing of Step 12. The card of the served model waits for Step 13, which trains it (the model card says so). Nothing was logged to MLflow, because Step 12 evaluates no metric (decision 7). Two questions about ADR 0008 headers on older documents are yours (open questions 2 and 3).
 
 ### The follow-ups of the Step 11 review
 
@@ -2154,56 +2154,90 @@ Date: 2026-10-25. Status: **built and independently reviewed, waiting for Aakris
   - a "Record" line is added under the registration line;
   - H1's reading `-0.0013 > 0 at 24 months` becomes `-0.0013 is not above 0 at 24 months`.
 
-  A test (`test_the_regenerated_document_changes_no_number_of_the_record`) holds every number of the regenerated file, in order, to the record's. The two calibration figures came out byte-identical.
+  A test (`test_the_regenerated_document_changes_no_number_of_the_record`) holds every number of the regenerated file, in order, to the record's; since the review, CI fetches the full history, so it runs there too. The two calibration figures came out byte-identical.
 - **Your rules for calibration** (ADR 0032, accepted, in the Amendments): the 24-month calibration is a known limitation; any later recalibration is a post-test product change judged by Step 17's live monitoring; the fall of the slope over the locked origins is a trend Step 17 tracks.
 
 ### What was built
 
 - **`trialpulse.explain.drivers`:** exact TreeSHAP values of M4 from LightGBM's own `pred_contrib`, for the log-odds of an early stop against continuing averaged over the intervals of a horizon (ADR 0033); the five drivers of a prediction with their direction, the mean absolute value of each feature, the direction of each number feature, and the rank agreement with the served risk.
-- **`trialpulse.explain.timelines`:** the seeded draw of one trial that stopped early, one that completed and one still open from the trials with evaluation rows at both test origins, and their registry updates, read from the warehouse by column, with no name.
-- **`trialpulse.explain.report`**, the one command (`uv run python -m trialpulse.explain.report --unlock-test`): the test lock first; then M4 of each test origin, fitted as the locked run fitted it and used only if it reproduces every saved score of its origin to 1e-12 (cached in `data/explain/`); SHAP values of a seeded sample of 20,000 evaluation rows per origin; the three timelines; `docs/explanations.md` and five figures.
+- **`trialpulse.explain.timelines`:** the seeded draw of one trial that stopped early, one that completed and one still open from the trials with evaluation rows at both test origins, and their registry updates and first-post date, read from the warehouse by column, with no name.
+- **`trialpulse.explain.report`**, the one command (`uv run python -m trialpulse.explain.report --unlock-test`): the test lock first; then M4 of each test origin, fitted as the locked run fitted it and used only if it reproduces every saved score of its origin to 1e-12 (cached in `data/explain/`); SHAP values of a seeded sample of 20,000 evaluation rows per origin; the three timelines, each point explained by its own origin's model, which must give it its saved scores; `docs/explanations.md` and four figures.
 - **Two chart types** in the shared figure module: ranked horizontal bars and a risk timeline with update marks.
-- **`docs/model_card.md`** and **`docs/data_card.md`**, written by hand, with `tests/test_cards.py` holding every number they quote to the documents they summarize, and your rules to their wording.
-- **The README** links the results, the cards and the explanations, and no longer says that no registry data is published.
+- **`docs/model_card.md`** and **`docs/data_card.md`**, written by hand. `tests/test_cards.py` checks that every decimal, and every number written with a thousands separator, on a card is a number of the documents it summarizes (whole numbers matched); small whole numbers, which cell a number sits in and the order of the trend are not checked by it. It also checks your rules by fixed phrases (H1, H3 and H4 stated as falsified, no claim that operational stops are more predictable, the calibration trend and its monitoring).
+- **The README** links the results, the cards and the explanations, and names the pages that carry the ADR 0008 attribution.
 
 ### What the explanations show
 
 - **Parity:** both refitted models reproduce the locked run's saved scores with a largest difference of 0.0 (86,556 and 90,985 evaluation rows), so the explanations are of the registered models.
-- **Rank agreement** of the explained log-odds with the served risk: 0.972 and 0.975 at 12 months, 0.930 and 0.934 at 24 months (2018 and 2019). The values add up to the log-odds within 3.4e-14.
-- **The features that move the 12-month log-odds most** (mean absolute SHAP value, mean of the two origins): the enrollment count 0.192 (higher lowers it), the sponsor's early-stop rate 0.186 (higher raises it), the planned duration 0.186 (higher lowers it), the landmark index 0.170 (later raises it) and the sponsor class 0.165.
+- **Rank agreement** of the explained log-odds with the served risk, over the 20,000 sampled evaluation rows per origin: 0.972 and 0.975 at 12 months, 0.930 and 0.934 at 24 months (2018 and 2019). The values add up to the log-odds within 3.4e-14.
+- **The features that move the 12-month log-odds most** (mean absolute SHAP value, mean of the two origins): the enrollment count 0.192 (higher lowers it), the sponsor's early-stop rate 0.186 (higher raises it), the planned duration 0.186 (higher lowers it), the landmark index 0.170 (later raises it) and the sponsor class 0.165. The directions are those of the 2018 sample; the 2019 sample agrees for these four.
 - **The timelines** (seed 42; eligible pools of 5,028 stopped, 24,038 completed and 3,105 open trials): NCT02805517 (stopped early, posted 2021-10-26), NCT03591822 (completed, posted 2021-12-02) and NCT03504397 (open at the data cutoff).
+- **The cost of TreeSHAP:** about 6.5 ms per row and interval with the 3,138-tree champion on this laptop, 223 times a plain prediction (ADR 0033 has the Step 13 estimate: about 40 minutes for the trials open at the cutoff).
 
 ### Acceptance criteria
 
 | Criterion (CLAUDE.md Step 12 and your rules of 2026-10-25) | Met | Evidence |
 | --- | --- | --- |
-| SHAP global importance and per-prediction drivers for M4 | Yes | `docs/explanations.md` ("What moves the risk", and the drivers at each timeline point); `trialpulse.explain.drivers`; tests: the values add up to the target within 1e-9, the target is the stop-against-continue log-odds per interval, the simulated drivers rank first with their direction |
-| Three example risk timelines by a seeded draw from test-origin trials: one stopped, one completed, one still open | Yes | `docs/explanations.md`, three figures; the rule is ADR 0033 and the code's docstring; tests: seeded, sorted before the draw, one of each kind, lapsed trials not eligible |
-| No personal data in the timelines (your rule 3) | Yes | The versions are read by the columns of `VERSION_COLUMNS` only (no name, contact or free text; tested against a table that has a sponsor name), and the sponsor appears by class |
+| SHAP global importance and per-prediction drivers for M4 | Yes | `docs/explanations.md` ("What moves the explained log-odds", and the drivers at each timeline point); `trialpulse.explain.drivers`; tests: the values add up to the target within 1e-9, the target is the stop-against-continue log-odds per interval, the expected value and the interval column are not swapped, the simulated drivers rank first with their direction |
+| Three example risk timelines by a seeded draw from test-origin trials: one stopped, one completed, one still open | Yes | `docs/explanations.md`, three figures; the rule is ADR 0033; tests: the draw pinned to an exact triple for a seed, sorted before the draw, lapsed trials and trials at one origin only not eligible, each point explained by its origin's model, and the whole command on two origins with two models |
+| No personal data in the timelines (your rule 3) | Yes | The versions are read by the columns of `VERSION_COLUMNS` only (no name, contact or free text; tested against a table that has a sponsor name, also through the whole command), and the sponsor appears by class |
 | `docs/model_card.md`: intended use, out-of-scope uses, metrics, limitations, ethics, license | Yes | Its sections, with the attribution of ADR 0008 |
 | `docs/data_card.md`: sources, licenses, citation, known biases (self-reported data, US-centric mandate, estimated pre-2018 dates, UNKNOWN statuses) | Yes | Its sections; the four biases are items 1 to 4 of "Known biases and limitations" |
-| Both cards consistent with `docs/results.md` (your rule 1), including the falsified hypotheses: no claim that operational stops are more predictable (H3), the 24-month calibration below the pre-registered range (H4) | Yes | `tests/test_cards.py`: every number on each card appears in the documents it summarizes; H1, H3 and H4 are stated as falsified; any sentence about operational stops being more predictable says there is no such claim; the H4 wording |
+| Both cards consistent with `docs/results.md` (your rule 1), including the falsified hypotheses: no claim that operational stops are more predictable (H3), the 24-month calibration below the pre-registered range (H4) | Yes | `tests/test_cards.py` (what it checks and does not check is under "What was built"); the review's reviewer B checked every claim of both cards against the documents and found the defects fixed below |
 | The 24-month calibration documented as a known limitation; recalibration as a post-test product change judged by Step 17 (your rule 2) | Yes | Model card, "Calibration: a known limitation"; ADR 0032 |
 | The slope's fall at each later locked origin at both horizons, as a trend of unknown cause that Step 17 must track (your rule 4) | Yes | Model card, "A trend whose cause is not established": 0.855, 0.803, 0.664 at 12 months and 0.782, 0.732, 0.644 at 24; tested |
-| Figures regenerate from one command | Yes | `uv run python -m trialpulse.explain.report --unlock-test`, run a third time on 2026-10-25 (17:40 to 18:40) from commit `306a5b9` with the cached models: both models reproduced the saved scores (largest difference 0.0e+00), it printed `docs\explanations.md: up to date`, and the SHA-256 of the document and of all four figures were the same before and after |
-| ruff, ruff format, mypy and pytest clean | Yes | TESTS12-LINE |
+| Figures regenerate from one command | Yes | `uv run python -m trialpulse.explain.report --unlock-test`, run on 2026-10-26 (12:33 to 14:37) from commit `c3d7d1f` with the cached models, after the review's fixes: both models reproduced the saved scores (largest difference 0.0e+00), it printed `docs\explanations.md: up to date`, and the SHA-256 of the document and of all four figures were the same before and after. The run of 2026-10-25 (17:40 to 18:40) had done the same for the version before the review |
+| ruff, ruff format, mypy and pytest clean | Yes | In my shell on 2026-10-26, on the final code: the full suite, slow tests included, 973 passed, none skipped, one deprecation warning from MLflow's own database code (it took 4 hours 13 minutes, most of it with the laptop in Modern Standby: power events 506 at 08:29 and 507 at 10:51); `ruff check`, `ruff format --check` and `mypy src` clean (86 source files) |
 
 ### Decisions made without asking
 
 1. **What the SHAP values explain** (ADR 0033): the log-odds of an early stop against continuing, averaged over the horizon's intervals, not the served cumulative incidence, which no additive split of the trees reaches. Exact and cheap enough for Step 13 to store drivers for every open trial each week; the rank agreement says how closely it follows the served risk.
 2. **LightGBM's own TreeSHAP instead of the shap package.** CLAUDE.md lists SHAP in the locked stack; `pred_contrib` runs the same algorithm on these trees, so the package (with numba and llvmlite) is not added.
 3. **The explained models are refitted, not saved by the locked run**, and are used only if they reproduce every saved score (they do, with a difference of 0.0). Cached in `data/explain/`.
-4. **A seeded sample of 20,000 evaluation rows per origin** for the importance, and a direction only for number features with a rank correlation of at least 0.1 in size.
+4. **A seeded sample of 20,000 evaluation rows per origin** for the importance and the rank agreement, and a direction only for number features, from the 12-month explanation of the 2018 sample, with a rank correlation of at least 0.1 in size.
 5. **The timeline rule:** trials with evaluation rows at both test origins (the 2020 stress origin is not used), outcome stopped, completed or open at the cutoff, lapsed trials excluded, ids sorted, the project's seed, the order stopped, completed, open.
-6. **What the timelines show:** the scores the locked run saved, the drivers of the 12-month risk, and registry updates that changed the status, start, primary completion or enrollment.
+6. **What the timelines show:** the scores the locked run saved, the drivers of the 12-month log-odds from the model of each point's origin, and registry updates that changed the status, start, primary completion or enrollment.
 7. **No MLflow run for Step 12:** it evaluates no metric, and the models are the locked run's, already logged.
-8. **The cards are written by hand and tested**, rather than generated: a test holds every number they quote to `docs/results.md`, `docs/explanations.md` and the audits, and their wording to your rules.
+8. **The cards are written by hand and tested**, rather than generated (what the test checks is under "What was built").
+9. **The README names the pages that carry the ADR 0008 attribution** instead of adding a header to `docs/preregistration.md` (open question 2).
+
+### The two-reviewer check
+
+Two reviewers, one on the code, numbers and point-in-time correctness, one on the documents and claims, each finding then checked by a refuter that tried to disprove it from the files (workflow run `wf_5b75eb10-528`, read-only; a first attempt died at 17:42 on 2026-10-25 on a network outage before writing a finding). Reviewer A re-derived every number of `docs/explanations.md` from the run summary, the saved scores and the features, rebuilt the draw and the update tables, and confirmed that the refitted models reproduce every saved score; reviewer B checked every claim of both cards, the README and the ADRs against their sources. Reviewer A planted 47 one-line faults in scratch copies: 31 were caught by the tests, 16 survived. The refuters confirmed 18 findings and 14 nits and rejected 2. None changes a registered number or a number of the explanations. All confirmed ones are fixed: the code and tests in `da146f0`, the documents in the commit of this report.
+
+| Finding | What was wrong | Fix |
+| --- | --- | --- |
+| A2 | A score that is not a number made parity compare as no difference (Python's `max(0.0, nan)` is 0.0), so a model could pass it | Parity refuses a non-finite difference; tested |
+| A10 | No test reached `explain_timeline`, `explain_all` or `fit_champion`, so nothing tied a timeline point to its origin's model (5 surviving faults) | A run-time check: each point's model must give it its saved scores; tests with two models under two origins, a trial with two landmarks in one origin, and the whole command with a warehouse |
+| A1 | The first-post date was worked back from a landmark, which clamps the day to the month's length: wrong for 338 eligible trials (not the three drawn) | Read from the record's `study_first_post_date`; tested on 2017-08-31 |
+| A9 | The parity test nudged every row equally and kept the rows in order, so a mean, a missing key match and a dropped key check all passed | Shuffled frame, one-row nudge, a foreign key, a NaN |
+| A7 | The draw test never pinned which trials a seed gives (re-seeding per kind or reversing the order passed) | Pinned to an exact triple, both faults now fail |
+| A3, B5 | The card test matched text, not numbers (0.78 passed for 0.782), missed sentence-final numbers, and the report said it held "every number" | Whole numbers matched, the pattern fixed, a regression test; its scope stated as it is |
+| B1 | The model card said M4 reads no free text; it reads the phase a title states (ADR 0006) | Corrected |
+| B2 | The explanations called the drivers those of "the 12-month risk"; they are those of the log-odds | Headings, column, figure title and text say log-odds; regenerated |
+| B3 | The data card gave 28,013 and 64,040 UNKNOWN censorings with nothing linking them | Linked: 28,013 cohort trials, 35,938 censored at or before registration, 89 lapsed or not interventional at every landmark |
+| B4 | `docs/explanations.md` did not link ClinicalTrials.gov or say the scores are not part of it (ADR 0008) | Fixed in the generator; tested; regenerated |
+| B6 | This report's status said "independently reviewed" before the review had finished | The status waited for this section |
+| B7, B8, N9 | "Five figures" (four), cached-run times not supported by the logs, and the network need of the lock not stated | Corrected from the run logs |
+| B9 | The model card credited the champion with a later gain over the static classifier; H2 is M3 against M2 | Corrected |
+| B10 | The README said every page with results carries the data-as-of date; the pre-registration does not | The README names the pages that do; open question 2 |
+| B11 | The data card cited a phase sensitivity analysis that was never run | It cites the descriptive phase tables of `docs/eda.md` |
+| B12 | The interview note's rejected alternative was not the one weighed, and stated an estimate as fact | The rejected alternative is model-agnostic SHAP, with the estimate labeled |
+| Nits | A4 (the expected value and the interval column could be swapped unseen), A5 (CI skipped the record test), A6 (a test checked a constant against itself), A8 (the sponsor-class fixture could not see the point-in-time rule), A11 (TreeSHAP's cost not measured), N1 (all four H4 predictions falsified), N2 and N4 (the sample and the source of the direction), N3, N5, N6, N7, N11 (card wording) | All applied; TreeSHAP measured at 6.5 ms per row and interval |
+
+Rejected by the refuters: N8 (citing the proposed ADR 0033 in the card without a mark; the project cites proposed ADRs that way) and N10 (a wording preference). Also not applied: reviewer B's suggestion to strengthen the card test further (cell-by-cell matching, trend order), beyond stating its scope.
+
+### Open questions
+
+1. **ADR 0033** (proposed): the explained target, the models, the sample, the direction rule and the timeline rule.
+2. **An ADR 0008 header for `docs/preregistration.md`.** It shows registry-derived results in its Results blocks but has no source line or data-as-of date. The README now names the pages that carry them and points the pre-registration to `docs/results.md`. Options: (a) leave it so, the registered file unchanged beyond its Results blocks (my recommendation); (b) add a header line in a separate commit that touches no prediction (the generator reads the registration from the tag, so nothing registered would change).
+3. **The full ADR 0008 form in the older generated documents.** `docs/eda.md`, `docs/results_dev.md`, `docs/cox_report.md` and `docs/features.md` name the source but not with the link and the "not part of ClinicalTrials.gov" sentence that the cards and `docs/explanations.md` now have. A small follow-up, separate from Step 12.
 
 ### Files touched
 
-New: `src/trialpulse/explain/__init__.py`, `drivers.py`, `timelines.py`, `report.py`; `tests/explain/conftest.py`, `test_drivers.py`, `test_timelines.py`, `test_report.py`; `tests/test_cards.py`; `docs/explanations.md` (generated) and `docs/figures/explain_importance_12m.png`, `explain_timeline_1.png` to `explain_timeline_3.png` (generated); `docs/model_card.md`; `docs/data_card.md`; ADRs 0030 to 0033. Changed: `src/trialpulse/eval/results.py`, `tests/eval/test_results.py`, `docs/results.md` (regenerated), `src/trialpulse/eda/figures.py`, `CLAUDE.md` (Amendments: ADRs 0030 to 0032), `README.md`, `docs/progress.md`, `docs/interview_notes.md`.
+New: `src/trialpulse/explain/__init__.py`, `drivers.py`, `timelines.py`, `report.py`; `tests/explain/conftest.py`, `test_drivers.py`, `test_timelines.py`, `test_report.py`; `tests/test_cards.py`; `docs/explanations.md` (generated) and `docs/figures/explain_importance_12m.png`, `explain_timeline_1.png` to `explain_timeline_3.png` (generated); `docs/model_card.md`; `docs/data_card.md`; ADRs 0030 to 0033. Changed: `src/trialpulse/eval/results.py`, `tests/eval/test_results.py`, `docs/results.md` (regenerated), `src/trialpulse/eda/figures.py`, `.gitattributes`, `.github/workflows/ci.yml` (full history for the record test), `CLAUDE.md` (Amendments: ADRs 0030 to 0032), `README.md`, `docs/progress.md`, `docs/interview_notes.md`.
 
-Commits: `25beca7` (ADRs 0030 to 0032), `4d21615` (the generator fix and the regenerated results), `146fad2` (the explanation code, ADR 0033), `6fa59ca` (number display and timeline ticks), and the documents commit of this report.
+Commits: `25beca7` (ADRs 0030 to 0032), `4d21615` (the generator fix and the regenerated results), `146fad2` (the explanation code, ADR 0033), `6fa59ca` (number display and timeline ticks), `9ef3a23` (the explanations and the cards), `306a5b9` (LF for the explanations), `016b674` (ADR 0033's estimate), `da146f0` (the review's code and test fixes), `95098c0` (a checkpoint), and the documents commit of this report.
 
 ### Verify (PowerShell)
 
@@ -2211,7 +2245,7 @@ What to expect:
 
 - `git diff 4991ea5 -- docs/results.md` shows the note, the Record line and H1's reading, and no other change.
 - The full test run takes about twelve minutes. In a clone without the tag history, the test of the record skips.
-- `explain.report` needs the locked result files and the cohort and features in `data/` (present in `E:\trialpulse`). With the models cached it takes about half an hour, prints a largest difference of 0.0e+00 for each origin and ends with a line ending in `docs\explanations.md: up to date`; `git status --short` then prints nothing. Without the cache it fits the two models first (about 25 minutes more). In a clone without the locked result files it refuses.
+- `explain.report` needs the locked result files and the cohort and features in `data/` (present in `E:\trialpulse`), and network access to GitHub, because the test lock lists the tags on origin (ADR 0009); without it the command refuses within seconds, before reading any data. With the models cached, its runs in my shell took 38, 59 and 40 minutes, and 124 minutes on 2026-10-26 with an hour and a half of it in Modern Standby; the first run, which fitted both models, took 54 minutes, so the time depends more on what else the laptop is doing than on the cache. It prints a largest difference of 0.0e+00 for each origin and ends with a line ending in `docs\explanations.md: up to date`; `git status --short` then prints nothing. Without the cache it fits the two models first and caches them in `data/explain/`. In a clone without the locked result files it refuses.
 
 ```powershell
 git switch main
@@ -2233,7 +2267,9 @@ git status --short
 - 2026-10-25 16:58: the run finished (54 minutes, both models fitted, parity 0.0); two display defects fixed (`6fa59ca`), and the run started again with the cached models. The cards are drafted.
 - 2026-10-25 18:40: the documents committed (`9ef3a23`, `306a5b9`, `016b674`); a third run reproduced the document and the figures byte for byte. The two-reviewer check died at 17:42 on a network outage (no DNS) before writing a finding.
 - 2026-10-26 01:20: after Aakrisht's "try again", the network is back and the two-reviewer check runs again (workflow run `wf_5b75eb10-528`).
-- 2026-10-26 02:05: 2026-10-26: the two-reviewer check finished (wf_5b75eb10-528): 32 findings and nits confirmed, 2 rejected. The code and test fixes are committed (da146f0). Still to do: regenerate docs/explanations.md with the new wording (about 40 to 60 minutes), the document fixes (model card, data card, README, ADR 0033, interview notes, this report's review section), the full suite, the push and the report.
+- 2026-10-26 02:05: the two-reviewer check finished: 32 findings and nits confirmed, 2 rejected. The code and test fixes are committed (`da146f0`). The usage limit then stopped the session.
+- 2026-10-26 07:38: resumed; the explanations regenerated with the new wording (no number changed), and the document fixes applied (`c3d7d1f`).
+- 2026-10-26 14:37: the full suite passed (973) and the explanations reproduced byte for byte from `c3d7d1f`. Next: this report's commit, the push and CI.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
