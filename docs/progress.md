@@ -2287,6 +2287,46 @@ Approved. ADR 0033 is accepted as written (Amendments line added) and the nine d
 
 1. `docs/calibration_diagnosis.md` (written by `trialpulse.eval.diagnosis`) still has the short attribution form. Its command refits the diagnosis and logs a run, so regenerating it is more than a presentation change; I left it. Options: (a) leave it (it is an internal diagnosis of Step 9); (b) change its source line and regenerate it with `--no-track` and a scratch result file, as for the Cox report.
 
+## Step 13: Scoring pipeline and model registry
+
+Date: 2026-10-26. Status: **not built: two decisions wait for Aakrisht** (his rule 1 for Step 13). Nothing of Step 13 is built.
+
+### The two decisions, with options
+
+Prepared by a design workflow (`wf_428987ee-35e`): one agent mapped how the features depend on the landmark grid, three designers proposed options from three angles (parity and simplicity, validity and honest scope, usefulness to portfolio teams), and a judge merged them and checked the facts. I checked the facts the recommendation rests on myself: the champion's trees split `landmark_index` only at 0, 1.5, 2.5, 3.5, 4.5 and 5.5 and `months_since_t0` only at 0, 9, 15, 21, 27 and 33; in training, `months_since_t0` is exactly 6k at landmark k and `months_since_last_update` is at most 6k (always 0 at landmark 0).
+
+**Facts behind both questions.**
+
+- Of the 54 features, 3 are tied to the landmark grid (`landmark_index`, `months_since_t0`, and `n_versions_recent`, whose window starts at the previous landmark, ADR 0021), 10 are defined at any date (the month comparisons, the competition count, the sponsor record), and 41 read only the version in effect.
+- The feature code computes any (trial, date) key it is given; nothing checks that the date is on the grid.
+- On any day, only about 0.5% of open trials sit on a landmark, so every option other than A serves mostly rows that Step 11 never evaluated.
+- Every option keeps the Step 13 parity test exact on landmark dates.
+- The trees route any landmark index above 6, or any months above 36, exactly as landmark 6.
+
+**Question 1: the time features on a date between landmarks.**
+
+- **A. Serve the latest landmark row.** The score is the one at the last landmark passed, with every feature as of that landmark, and it changes only on landmark days. Every served number is a row type Step 11 evaluated. But it ignores record changes for up to 6 months, its horizon starts at the landmark rather than today, and it drops the daily loop of Sections 1, 12 and 13 (an ADR would amend them).
+- **B. Features at the date, time features held at the last landmark passed.** Every feature describes the record on the scoring date, but `landmark_index` = k\* and `months_since_t0` = 6k\*. The horizon starts on the scoring date. The time pair is always one the trees saw. Other combinations are new: for example 3 months since the last update at landmark 0, where training always had 0. The score also steps on landmark days with no record change.
+- **C. Like B, blended between the two landmarks around the date.** The row is predicted at both k\* and k\*+1 and the two scores are weighted by the time elapsed. There are no landmark-day steps, but it costs two TreeSHAP passes (a full weekly driver pass of about 68 minutes, over the one-hour line), the drivers are blended, and it is also unevaluated.
+
+**Recommendation for question 1: B**, gated by a declared development check before anything is served. One ADR fixes the rule and the margins first. Then rows at mid-landmark dates (3 months after each landmark) from the 2016 and 2017 evaluation windows only are scored three ways on the same rows, with A as the reference, using the IPCW AUC and Brier score at 12 months and a paired cluster bootstrap. The check is reported as development evidence outside the registered results (ADR 0032). Rules to decide: C replaces B only if it wins by the margin at both origins, and the fallback is A if B ranks worse than A at both.
+
+**Question 2: open trials registered more than 3 years ago.** At the data cutoff, about 21,600 of 91,500 open trials (24%) are 42 months or older, mostly RECRUITING or ACTIVE_NOT_RECRUITING.
+
+- **1. Score them on landmark 6, flagged.** The index is explicitly capped at 6 (the trees already route them that way), and the score carries an "outside the validated range" flag from month 42 (under B, months 36 to 41 are between landmarks 6 and 7, like months 30 to 35 at landmark 5). They never enter a headline number and are graded as their own group in Step 17.
+- **2. Do not score them.** They get a reason code ("registered more than 42 months ago: outside the landmarks the model was trained and tested on"). This is the strictest reading, but about a quarter of open trials, the long-running ones portfolio teams watch, get no score.
+- **3. Extend the landmark grid.** This changes a locked definition after the locked test, so it is a Step 17 challenger at most, not Step 13.
+
+**Recommendation for question 2: option 1**, backed by a second declared development check: pseudo-landmarks beyond landmark 6 in the 2016 and 2017 windows, scored by the development models, with AUC and calibration by age band (42 to 59, 60 to 119, 120 months or more) against landmark 6, and a floor and a minimum number of rows fixed before looking. A band that fails abstains (option 2 for that band). The 120-month band is likely to have too few development rows and to abstain.
+
+**Sub-choices that come with B and option 1** (my defaults, to confirm or change):
+
+- **The recent-versions window off the grid:** slide the trial's last landmark gap (start = previous landmark plus the days elapsed since the last landmark). It is exact on landmark days, clamped days included, and always the length the model saw for that trial.
+- **A status reversal visible by the scoring date:** the trial is not scored and gets a reason code, as Section 6 excludes reversals (512 open trials at the cutoff).
+- **The production fit:** origin = the day after the data cutoff, so training uses every interval that ended by the cutoff. The sponsor priors are fitted on those rows and saved with the model.
+
+**The margins and floors of the two checks are yours to set.** My proposal: B is accepted if its AUC at 12 months is not lower than A's by more than 0.005 at both development origins (the margin of Section 14's promotion gate); C replaces B only if it is higher by 0.005 at both. An age band is served if its AUC at 12 months is at least landmark 6's minus 0.03 and it has at least 1,000 rows at each origin.
+
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
 Built during the overnight run under the extension's gate. The gate was not met (the dataset could not be downloaded), so only these two items were allowed, as code and tests. The files were committed to branch `provisional/step6-step8` on 2026-09-23 from main at `bd87054`, reviewed in PR #1, approved by Aakrisht, and merged into main the same day (merge commit `0d2248c`). The branch was then deleted. Steps 3, 4, 5, 7, 9 and 10 were not started: the gate blocked them, and Steps 9 and 10 also need Steps 4 and 7.
