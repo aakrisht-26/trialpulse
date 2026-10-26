@@ -78,21 +78,34 @@ def _intervals(model: DiscreteTimeBoosting, months: int) -> int:
 
 def explain(model: DiscreteTimeBoosting, rows: LandmarkRows, months: int) -> Explanation:
     """The SHAP values of the target at a horizon for each row (see the module text)."""
+    return explain_horizons(model, rows, (months,))[months]
+
+
+def explain_horizons(
+    model: DiscreteTimeBoosting, rows: LandmarkRows, horizons: tuple[int, ...]
+) -> dict[int, Explanation]:
+    """The SHAP values at several horizons from one set of TreeSHAP passes: one pass per
+    interval of the longest horizon, each shorter horizon averaging the passes of its own
+    intervals (the 12-month target reuses the first two passes of the 24-month one)."""
     if model.booster is None:
         raise RuntimeError(f"{model.name} is not fitted")
-    count = _intervals(model, months)
+    counts = {months: _intervals(model, months) for months in horizons}
     landmark = model.tree_landmark_matrix(rows.features)
     n, width = landmark.shape
-    total = np.zeros((n, width + 2))  # the features, the interval column, the expected value
-    for j in range(1, count + 1):
+    running = np.zeros((n, width + 2))  # the features, the interval column, the expected value
+    out: dict[int, Explanation] = {}
+    for j in range(1, max(counts.values()) + 1):
         x = np.column_stack([landmark, np.full(n, float(j), dtype=np.float32)])
         raw = np.asarray(model.booster.predict(x, pred_contrib=True), dtype=np.float64)
         per_class = raw.reshape(n, len(CLASSES), width + 2)
-        total += per_class[:, EVENT_STOP] - per_class[:, OUTCOME_CONTINUE]
-    total /= count
-    return Explanation(
-        model.features, total[:, :width], total[:, width], total[:, width + 1], months
-    )
+        running += per_class[:, EVENT_STOP] - per_class[:, OUTCOME_CONTINUE]
+        for months, count in counts.items():
+            if count == j:
+                total = running / count
+                out[months] = Explanation(
+                    model.features, total[:, :width], total[:, width], total[:, width + 1], months
+                )
+    return out
 
 
 def log_odds(model: DiscreteTimeBoosting, rows: LandmarkRows, months: int) -> FloatArray:

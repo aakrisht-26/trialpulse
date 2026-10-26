@@ -85,7 +85,10 @@ def build_states(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
 
 
 def build_at_landmark(
-    con: duckdb.DuckDBPyConnection, recent_months: int, spacing_months: int
+    con: duckdb.DuckDBPyConnection,
+    recent_months: int,
+    spacing_months: int,
+    explicit_window: bool = False,
 ) -> None:
     """One row per landmark key: the state at the landmark (`s` columns), and the number of
     versions posted up to the start of the recent window.
@@ -96,8 +99,15 @@ def build_at_landmark(
     window starts at the first post plus the landmark's months minus `recent_months`, by the
     same calendar arithmetic as the landmarks: with the two equal, at the previous landmark.
     Before the first post there is no such day and the window starts `recent_months` before
-    the landmark."""
+    the landmark.
+
+    With `explicit_window`, the keys carry their own `window_start` (served rows off the
+    landmark grid, ADR 0034), which equals this rule on a landmark day."""
     months = f"k.landmark_index * {int(spacing_months)} - {int(recent_months)}"
+    coded = f"""CASE WHEN {months} >= 0 AND t.t0 IS NOT NULL
+                    THEN t.t0 + to_months(CAST({months} AS INTEGER))
+                    ELSE k.landmark_date - INTERVAL {int(recent_months)} MONTH END"""
+    start = "k.window_start" if explicit_window else coded
     con.execute(
         f"""CREATE OR REPLACE TEMP TABLE {AT_LANDMARK_TABLE} AS
         WITH now AS (
@@ -113,11 +123,7 @@ def build_at_landmark(
         ),
         earlier AS (
           SELECT k.trial_id, k.landmark_index, r.n_versions AS n_versions_before_window
-          FROM (SELECT k.trial_id, k.landmark_index,
-                  CAST(CASE WHEN {months} >= 0 AND t.t0 IS NOT NULL
-                    THEN t.t0 + to_months(CAST({months} AS INTEGER))
-                    ELSE k.landmark_date - INTERVAL {int(recent_months)} MONTH END AS DATE)
-                    AS window_start
+          FROM (SELECT k.trial_id, k.landmark_index, CAST({start} AS DATE) AS window_start
                 FROM {KEYS_TABLE} k LEFT JOIN first_post t ON t.nct_id = k.trial_id) k
           ASOF LEFT JOIN {STATES_TABLE} r
             ON r.nct_id = k.trial_id AND k.window_start >= r.effective_date

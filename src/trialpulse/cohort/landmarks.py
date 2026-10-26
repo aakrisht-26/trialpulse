@@ -71,21 +71,32 @@ def candidate_landmarks(trial_id: np.ndarray, t0: np.ndarray, rules: CohortRules
     return pd.concat(frames, ignore_index=True)
 
 
-def build_landmarks(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
-    """Needs cohort_states and cohort_outcomes. Writes cohort_landmark_candidates (every
-    candidate with its exclusion reason, NULL when kept) and cohort_landmarks (kept rows)."""
-    eligible = con.execute(
+def eligible_trials(con: duckdb.DuckDBPyConnection) -> dict[str, np.ndarray]:
+    """The trials that can have a landmark row: in the window, interventional in some
+    version, without a status reversal. Needs cohort_outcomes."""
+    eligible: dict[str, np.ndarray] = con.execute(
         """SELECT trial_id, t0 FROM cohort_outcomes
         WHERE in_window AND ever_in_population AND NOT reversal AND t0 IS NOT NULL
         ORDER BY trial_id"""
     ).fetchnumpy()
-    candidates = candidate_landmarks(
-        np.asarray(eligible["trial_id"]), np.asarray(eligible["t0"]), rules
-    )
+    return eligible
+
+
+def classify_candidates(
+    con: duckdb.DuckDBPyConnection,
+    rules: CohortRules,
+    candidates: pd.DataFrame,
+    table: str = "cohort_landmark_candidates",
+) -> None:
+    """Needs cohort_states and cohort_outcomes. Writes `table`: each candidate row
+    (trial_id, landmark_index, landmark_date) with its outcome, the state on its date and
+    the first rule it fails (NULL when it passes them all). The rules are the landmark
+    rules of this module, whatever the dates: Step 13 applies them to dates between and
+    beyond the landmarks (ADR 0034)."""
     con.register("landmark_candidates_frame", candidates)
     lapsed = "s.lapse_from IS NOT NULL AND s.lapse_from <= c.landmark_date"
     con.execute(
-        f"""CREATE OR REPLACE TEMP TABLE cohort_landmark_candidates AS
+        f"""CREATE OR REPLACE TEMP TABLE {table} AS
         SELECT c.trial_id, c.landmark_index, CAST(c.landmark_date AS DATE) AS landmark_date,
           o.event, o.event_date, s.status, s.study_type, s.lead_sponsor_class,
           CASE
@@ -101,6 +112,16 @@ def build_landmarks(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
           ON s.nct_id = c.trial_id AND c.landmark_date >= s.effective_date"""
     )
     con.unregister("landmark_candidates_frame")
+
+
+def build_landmarks(con: duckdb.DuckDBPyConnection, rules: CohortRules) -> None:
+    """Needs cohort_states and cohort_outcomes. Writes cohort_landmark_candidates (every
+    candidate with its exclusion reason, NULL when kept) and cohort_landmarks (kept rows)."""
+    eligible = eligible_trials(con)
+    candidates = candidate_landmarks(
+        np.asarray(eligible["trial_id"]), np.asarray(eligible["t0"]), rules
+    )
+    classify_candidates(con, rules, candidates)
     con.execute(
         f"""CREATE OR REPLACE TEMP TABLE cohort_landmarks AS
         SELECT trial_id, CAST(landmark_index AS BIGINT) AS landmark_index, landmark_date,

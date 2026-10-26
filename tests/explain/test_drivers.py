@@ -140,3 +140,13 @@ def test_a_horizon_must_be_whole_intervals_and_the_model_fitted(
     unfitted = DiscreteTimeBoosting(cfg)
     with pytest.raises(RuntimeError, match="not fitted"):
         drivers.explain(unfitted, probe, 12)
+
+
+def test_both_horizons_from_one_set_of_passes_equal_separate_explanations(
+    m4: DiscreteTimeBoosting, probe: LandmarkRows
+) -> None:
+    both = drivers.explain_horizons(m4, probe, (12, 24))
+    for months in (12, 24):
+        alone = drivers.explain(m4, probe, months)
+        assert np.array_equal(both[months].values, alone.values)
+        assert np.array_equal(both[months].target, alone.target)

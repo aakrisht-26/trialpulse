@@ -161,6 +161,16 @@ def prepare(
 ) -> None:
     """Attach the warehouse and create what the feature queries read: the whitelisted
     `versions` view, `texts`, `intervention_versions` and the landmark keys."""
+    prepare_sources(con, warehouse, interventions, rules)
+    register_keys(con, files)
+
+
+def prepare_sources(
+    con: duckdb.DuckDBPyConnection, warehouse: Path, interventions: str, rules: CohortRules
+) -> None:
+    """What the feature queries read, without any key: the whitelisted `versions` view,
+    `texts` and `intervention_versions`. A caller with keys of its own (Step 13's served
+    rows) registers `feature_keys` itself."""
     if not warehouse.is_file():
         raise RefusedError(
             f"no warehouse at {warehouse}; run: uv run python -m trialpulse.warehouse.build"
@@ -180,7 +190,6 @@ def prepare(
           AS intervention_types
         FROM read_parquet('{interventions}') GROUP BY nct_id, nct_version"""
     )
-    register_keys(con, files)
 
 
 def _title_phases(con: duckdb.DuckDBPyConnection) -> None:
@@ -206,12 +215,21 @@ def _title_phases(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def compute_features(
-    con: duckdb.DuckDBPyConnection, rules: CohortRules, cfg: ProjectConfig
+    con: duckdb.DuckDBPyConnection,
+    rules: CohortRules,
+    cfg: ProjectConfig,
+    text: bool = True,
+    explicit_window: bool = False,
 ) -> None:
     """From `versions`, `texts`, `intervention_versions` and `feature_keys` to
-    `feature_table` (keys and features) and `feature_text_keys` (text hashes in effect)."""
+    `feature_table` (keys and features) and `feature_text_keys` (text hashes in effect).
+    Without `text`, the eligibility statistics are left empty (the served model reads no
+    text, ADR 0026); with `explicit_window`, the keys carry the start of their recent
+    window (ADR 0034)."""
     build_states(con, rules)
-    build_at_landmark(con, cfg.features.recent_versions_months, rules.spacing_months)
+    build_at_landmark(
+        con, cfg.features.recent_versions_months, rules.spacing_months, explicit_window
+    )
     build_competition(con, rules)
     build_track_record(
         con,
@@ -224,7 +242,8 @@ def compute_features(
         f"""CREATE OR REPLACE TEMP TABLE feature_eligibility AS
         SELECT t.text_hash, {eligibility_statistics_sql("t.text")}
         FROM texts t JOIN (SELECT DISTINCT eligibility_criteria_hash AS h
-                           FROM {AT_LANDMARK_TABLE}) d ON d.h = t.text_hash"""
+                           FROM {AT_LANDMARK_TABLE}) d ON d.h = t.text_hash
+        {"" if text else "WHERE false"}"""
     )
     row_level = {**design.EXPRESSIONS, **amendments.EXPRESSIONS}
     own = ", ".join(f"{sql} AS {name}" for name, sql in row_level.items())
