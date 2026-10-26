@@ -461,10 +461,11 @@ def document(
     fitted = sum(1 for f in FEATURES if f.fitted)
     before = MODELING_EDA_BEFORE.isoformat()
     notes = [
-        "- **Source:** ClinicalTrials.gov registry records, through the version-history dataset "
-        f"`{cfg.dataset.repo_id}` (license CC-BY-NC-4.0), configs `core` and `interventions`: "
-        f"{stamp}. Data as of {cfg.dataset.cutoff}. TrialPulse normalizes the records and "
-        "derives every feature.",
+        "- **Source:** [ClinicalTrials.gov](https://clinicaltrials.gov) registry records, "
+        "through the version-history "
+        f"dataset `{cfg.dataset.repo_id}` (license CC-BY-NC-4.0), configs `core` and "
+        f"`interventions`: {stamp}. Data as of {cfg.dataset.cutoff}. TrialPulse normalizes the "
+        "records and derives every feature; these are not part of ClinicalTrials.gov (ADR 0008).",
         f"- **Rows:** {counts[0]:,} landmark rows of {counts[1]:,} trials: the landmark rows of "
         "the final cohort and of the cohort as of each walk-forward origin (ADR 0016), each "
         "computed once.",

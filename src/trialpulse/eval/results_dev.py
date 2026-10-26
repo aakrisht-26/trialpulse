@@ -930,10 +930,12 @@ def document(
         "result files of the walk-forward runs (CLAUDE.md Steps 9 and 10). Do not edit it by "
         "hand.",
         "",
-        "- **Source:** ClinicalTrials.gov registry records, through the version-history "
+        "- **Source:** [ClinicalTrials.gov](https://clinicaltrials.gov) registry records, "
+        "through the version-history "
         f"dataset `{cfg.dataset.repo_id}` (license CC-BY-NC-4.0), revision "
         f"{cfg.dataset.revision}. Data as of {cfg.dataset.cutoff}. TrialPulse normalizes the "
-        "records and derives every number here.",
+        "records and derives every number here; these are not part of ClinicalTrials.gov "
+        "(ADR 0008).",
         f"- **Development origins only:** {origins}. The origins 2018, 2019 and 2020 are "
         "locked (Section 10) and appear nowhere in this file.",
         "- **What is predicted:** the probability that an open interventional trial stops "
