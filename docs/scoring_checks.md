@@ -29,9 +29,9 @@ Pseudo-landmark rows (every 6 months after landmark 6), scored on landmark 6 wit
 
 | Band | Origin | Rows | Early stops within 12 months | AUC at 12 months | Mean predicted risk | Observed risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| 42 to 59 months | 2016-01-01 | 10,704 | 414 | 0.7316 (0.7039 to 0.7565) | 4.4% | 3.9% |
+| 42 to 59 months | 2016-01-01 | 10,704 | 414 | 0.7316 (0.7038 to 0.7565) | 4.4% | 3.9% |
 | 42 to 59 months | 2017-01-01 | 11,746 | 406 | 0.7357 (0.7088 to 0.7637) | 4.1% | 3.5% |
-| 60 to 119 months | 2016-01-01 | 9,550 | 329 | 0.7311 (0.6953 to 0.7615) | 4.6% | 3.5% |
+| 60 to 119 months | 2016-01-01 | 9,550 | 329 | 0.7311 (0.6953 to 0.7614) | 4.6% | 3.5% |
 | 60 to 119 months | 2017-01-01 | 11,188 | 315 | 0.7232 (0.6890 to 0.7534) | 4.2% | 2.8% |
 
 Landmark 6's AUC at 12 months in the development runs: 2016-01-01 0.7027, 2017-01-01 0.7294.
