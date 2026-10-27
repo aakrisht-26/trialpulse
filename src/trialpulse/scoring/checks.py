@@ -198,9 +198,13 @@ def between_check(
     groups = censoring_groups(rows["stratum"].to_numpy(dtype=object),
                               cfg.evaluation.censoring_min_rows)  # fmt: skip
     auc_b, auc_a = _auc(time, event, b, horizon, groups), _auc(time, event, a, horizon, groups)
+
+    def paired(idx: npt.NDArray[np.int64]) -> dict[str, float]:
+        with_b, with_a = auc_b(idx), auc_a(idx)
+        return {"b": with_b, "a": with_a, "difference": with_b - with_a}
+
     boot = cluster_bootstrap_many(
-        rows["trial_id"].to_numpy(dtype=object),
-        lambda idx: {"b": auc_b(idx), "a": auc_a(idx), "difference": auc_b(idx) - auc_a(idx)},
+        rows["trial_id"].to_numpy(dtype=object), paired,
         n_resamples, cfg.seeds.default, cfg.evaluation.confidence_level,
     )  # fmt: skip
     everything = np.arange(len(rows))
