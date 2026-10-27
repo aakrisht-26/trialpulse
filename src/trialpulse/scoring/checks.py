@@ -219,15 +219,19 @@ def between_check(
 
 
 def band_check(
-    rows: pd.DataFrame, score: npt.NDArray[np.float64], cfg: ProjectConfig, n_resamples: int
+    rows: pd.DataFrame,
+    score: npt.NDArray[np.float64],
+    groups: npt.NDArray[Any],
+    cfg: ProjectConfig,
+    n_resamples: int,
 ) -> dict[str, Any]:
-    """One age band of one origin: AUC, early stops and predicted against observed risk."""
+    """One age band of one origin: AUC, early stops and predicted against observed risk.
+    `groups` are the rows' censoring groups, decided once on every check-2 row of the
+    origin (ADR 0017), as check 1 decides them on every mid-landmark row."""
     day = rows["landmark_date"].to_numpy(dtype="datetime64[D]")
     time = days_between(day, rows["event_date"].to_numpy(dtype="datetime64[D]"))
     event = rows["event"].to_numpy(dtype=np.int64)
     horizon = horizon_days(day, HORIZON_MONTHS)
-    groups = censoring_groups(rows["stratum"].to_numpy(dtype=object),
-                              cfg.evaluation.censoring_min_rows)  # fmt: skip
     stops = stops_within(time, event, horizon)
     out: dict[str, Any] = {
         "n_rows": len(rows),
@@ -294,7 +298,8 @@ def landmark6_auc(origin: Origin) -> float:
     path = RESULTS_DIR / f"{CHAMPION}_{origin.date.year}.json"
     result = json.loads(path.read_text(encoding="utf-8"))
     (record,) = [o for o in result["origins"] if o["origin"] == origin.date.isoformat()]
-    return float(record["horizons"]["12"]["by_landmark_index"]["6"]["auc"]["estimate"])
+    horizon = record["horizons"][str(HORIZON_MONTHS)]
+    return float(horizon["by_landmark_index"]["6"]["auc"]["estimate"])
 
 
 def dev_model(
@@ -307,6 +312,19 @@ def dev_model(
     fit = partial(fit_champion, cfg, origin.date, loader, TRAINING_DIR)
     model, source, gap = champion_for(cfg, origin.date, ev, saved, MODELS_DIR, fit)
     return model, source, gap, saved
+
+
+def saved_scores(rows: pd.DataFrame, saved: pd.DataFrame) -> npt.NDArray[np.float64]:
+    """Option A: the development run's saved score at the check's horizon of each row's
+    landmark row (same trial, same index), refused if a row has none."""
+    column = f"score_{HORIZON_MONTHS}"
+    out: npt.NDArray[np.float64] = rows[["trial_id", "landmark_index"]].merge(
+        saved[["trial_id", "landmark_index", column]],
+        on=["trial_id", "landmark_index"], how="left", validate="one_to_one",
+    )[column].to_numpy(dtype=np.float64)  # fmt: skip
+    if np.isnan(out).any():
+        raise RefusedError(f"{int(np.isnan(out).sum())} mid-landmark rows have no saved A score")
+    return out
 
 
 def predict(model: DiscreteTimeBoosting, rows: pd.DataFrame, frame: pd.DataFrame) -> np.ndarray:
@@ -337,6 +355,9 @@ def run_checks(
     origins = select_origins(cfg, DEV_ROLE)
     if {o.role for o in origins} != {DEV_ROLE}:
         raise RefusedError("the checks of ADR 0034 run on the development origins only")
+    if HORIZON_MONTHS not in cfg.horizons_months:
+        raise RefusedError(f"the checks use the {HORIZON_MONTHS}-month horizon, which "
+                           "config/project.yaml does not evaluate")  # fmt: skip
     rules = CohortRules.from_config(cfg)
     loader = feature_loader(cfg, FEATURES_DIR, LANDMARKS_PATH.parent)
     every = load_landmark_rows(LANDMARKS_PATH)
@@ -389,19 +410,15 @@ def run_checks(
         own = rows[rows["origin"] == key].sort_values(["trial_id", "landmark_index"])
         mid = own[own["kind"] == BETWEEN].reset_index(drop=True)
         b = predict(models[key], mid, mine)
-        a = mid[["trial_id", "landmark_index"]].merge(
-            saved[key][["trial_id", "landmark_index", "score_12"]],
-            on=["trial_id", "landmark_index"], how="left", validate="one_to_one",
-        )["score_12"].to_numpy(dtype=np.float64)  # fmt: skip
-        if np.isnan(a).any():
-            raise RefusedError(f"{int(np.isnan(a).sum())} mid-landmark rows have no saved A score")
-        between[key] = between_check(mid, b, a, cfg, n_resamples)
+        between[key] = between_check(mid, b, saved_scores(mid, saved[key]), cfg, n_resamples)
         old = own[own["kind"] == BEYOND].reset_index(drop=True)
         scores = predict(models[key], old, mine) if len(old) else np.array([])
+        groups = censoring_groups(old["stratum"].to_numpy(dtype=object),
+                                  cfg.evaluation.censoring_min_rows)  # fmt: skip
         for band, low, high in BANDS:
             member = ((old["landmark_index"] >= low) & (old["landmark_index"] <= high)).to_numpy()
             bands[band][key] = band_check(old[member].reset_index(drop=True), scores[member],
-                                          cfg, n_resamples)  # fmt: skip
+                                          groups[member], cfg, n_resamples)  # fmt: skip
     landmark6 = {o.date.isoformat(): landmark6_auc(o) for o in origins}
     return {
         "adr": "0034",

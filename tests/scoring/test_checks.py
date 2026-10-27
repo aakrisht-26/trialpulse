@@ -2,11 +2,13 @@
 the decisions from the metrics. No real data, no model."""
 
 import datetime as dt
+import json
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from trialpulse.cli import RefusedError
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import Origin, load_project_config
 from trialpulse.scoring import checks
@@ -116,3 +118,81 @@ def test_the_bands_cover_months_42_to_119_and_nothing_older() -> None:
     covered = [k for _, low, high in checks.BANDS for k in range(low, high + 1)]
     assert covered == list(range(7, 20))
     assert checks.OLDEST_INDEX * RULES.spacing_months == 120
+
+
+def _labelled(n_stops: int = 30, n_others: int = 70) -> pd.DataFrame:
+    """Rows dated 2016-06-01 whose landmark lies two years earlier: stops at 100 days, one
+    stop exactly at the 12-month horizon, completions and censorings after it."""
+    day = np.datetime64("2016-06-01", "D")
+    horizon = int(checks.horizon_days(np.array([day]), checks.HORIZON_MONTHS)[0])
+    n = n_stops + n_others
+    after = np.where(np.arange(n_others) % 2 == 0, 400, 500)
+    return pd.DataFrame(
+        {
+            "trial_id": [f"T{i}" for i in range(n)],
+            "landmark_date": np.full(n, day),
+            "base_date": np.full(n, day - np.timedelta64(730, "D")),
+            "event": [1] * n_stops + [2 if a == 500 else 0 for a in after],
+            "event_date": np.concatenate([
+                day + np.r_[np.full(n_stops - 1, 100), horizon].astype("timedelta64[D]"),
+                day + after.astype("timedelta64[D]"),
+            ]),
+            "stratum": "INDUSTRY",
+        }
+    )  # fmt: skip
+
+
+def test_check_1_compares_b_and_a_on_follow_up_from_the_rows_date() -> None:
+    rows = _labelled()
+    stops = (rows["event"] == 1).to_numpy(dtype=np.float64)
+    result = checks.between_check(rows, stops, np.full(len(rows), 0.5), load_project_config(), 5)
+    # The stop exactly at 12 months counts, and follow-up runs from the row's own date.
+    assert result["early_stops_within_12_months"] == 30
+    assert result["auc_b"]["estimate"] == pytest.approx(1.0)
+    assert result["auc_a"]["estimate"] == pytest.approx(0.5)
+    assert result["difference"]["estimate"] == pytest.approx(0.5)  # B minus A
+
+
+def test_check_2_reads_the_groups_it_is_given() -> None:
+    rows = _labelled()
+    score = (rows["event"] == 1).to_numpy(dtype=np.float64)
+    groups = np.zeros(len(rows), dtype=np.int64)
+    result = checks.band_check(rows, score, groups, load_project_config(), 5)
+    assert result["early_stops_within_12_months"] == 30
+    assert result["auc"]["estimate"] == pytest.approx(1.0)
+    assert result["mean_predicted_12"] == pytest.approx(0.3)
+
+
+def test_landmark_6_and_option_a_are_read_at_12_months(tmp_path, monkeypatch) -> None:
+    by_index = {"12": 0.7, "24": 0.6}
+    record = {"origins": [{"origin": "2016-01-01", "horizons": {
+        h: {"by_landmark_index": {"6": {"auc": {"estimate": v}}}} for h, v in by_index.items()
+    }}]}  # fmt: skip
+    (tmp_path / "m4_2016.json").write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(checks, "RESULTS_DIR", tmp_path)
+    assert checks.landmark6_auc(ORIGINS[0]) == 0.7
+    mid = pd.DataFrame({"trial_id": ["A", "B"], "landmark_index": [2, 3]})
+    saved = pd.DataFrame({"trial_id": ["B", "A"], "landmark_index": [3, 2],
+                          "score_12": [0.2, 0.1], "score_24": [0.4, 0.3]})  # fmt: skip
+    assert checks.saved_scores(mid, saved).tolist() == [0.1, 0.2]
+    with pytest.raises(RefusedError, match="1 mid-landmark rows have no saved A score"):
+        checks.saved_scores(mid, saved.iloc[:1])
+
+
+def test_rows_at_the_window_end_or_before_the_origin_belong_to_no_origin() -> None:
+    rows = pd.DataFrame(
+        {
+            "trial_id": ["A", "B", "C"],
+            "landmark_index": [2, 8, 8],
+            # A: its landmark 2017-10-01 is in the 2017 window, but d is that window's end.
+            "landmark_date": pd.to_datetime(["2018-01-01", "2015-12-31", "2017-12-31"]),
+            "base_date": pd.to_datetime(["2017-10-01", "2015-12-31", "2017-12-31"]),
+            "t0": pd.to_datetime(["2016-10-01", "2011-12-31", "2013-12-31"]),
+            "kind": [checks.BETWEEN, checks.BEYOND, checks.BEYOND],
+        }
+    )  # fmt: skip
+    landmarks = pd.DataFrame({"trial_id": ["A"], "landmark_index": [2],
+                              "landmark_date": np.array(["2017-10-01"],
+                                                        dtype="datetime64[D]")})  # fmt: skip
+    out = checks.assign_origins(rows, landmarks, ORIGINS, 12)
+    assert out.set_index("trial_id")["origin"].to_dict() == {"C": "2017-01-01"}
