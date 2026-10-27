@@ -80,6 +80,7 @@ def _band(auc16: float, auc17: float, stops16: int, stops17: int) -> dict:
 
 
 L6 = {"2016-01-01": 0.70, "2017-01-01": 0.73}  # mean 0.715, band floor 0.685
+FLOOR = float(np.mean(list(L6.values()))) - checks.BAND_MARGIN  # as decide() computes it
 
 
 @pytest.mark.parametrize(
@@ -96,7 +97,8 @@ def test_option_b_is_served_only_if_it_is_within_the_margin_at_both_origins(
 @pytest.mark.parametrize(
     ("aucs", "stops", "served"),
     [
-        ((0.69, 0.68), (150, 120), True),  # mean 0.685, exactly the floor
+        ((FLOOR, FLOOR), (150, 120), True),  # exactly the floor
+        ((FLOOR - 1e-9, FLOOR - 1e-9), (150, 120), False),  # a hair below it
         ((0.68, 0.689), (150, 120), False),  # mean 0.6845, below the floor
         ((0.75, 0.76), (99, 400), False),  # too few early stops at one origin
         ((0.75, 0.76), (100, 100), True),
