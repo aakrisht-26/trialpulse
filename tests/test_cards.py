@@ -92,3 +92,37 @@ def test_the_cards_link_to_files_that_exist() -> None:
     for card in SOURCES:
         for target in re.findall(r"\]\(([^)#:]+)\)", _text(card)):
             assert (DOCS / target).resolve().exists() or Path(target).is_absolute(), target
+
+
+def _table_rows(text: str) -> list[list[str]]:
+    return [
+        [cell.strip() for cell in line.strip().strip("|").split("|")]
+        for line in text.splitlines()
+        if line.startswith("| ") and not line.startswith("| ---")
+    ]
+
+
+def test_the_served_scope_states_the_development_checks_in_their_direction() -> None:
+    """The model card's served scope against docs/scoring_checks.md: B's AUC first in each
+    "B against A" pair, "above the observed risk at every origin" true of every band and
+    origin, and the cited example taken from its own row."""
+    card = _text("model_card.md")
+    rows = _table_rows(_text("scoring_checks.md"))
+    check_1 = [r for r in rows if len(r) == 7 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", r[0])]
+    check_2 = [r for r in rows if len(r) == 7 and r[0].endswith("months")]
+    assert len(check_1) == 2
+    assert len(check_2) == 4
+    for origin, *_, auc_b, auc_a, _ in check_1:
+        pair = f"{auc_b.split()[0]} against {auc_a.split()[0]} at the {origin[:4]} origin"
+        assert pair in card, pair
+    risks = {(band, origin[:4]): (float(p.rstrip("%")), float(o.rstrip("%")))
+             for band, origin, *_, p, o in check_2}  # fmt: skip
+    assert "above the observed risk at every origin" in card
+    assert all(predicted > observed for predicted, observed in risks.values())
+    example = re.search(
+        r"for example (\d+\.\d)% against (\d+\.\d)% for (\d+ to \d+ months) at the (\d{4}) "
+        r"origin",
+        card,
+    )
+    assert example, "the card cites no band example"
+    assert risks[(example[3], example[4])] == (float(example[1]), float(example[2]))
