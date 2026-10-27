@@ -2296,7 +2296,8 @@ Date: 2026-10-26 (options), 2026-10-27 (decisions). Status: **in progress.** Aak
 - ADR 0034 committed and pushed before any measurement (`49d38f7`).
 - The cohort rules and the feature code moved onto keys of their own; the cohort and feature rebuilds after the change are identical to the previous builds (`39f5129`).
 - The served rows and the development checks built (`6f75db2`). The first smoke run of the checks failed: the served features overwrote the row's own index with the capped one, so rows of one trial beyond landmark 6 shared a key. Fixed, with a test (`53631fc`).
-- Next: the smoke run again, then the official checks from a clean tree.
+- The official checks ran from `9ea0f45` with a clean tree (1,000 resamples, MLflow run `6129572484154eacb1c743706031a3f0`, about 12 minutes). Option B is served (B minus A: +0.0155 at 2016, +0.0141 at 2017); both age bands are served, flagged (averaged AUC 0.7336 and 0.7271 against the floor 0.6861; fewest early stops 406 and 315). Written to `docs/scoring_checks.md` and `data/results/checks/step13_checks.json`.
+- Next: commit the served scoring, the champion and the serving tables; fit and register the served champion; the full scoring run.
 
 ### The two decisions, with options
 
