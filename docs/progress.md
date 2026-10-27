@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 13 (scoring pipeline and model registry)**: not built yet; the options for scoring between landmarks and for trials registered more than 3 years ago wait for Aakrisht's decision. Step 12 was approved on 2026-10-26, and its follow-ups are done (see the end of "Step 12: Explainability, model card, data card" below). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
+Current step: **Step 13 (scoring pipeline and model registry)**: in progress. Aakrisht decided the two questions on 2026-10-27 (B and option 1, each gated by a development check; ADR 0034); the checkpoints are under "Step 13" below. Step 12 was approved on 2026-10-26, and its follow-ups are done (see the end of "Step 12: Explainability, model card, data card" below). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2289,7 +2289,14 @@ Approved. ADR 0033 is accepted as written (Amendments line added) and the nine d
 
 ## Step 13: Scoring pipeline and model registry
 
-Date: 2026-10-26. Status: **not built: two decisions wait for Aakrisht** (his rule 1 for Step 13). Nothing of Step 13 is built.
+Date: 2026-10-26 (options), 2026-10-27 (decisions). Status: **in progress.** Aakrisht chose B and option 1, each gated by a development check, in his review of the Step 12 follow-ups; ADR 0034 records the rules.
+
+#### Checkpoints
+
+- ADR 0034 committed and pushed before any measurement (`49d38f7`).
+- The cohort rules and the feature code moved onto keys of their own; the cohort and feature rebuilds after the change are identical to the previous builds (`39f5129`).
+- The served rows and the development checks built (`6f75db2`). The first smoke run of the checks failed: the served features overwrote the row's own index with the capped one, so rows of one trial beyond landmark 6 shared a key. Fixed, with a test (`53631fc`).
+- Next: the smoke run again, then the official checks from a clean tree.
 
 ### The two decisions, with options
 
