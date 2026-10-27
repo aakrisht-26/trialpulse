@@ -21,6 +21,11 @@ the five ADR 0033 drivers of each horizon's log-odds with their direction, the t
 capped landmark index, the flag, and the content hash of the version scored (so a later run
 can tell a record change). The output is one Parquet file per date, sorted by registry id,
 whose SHA-256 is printed: scoring a date twice gives the same file.
+
+**What reaches the serving tables** (`trialpulse.scoring.serving`): a run with drivers, dated
+on or after the data cutoff of the champion's training rows. A run without drivers, or of an
+earlier date, is written to files only: the champion was fitted on outcomes after such a
+date, so its scores there are in-sample, a check of the pipeline rather than predictions.
 """
 
 import argparse
@@ -173,6 +178,56 @@ def _drivers_json(explanations: Mapping[int, drivers.Explanation],
     return json.dumps(payload, separators=(",", ":"))
 
 
+def predict(
+    scored: pd.DataFrame,
+    features: pd.DataFrame,
+    bundle: Bundle,
+    day: dt.date,
+    with_drivers: bool = True,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    """The scores of the trials in `scored` (one row per trial, with its true index, k*, flag
+    and content hash) from their served features (`compute_served`, before the priors): the
+    sponsor rate smoothed with the bundle's priors, the risk at each served horizon and, with
+    `with_drivers`, the five drivers of each horizon, row for row in the order of `scored`."""
+    seconds: dict[str, float] = {}
+    tick = clock.perf_counter()
+    frame = served_features.with_priors(features, bundle.priors)
+    frame = scored[["trial_id", "true_index"]].merge(
+        frame, on=["trial_id", "true_index"], how="left", validate="one_to_one", indicator=True
+    )
+    missing = int((frame.pop("_merge") != "both").sum())
+    if missing:
+        raise RuntimeError(f"{missing} scored trials have no served features")
+    model = bundle.model
+    columns = ["trial_id", "landmark_index", *[f for f in model.features if f != "landmark_index"]]
+    values = as_arrays(frame[columns])
+    stamp = np.full(len(frame), np.datetime64(day, "D"))
+    landmark_rows = LandmarkRows(frame["trial_id"].to_numpy(dtype=object),
+                                 scored["k_star"].to_numpy(dtype=np.int64), stamp,
+                                 np.zeros(len(frame), dtype=np.int64), stamp, values)  # fmt: skip
+    risk = {months: model.predict_months(landmark_rows, months) for months in HORIZONS}
+    seconds["predict"] = clock.perf_counter() - tick
+    out = pd.DataFrame(
+        {
+            "nct_id": scored["trial_id"].astype(str).to_numpy(),
+            "as_of_date": np.datetime64(day, "D"),
+            "true_index": scored["true_index"].to_numpy(dtype=np.int64),
+            "landmark_index": scored["k_star"].to_numpy(dtype=np.int64),
+            "flagged": scored["flagged"].to_numpy(dtype=bool),
+            **{f"risk_{months}m": risk[months] for months in HORIZONS},
+            "content_hash": scored["content_hash"].astype(str).to_numpy(),
+            "model_name": bundle.name,
+            "model_version": bundle.version,
+        }
+    )
+    if with_drivers:
+        tick = clock.perf_counter()
+        explanations = drivers.explain_horizons(model, landmark_rows, HORIZONS)
+        out["drivers"] = [_drivers_json(explanations, values, i) for i in range(len(out))]
+        seconds["drivers"] = clock.perf_counter() - tick
+    return out, seconds
+
+
 def score(
     cfg: ProjectConfig,
     day: dt.date,
@@ -185,6 +240,11 @@ def score(
     """The served scores of every open trial on `day` (see the module text). With `only`,
     the scores of those trials alone (the population and its reasons are still decided on
     every trial; the parity test uses it to stay small)."""
+    if tuple(cfg.horizons_months) != HORIZONS:
+        raise RefusedError(
+            f"the served scores hold the horizons {HORIZONS} (risk_12m and risk_24m); "
+            f"config/project.yaml has {tuple(cfg.horizons_months)}"
+        )
     seconds: dict[str, float] = {}
     started = clock.perf_counter()
     rules = CohortRules.from_config(cfg, cutoff=max(day, cfg.dataset.cutoff or day))
@@ -196,54 +256,24 @@ def score(
     scored = people[people["reason"].isna()]
     if only is not None:
         scored = scored[scored["trial_id"].isin(only)]
-    scored = scored.reset_index(drop=True)
+    scored = scored.sort_values("trial_id").reset_index(drop=True)
     keys = served_features.keys_for(
         scored["trial_id"], scored["t0"], scored["true_index"],
         np.full(len(scored), np.datetime64(day, "D")), rules, cfg.features.recent_versions_months,
     )  # fmt: skip
     served_features.register_keys(con, keys)
-    frame = served_features.with_priors(served_features.compute_served(con, rules, cfg),
-                                        bundle.priors)  # fmt: skip
+    features = served_features.compute_served(con, rules, cfg)
     con.close()
     seconds["features"] = clock.perf_counter() - started - seconds["population"]
-    frame = scored[["trial_id", "true_index"]].merge(
-        frame, on=["trial_id", "true_index"], how="left", validate="one_to_one"
-    )
-    model = bundle.model
-    columns = ["trial_id", "landmark_index", *[f for f in model.features if f != "landmark_index"]]
-    values = as_arrays(frame[columns])
-    stamp = np.full(len(frame), np.datetime64(day, "D"))
-    landmark_rows = LandmarkRows(frame["trial_id"].to_numpy(dtype=object),
-                                 scored["k_star"].to_numpy(dtype=np.int64), stamp,
-                                 np.zeros(len(frame), dtype=np.int64), stamp, values)  # fmt: skip
-    risk = {months: model.predict_months(landmark_rows, months) for months in HORIZONS}
-    seconds["predict"] = clock.perf_counter() - started - sum(seconds.values())
-    out = pd.DataFrame(
-        {
-            "nct_id": scored["trial_id"].astype(str),
-            "as_of_date": np.datetime64(day, "D"),
-            "true_index": scored["true_index"].astype(np.int64),
-            "landmark_index": scored["k_star"].astype(np.int64),
-            "flagged": scored["flagged"].astype(bool),
-            "risk_12m": risk[12],
-            "risk_24m": risk[24],
-            "content_hash": scored["content_hash"].astype(str),
-            "model_name": bundle.name,
-            "model_version": bundle.version,
-        }
-    )
-    if with_drivers:
-        tick = clock.perf_counter()
-        explanations = drivers.explain_horizons(model, landmark_rows, HORIZONS)
-        out["drivers"] = [_drivers_json(explanations, values, i) for i in range(len(out))]
-        seconds["drivers"] = clock.perf_counter() - tick
+    out, timing = predict(scored, features, bundle, day, with_drivers)
+    seconds.update(timing)
     unscored = people[people["reason"].notna()][["trial_id", "true_index", "reason",
                                                   "content_hash"]].rename(
         columns={"trial_id": "nct_id"}
-    ).reset_index(drop=True)  # fmt: skip
+    ).sort_values("nct_id").reset_index(drop=True)  # fmt: skip
     unscored.insert(1, "as_of_date", np.datetime64(day, "D"))
     seconds["total"] = clock.perf_counter() - started
-    return Scored(out.sort_values("nct_id").reset_index(drop=True), unscored, seconds)
+    return Scored(out, unscored, seconds)
 
 
 def write(scored: Scored, day: dt.date, folder: Path = SCORES_DIR) -> dict[str, str]:
@@ -257,6 +287,22 @@ def write(scored: Scored, day: dt.date, folder: Path = SCORES_DIR) -> dict[str, 
             con.execute(f"COPY frame TO '{path.as_posix()}' (FORMAT parquet)")
         out[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
+
+
+def publish_refusal(day: dt.date, bundle: Bundle, with_drivers: bool) -> str | None:
+    """Why a run must not reach the serving tables, or None. Scores without drivers are not
+    served (CLAUDE.md Section 13, ADR 0033). Nor are the scores of a date before the data
+    cutoff of the bundle's training rows: the served champion was fitted on outcomes after
+    that date, so its scores there are in-sample, a check of the pipeline, not predictions."""
+    if not with_drivers:
+        return "a run without drivers is never served"
+    cutoff = bundle.meta.get("data_cutoff")
+    if cutoff and day < dt.date.fromisoformat(str(cutoff)):
+        return (
+            f"{bundle.version} was fitted on data through {cutoff}; its scores of {day} are "
+            "in-sample and are written to files only"
+        )
+    return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -278,13 +324,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in result.seconds.items()))
     for name, digest in hashes.items():
         print(f"{name}_{args.as_of}.parquet sha256:{digest}")
-    if not args.no_serving:
+    held_back = publish_refusal(args.as_of, bundle, with_drivers=not args.no_drivers)
+    if args.no_serving:
+        print("serving: not written (--no-serving)")
+    elif held_back:
+        print(f"serving: not written ({held_back})")
+    else:
         try:
             counts = serving.publish(result, cfg)
         except serving.EarlierDateError as exc:
-            print(f"serving: not written ({exc})")
-        else:
-            print(f"serving: {counts}")
+            raise RefusedError(f"serving: not written ({exc})") from exc
+        print(f"serving: {counts}")
     return 0
 
 

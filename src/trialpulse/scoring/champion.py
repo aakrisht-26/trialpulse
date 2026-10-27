@@ -140,6 +140,11 @@ def load_bundle(cfg: ProjectConfig, folder: Path = CHAMPION_DIR) -> Bundle:
     model = discrete_time.build("m4", cfg)
     assert isinstance(model, DiscreteTimeBoosting)
     model.booster = lgb.Booster(model_file=str(folder / BOOSTER))
+    if model.booster.feature_name() != list(model.columns):
+        raise RefusedError(
+            f"the trees in {folder / BOOSTER} read other columns than M4 reads now; fit the "
+            "served champion again"
+        )
     levels = json.loads((folder / LEVELS).read_text(encoding="utf-8"))
     model.levels = {name: tuple(values) for name, values in levels.items()}
     model.summary = meta.get("summary", {})
