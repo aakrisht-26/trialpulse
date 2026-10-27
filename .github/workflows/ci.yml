@@ -58,7 +58,10 @@ jobs:
         run: uv run mypy src
 
       # CI runs every test, including the ones marked slow that a default local run skips.
+      # The serving tests make, migrate and drop a scratch database on the Postgres service.
       - name: Tests
+        env:
+          DATABASE_URL: postgresql+psycopg://trialpulse:trialpulse@127.0.0.1:5432/trialpulse
         run: uv run pytest -q -m "slow or not slow" --cov --cov-report=term-missing
 
       - name: Migrations (upgrade, downgrade, upgrade)

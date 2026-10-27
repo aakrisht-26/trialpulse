@@ -44,6 +44,7 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
         "live.quarantine",
         "serving.trial_scores_latest",
         "serving.trial_score_history",
+        "serving.trials_not_scored",
         "monitoring.pipeline_runs",
         "monitoring.graded_predictions",
         "monitoring.promotions",
@@ -54,6 +55,7 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
     for table in tables:
         assert f"DROP TABLE {table};" in down
     assert "ALTER TABLE live.study_versions DROP COLUMN last_known_status;" in down
+    assert "ALTER TABLE serving.trial_score_history DROP COLUMN reasons;" in down
 
 
 def test_live_versions_match_the_canonical_schema(capsys: pytest.CaptureFixture[str]) -> None:
