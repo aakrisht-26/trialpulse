@@ -12,6 +12,7 @@ from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import ProjectConfig
 from trialpulse.features.build import FEATURE_TABLE, compute_features
 from trialpulse.features.states import KEYS_TABLE
+from trialpulse.scoring import features as served_features
 from trialpulse.scoring import rows as served
 
 from .conftest import World
@@ -124,3 +125,28 @@ def test_between_landmarks_the_recent_window_slides_the_last_landmark_gap(
     slid = (day - keys["window_start"].to_numpy(dtype="datetime64[D]")).astype(np.int64)
     assert (gap == slid).all()
     assert set(np.unique(slid)) <= set(range(181, 185))
+
+
+@pytest.mark.slow
+def test_rows_beyond_the_last_landmark_keep_their_own_index(
+    world: World, cfg: ProjectConfig, rules: CohortRules, saved_keys: pd.DataFrame
+) -> None:
+    first = saved_keys[saved_keys["landmark_index"] == 0].reset_index(drop=True)
+    t0 = first["t0"].to_numpy(dtype="datetime64[D]")
+    parts = []
+    for index in (rules.max_index, rules.max_index + 1, rules.max_index + 4):
+        k = np.full(len(first), index, dtype=np.int64)
+        day = served.landmark_date(t0, k, rules.spacing_months) + np.timedelta64(30, "D")
+        parts.append(first.assign(landmark_index=k, landmark_date=day))
+    rows = pd.concat(parts, ignore_index=True)
+    keys = _with_window(rows, rows["landmark_date"].to_numpy(dtype="datetime64[D]"), rules)
+    _register(world, keys)
+    frame = served_features.compute_served(world.con, rules, cfg)
+    # One row per key, told apart by the row's own index ...
+    assert len(frame) == len(keys)
+    assert not frame.duplicated(["trial_id", "true_index"]).any()
+    got = set(zip(frame["trial_id"], frame["true_index"], strict=True))
+    assert got == set(zip(keys["trial_id"], keys["landmark_index"], strict=True))
+    # ... while all three share the time features of the last landmark.
+    assert (frame["landmark_index"] == rules.max_index).all()
+    assert (frame["months_since_t0"] == rules.spacing_months * rules.max_index).all()

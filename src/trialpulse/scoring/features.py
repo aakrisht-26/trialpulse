@@ -59,11 +59,14 @@ def register_keys(con: duckdb.DuckDBPyConnection, keys: pd.DataFrame) -> None:
 def compute_served(
     con: duckdb.DuckDBPyConnection, rules: CohortRules, cfg: ProjectConfig
 ) -> pd.DataFrame:
-    """The features of the registered keys as of their dates, sorted by trial and index,
-    with the time features held at k* (the row's index capped at the last landmark)."""
+    """The features of the registered keys as of their dates, sorted by trial and index.
+    The row's own index moves to `true_index`, the key of the frame: the time features,
+    `landmark_index` among them, are held at k* (that index capped at the last landmark), so
+    two rows of one trial beyond the last landmark share them."""
     compute_features(con, rules, cfg, text=False, explicit_window=True)
     frame = con.execute(f"SELECT * FROM {FEATURE_TABLE} ORDER BY trial_id, landmark_index").df()
-    k_star = served.capped(frame["landmark_index"].to_numpy(dtype=np.int64), rules.max_index)
+    frame = frame.rename(columns={"landmark_index": "true_index"})
+    k_star = served.capped(frame["true_index"].to_numpy(dtype=np.int64), rules.max_index)
     for name, values in served.time_features(k_star, rules.spacing_months).items():
         frame[name] = values
     return frame

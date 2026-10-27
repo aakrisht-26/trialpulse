@@ -307,9 +307,8 @@ def dev_model(
 
 def predict(model: DiscreteTimeBoosting, rows: pd.DataFrame, frame: pd.DataFrame) -> np.ndarray:
     """The 12-month scores of the rows, from their served features."""
-    keyed = rows[["trial_id", "landmark_index"]].merge(
-        frame, on=["trial_id", "landmark_index"], how="left", validate="one_to_one"
-    )
+    keyed = rows[["trial_id", "landmark_index"]].rename(columns={"landmark_index": "true_index"})
+    keyed = keyed.merge(frame, on=["trial_id", "true_index"], how="left", validate="one_to_one")
     columns = ["trial_id", "landmark_index", *[f for f in model.features if f != "landmark_index"]]
     arrays = as_arrays(keyed[columns])
     day = rows["landmark_date"].to_numpy(dtype="datetime64[D]")
