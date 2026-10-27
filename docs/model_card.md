@@ -4,7 +4,7 @@ Research demo. Not medical advice. Not for patient decision-making.
 
 **Source: [ClinicalTrials.gov](https://clinicaltrials.gov).** Data as of 2026-09-25. TrialPulse normalizes the registry records and adds derived early-stop risk scores and drivers, which are not part of ClinicalTrials.gov (ADR 0008).
 
-An elevated early-stop risk is an operational statement about a registry record. It says nothing about whether a treatment works. Every number on this card comes from [results.md](results.md) (the registered results of the locked test), [explanations.md](explanations.md) or the documents they cite; the data is described in [data_card.md](data_card.md).
+An elevated early-stop risk is an operational statement about a registry record. It says nothing about whether a treatment works. Every number on this card comes from [results.md](results.md) (the registered results of the locked test), [explanations.md](explanations.md) or the documents they cite, and the served scope from [scoring_checks.md](scoring_checks.md); the data is described in [data_card.md](data_card.md).
 
 ## Model details
 
@@ -13,12 +13,21 @@ An elevated early-stop risk is an operational statement about a registry record.
 - **Training:** one model per walk-forward origin, on the landmarks before the origin, with every outcome cut off at the origin (ADR 0016), and with the settings tuned on the development origins (`config/tuned/m4.json`, ADR 0025). At the 2018 and 2019 origins it trained on 567,423 and 653,603 landmark rows and grew 1,046 and 1,146 boosting rounds.
 - **Explanations:** the five drivers of each prediction, from exact TreeSHAP values (ADR 0033, below).
 - **Version:** the model and every result were fixed by the pre-registration, `docs/preregistration.md`, registered on 2026-10-21 (tag `prereg-v1`, commit `2ee8498`). The record of the locked results is commit `4991ea5`.
-- **The served model** (Steps 13 to 16) will be trained the same way on all available data. This card describes the per-origin models evaluated in Step 11 and will be updated for it.
+- **The served model** (Steps 13 to 16): M4 with the same tuned settings, fitted on all available data (the final cohort, with the origin set to the day after the data cutoff), and registered in MLflow as `trialpulse-m4` with the alias `champion` (ADR 0034). It is a new fit: no metric of it is reported, and every number in the evaluation below comes from the per-origin models of Step 11.
 
 ## Intended use
 
 - Operational risk analytics for trial portfolios: clinical operations and portfolio teams at sponsors and contract research organizations who want to rank open trials by elevated early-stop risk, to decide which to review first.
 - A research and portfolio demonstration of point-in-time, competing-risks prediction on registry metadata.
+
+## Served scope
+
+The served scores (Step 13, ADR 0034) are asked for on any date, while the evaluation covered landmark days up to 3 years after registration. The checks behind this scope are development evidence on the 2016 and 2017 origins, kept outside the registered results ([scoring_checks.md](scoring_checks.md)).
+
+- **Who is scored:** on a date, every trial first posted since 2008 whose version in effect that day is interventional, open (SUSPENDED included) and not lapsed under the registry's rule (ADR 0014).
+- **A date between landmarks:** every feature is computed as of the date, the two time features are held at the last landmark passed, and the horizon starts on the date. On rows 3 months after a landmark this ranked better than the score of the last landmark row: AUC at 12 months 0.7190 against 0.7035 at the 2016 origin, 0.7117 against 0.6975 at the 2017 origin.
+- **Trials 42 to 119 months after registration** are scored as at landmark 6 and flagged "outside the validated range". Their development AUC at 12 months, averaged over the two origins, was 0.7336 (42 to 59 months) and 0.7271 (60 to 119 months), against 0.7161 at landmark 6. Their mean predicted risk was above the observed risk at every origin (for example 4.2% against 2.8% for 60 to 119 months at the 2017 origin), so these scores may overstate the risk. Flagged scores never enter a headline number, and Step 17 grades them as their own group.
+- **Not scored, with a reason code:** trials 120 months or older (no development row reaches that age) and trials with a status reversal visible on the date (CLAUDE.md Section 6 excludes them).
 
 ## Out-of-scope uses
 

@@ -18,7 +18,8 @@ NOTICE = "Research demo. Not medical advice. Not for patient decision-making."
 # Decimals and numbers with thousands separators; dates, hashes and small counts are left out.
 NUMBER = re.compile(r"(?<![\w.,-])\d{1,3}(?:,\d{3})+(?!\d|,\d)|(?<![\w.])\d+\.\d+(?!\d|\.\d)")
 SOURCES = {
-    "model_card.md": ("results.md", "explanations.md", "preregistration.md", "data_audit.md"),
+    "model_card.md": ("results.md", "explanations.md", "preregistration.md", "data_audit.md",
+                      "scoring_checks.md"),
     "data_card.md": ("data_audit.md", "feasibility_report.md", "eda.md", "reason_labeling.md",
                      "results.md", "preregistration.md"),
 }  # fmt: skip
