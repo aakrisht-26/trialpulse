@@ -5,11 +5,15 @@
 - `serving.trial_scores_latest`: one row per scored trial, the latest score. A row whose
   values did not change is left as it is, so a second run on the same day changes nothing;
   a trial no longer scored (closed, or now without a score) leaves the table.
-- `serving.trial_score_history`: a row when the score moves by 0.01 or more, the record
-  changed, a landmark passed or the model changed (`history_rows`), recording why.
-- `serving.trials_not_scored`: the open trials without a score, with their reason code.
+- `serving.trial_score_history`: a row when, against the trial's last history row of an
+  earlier day, the score moved by 0.01 or more, the record changed, a landmark passed or the
+  model changed (`history_rows`), recording why. A rerun on the same day replaces that day's
+  rows, so the history always holds the score the latest table serves.
+- `serving.trials_not_scored`: the open trials without a score on the run's date, with their
+  reason code.
 
-The tables move forward in time: a run dated before the latest published date is refused
+A run publishes one date, and scores without drivers are refused (CLAUDE.md Section 13). The
+tables move forward in time: a run dated before the latest published date is refused
 (`EarlierDateError`), so the history stays in date order.
 
 The database is DATABASE_URL (Section 17), local Postgres in Docker for Step 13.
@@ -37,6 +41,10 @@ LATEST_COLUMNS: tuple[str, ...] = (
     "nct_id", "as_of_date", "landmark_index", "true_landmark_index", "flagged", "model_name",
     "model_version", "risk_12m", "risk_24m", "drivers", "content_hash",
 )  # fmt: skip
+HISTORY_COLUMNS: tuple[str, ...] = (
+    "nct_id", "as_of_date", "model_name", "model_version", "risk_12m", "risk_24m", "reasons",
+    "landmark_index", "true_landmark_index", "content_hash", "flagged",
+)  # fmt: skip
 
 
 class EarlierDateError(ValueError):
@@ -44,11 +52,12 @@ class EarlierDateError(ValueError):
 
 
 def history_rows(new: pd.DataFrame, previous: pd.DataFrame) -> pd.DataFrame:
-    """The rows of `new` the history keeps, each with its reasons (ADR 0034 decision 5):
-    a first score; else a record change (another version scored), a landmark passed (a
-    higher true landmark index), a new model; else, if the score moved by MOVE or more at
-    either horizon, the calendar (the month-based features, the competition count and the
-    sponsor record moved with time and with other trials). Rows with no reason are dropped."""
+    """The rows of `new` the history keeps, each with its reasons (ADR 0034 decision 5),
+    against `previous`, each trial's last history row of an earlier day: a first score (no
+    such row); else a record change (another version scored), a landmark passed (a higher
+    true landmark index), a new model; else, if the score moved by MOVE or more at either
+    horizon, the calendar (the month-based features, the competition count and the sponsor
+    record moved with time and with other trials). Rows with no reason are dropped."""
     merged = new.merge(
         previous[["nct_id", "risk_12m", "risk_24m", "model_version", "true_landmark_index",
                   "content_hash"]],
@@ -111,8 +120,8 @@ def _rows(frame: pd.DataFrame, columns: Sequence[str]) -> list[tuple[Any, ...]]:
 def latest_frame(scored: Scored) -> pd.DataFrame:
     frame = scored.scores.rename(columns={"true_index": "true_landmark_index"}).copy()
     frame["as_of_date"] = pd.to_datetime(frame["as_of_date"]).dt.date
-    if "drivers" not in frame:
-        frame["drivers"] = json.dumps({})
+    if "drivers" not in frame or frame["drivers"].isna().any():
+        raise ValueError("scores without drivers are not served (CLAUDE.md Section 13)")
     return frame
 
 
@@ -121,22 +130,30 @@ def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[
     import psycopg
 
     new = latest_frame(scored)
+    unscored = scored.unscored.rename(columns={"true_index": "true_landmark_index"}).copy()
+    unscored["as_of_date"] = pd.to_datetime(unscored["as_of_date"]).dt.date
+    days = set(new["as_of_date"]) | set(unscored["as_of_date"])
+    if len(days) != 1:
+        raise ValueError(f"a run publishes one date, not {len(days)}")
+    (day,) = days
     dsn = (url or _url()).replace("postgresql+psycopg://", "postgresql://")
     counts: dict[str, int] = {}
     with psycopg.connect(dsn) as con, con.cursor() as cur:
         row = cur.execute("SELECT max(as_of_date) FROM serving.trial_scores_latest").fetchone()
         latest_day = row[0] if row else None
-        days = set(new["as_of_date"])
-        if latest_day is not None and any(day < latest_day for day in days):
+        if latest_day is not None and day < latest_day:
             raise EarlierDateError(
-                f"the serving tables already hold scores of {latest_day}; a run dated "
-                f"{min(days)} is not published"
+                f"the serving tables already hold scores of {latest_day}; a run dated {day} "
+                "is not published"
             )
         previous = pd.DataFrame(
             cur.execute(
-                """SELECT nct_id, risk_12m, risk_24m, model_version,
+                """SELECT DISTINCT ON (nct_id) nct_id, risk_12m, risk_24m, model_version,
                   coalesce(true_landmark_index, landmark_index) AS true_landmark_index,
-                  content_hash FROM serving.trial_scores_latest"""
+                  content_hash
+                FROM serving.trial_score_history WHERE as_of_date < %s
+                ORDER BY nct_id, as_of_date DESC, history_id DESC""",
+                (day,),
             ).fetchall(),
             columns=["nct_id", "risk_12m", "risk_24m", "model_version", "true_landmark_index",
                      "content_hash"],
@@ -162,19 +179,28 @@ def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[
             "(SELECT 1 FROM incoming i WHERE i.nct_id = t.nct_id)"
         )
         counts["latest_removed"] = cur.rowcount
-        history_columns = ("nct_id", "as_of_date", "model_name", "model_version", "risk_12m",
-                           "risk_24m", "reasons", "landmark_index", "true_landmark_index",
-                           "content_hash", "flagged")  # fmt: skip
-        _staging(cur, "incoming_history", "serving.trial_score_history", history_columns)
-        _copy(cur, "incoming_history", history_columns, _rows(history, history_columns))
+        values = HISTORY_COLUMNS[2:]  # the columns after the key (nct_id, as_of_date)
+        _staging(cur, "incoming_history", "serving.trial_score_history", HISTORY_COLUMNS)
+        _copy(cur, "incoming_history", HISTORY_COLUMNS, _rows(history, HISTORY_COLUMNS))
         cur.execute(
-            f"""INSERT INTO serving.trial_score_history ({", ".join(history_columns)})
-            SELECT {", ".join(history_columns)} FROM incoming_history
-            ON CONFLICT (nct_id, as_of_date, model_version) DO NOTHING"""
+            f"""INSERT INTO serving.trial_score_history AS h ({", ".join(HISTORY_COLUMNS)})
+            SELECT {", ".join(HISTORY_COLUMNS)} FROM incoming_history
+            ON CONFLICT (nct_id, as_of_date, model_version) DO UPDATE SET
+              {", ".join(f"{c} = EXCLUDED.{c}" for c in values)}, scored_at = now()
+            WHERE ({", ".join(f"h.{c}" for c in values)})
+              IS DISTINCT FROM ({", ".join(f"EXCLUDED.{c}" for c in values)})"""
         )
         counts["history_written"] = cur.rowcount
-        unscored = scored.unscored.rename(columns={"true_index": "true_landmark_index"}).copy()
-        unscored["as_of_date"] = pd.to_datetime(unscored["as_of_date"]).dt.date
+        # A rerun on the same day: that day's rows of trials that no longer warrant one go.
+        cur.execute(
+            """DELETE FROM serving.trial_score_history h
+            WHERE h.as_of_date = %s
+              AND h.model_version IN (SELECT model_version FROM incoming)
+              AND NOT EXISTS (SELECT 1 FROM incoming_history i
+                              WHERE i.nct_id = h.nct_id AND i.model_version = h.model_version)""",
+            (day,),
+        )
+        counts["history_removed"] = cur.rowcount
         not_scored_columns = ("nct_id", "as_of_date", "true_landmark_index", "reason",
                               "content_hash")  # fmt: skip
         _staging(cur, "incoming_not_scored", "serving.trials_not_scored", not_scored_columns)
@@ -186,7 +212,8 @@ def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[
               as_of_date = EXCLUDED.as_of_date, true_landmark_index =
                 EXCLUDED.true_landmark_index, reason = EXCLUDED.reason,
               content_hash = EXCLUDED.content_hash, recorded_at = now()
-            WHERE t.reason IS DISTINCT FROM EXCLUDED.reason
+            WHERE t.as_of_date IS DISTINCT FROM EXCLUDED.as_of_date
+              OR t.reason IS DISTINCT FROM EXCLUDED.reason
               OR t.true_landmark_index IS DISTINCT FROM EXCLUDED.true_landmark_index
               OR t.content_hash IS DISTINCT FROM EXCLUDED.content_hash"""
         )

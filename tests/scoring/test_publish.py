@@ -127,3 +127,68 @@ def test_a_second_run_changes_nothing_and_a_later_run_says_why(scratch: str) -> 
     with pytest.raises(serving.EarlierDateError):
         serving.publish(first, cfg, scratch)
     assert serving.table_digest(scratch) == before
+
+
+def _history(url: str) -> list[tuple]:
+    with psycopg.connect(_libpq(url)) as con:
+        return con.execute(
+            "SELECT nct_id, as_of_date, risk_12m, reasons FROM serving.trial_score_history "
+            "ORDER BY nct_id, as_of_date"
+        ).fetchall()
+
+
+def _one(day: dt.date, risk: float, content: str = "a", trial: str = "NCT01") -> Scored:
+    return _scored(day, [(trial, 2, 2, False, risk, 0.20, content)], [])
+
+
+def test_a_slow_drift_is_measured_against_the_last_history_row(scratch: str) -> None:
+    cfg = load_project_config()
+    for step in range(6):  # 0.100, 0.106, ..., 0.130, one day apart
+        serving.publish(_one(DAY1 + dt.timedelta(days=step), 0.1 + 0.006 * step), cfg, scratch)
+    days = [(day - DAY1).days for _, day, _, _ in _history(scratch)]
+    # A row at the first score, then each time the score is 0.01 from the last row.
+    assert days == [0, 2, 4]
+
+
+def test_a_rerun_on_the_same_day_replaces_that_days_history(scratch: str) -> None:
+    cfg = load_project_config()
+    serving.publish(_one(DAY1, 0.10), cfg, scratch)
+    counts = serving.publish(_one(DAY1, 0.30, "a2"), cfg, scratch)  # same day, changed
+    assert counts["history_written"] == 1
+    assert _history(scratch) == [("NCT01", DAY1, 0.30, ["first_score"])]
+    serving.publish(_one(DAY2, 0.32), cfg, scratch)  # a record change against 0.30
+    serving.publish(_one(DAY2, 0.30, "a2"), cfg, scratch)  # rerun: nothing to record now
+    assert _history(scratch) == [("NCT01", DAY1, 0.30, ["first_score"])]
+
+
+def test_a_trial_that_returns_is_not_a_first_score(scratch: str) -> None:
+    cfg = load_project_config()
+    serving.publish(_one(DAY1, 0.10), cfg, scratch)
+    serving.publish(_one(DAY2, 0.05, trial="NCT02"), cfg, scratch)  # NCT01 left
+    serving.publish(_one(DAY2 + dt.timedelta(days=1), 0.10, "a2"), cfg, scratch)  # it is back
+    reasons = {(t, (d - DAY1).days): r for t, d, _, r in _history(scratch)}
+    assert reasons[("NCT01", 2)] == ["record_change"]
+
+
+def test_scores_without_drivers_are_refused(scratch: str) -> None:
+    run = _one(DAY1, 0.10)
+    run.scores = run.scores.drop(columns="drivers")
+    with pytest.raises(ValueError, match="without drivers"):
+        serving.publish(run, load_project_config(), scratch)
+
+
+def test_the_migration_keeps_history_rows_down_and_up(scratch: str) -> None:
+    cfg = load_project_config()
+    serving.publish(_one(DAY1, 0.10), cfg, scratch)
+    serving.publish(_one(DAY2, 0.13), cfg, scratch)  # calendar
+    serving.publish(_one(DAY2 + dt.timedelta(days=1), 0.13, "a2"), cfg, scratch)  # record
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    command.downgrade(config, "0002")
+    with psycopg.connect(_libpq(scratch)) as con:
+        old = con.execute(
+            "SELECT reason FROM serving.trial_score_history ORDER BY as_of_date"
+        ).fetchall()
+    assert old == [("first_score",), ("score_moved",), ("record_changed",)]
+    command.upgrade(config, "head")
+    assert [r for *_, r in _history(scratch)] == [["first_score"], ["calendar"],
+                                                  ["record_change"]]  # fmt: skip

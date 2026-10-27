@@ -3,7 +3,10 @@
 - serving.trial_scores_latest gains the true landmark index and the flag "outside the
   validated range"; its drivers hold the five drivers of each horizon.
 - serving.trial_score_history records why each row was written: one or more of
-  first_score, record_change, landmark_passed, new_model and calendar.
+  first_score, record_change, landmark_passed, new_model and calendar. Existing rows keep
+  their reason (score_moved becomes calendar, record_changed becomes record_change); the
+  downgrade maps back, and the reasons 0002 has no word for (landmark_passed, new_model,
+  calendar) become score_moved unless the row also records a record change or first score.
 - serving.trials_not_scored: the open trials that get no score, with their reason code.
 
 Revision ID: 0003
@@ -39,13 +42,15 @@ def upgrade() -> None:
         sa.Column("flagged", sa.Boolean, nullable=False, server_default=sa.false()),
         schema="serving",
     )
+    op.add_column("trial_score_history", sa.Column("reasons", sa.ARRAY(sa.Text)), schema="serving")
+    op.execute(
+        """UPDATE serving.trial_score_history SET reasons = ARRAY[CASE reason
+          WHEN 'score_moved' THEN 'calendar' WHEN 'record_changed' THEN 'record_change'
+          ELSE reason END]"""
+    )
+    op.alter_column("trial_score_history", "reasons", nullable=False, schema="serving")
     op.drop_constraint("history_reason", "trial_score_history", schema="serving", type_="check")
     op.drop_column("trial_score_history", "reason", schema="serving")
-    op.add_column(
-        "trial_score_history",
-        sa.Column("reasons", sa.ARRAY(sa.Text), nullable=False),
-        schema="serving",
-    )
     for name, kind in (
         ("landmark_index", sa.SmallInteger),
         ("true_landmark_index", sa.SmallInteger),
@@ -80,14 +85,17 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("trials_not_scored", schema="serving")
+    op.add_column("trial_score_history", sa.Column("reason", sa.Text), schema="serving")
+    op.execute(
+        """UPDATE serving.trial_score_history SET reason = CASE
+          WHEN 'record_change' = ANY(reasons) THEN 'record_changed'
+          WHEN 'first_score' = ANY(reasons) THEN 'first_score'
+          ELSE 'score_moved' END"""
+    )
+    op.alter_column("trial_score_history", "reason", nullable=False, schema="serving")
     op.drop_constraint("history_reasons", "trial_score_history", schema="serving", type_="check")
     for name in ("flagged", "content_hash", "true_landmark_index", "landmark_index", "reasons"):
         op.drop_column("trial_score_history", name, schema="serving")
-    op.add_column(
-        "trial_score_history",
-        sa.Column("reason", sa.Text, nullable=False, server_default="first_score"),
-        schema="serving",
-    )
     op.create_check_constraint(
         "history_reason",
         "trial_score_history",
