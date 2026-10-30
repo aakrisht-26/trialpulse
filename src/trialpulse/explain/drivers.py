@@ -20,21 +20,37 @@ closely the two rank the same rows; the report states it beside every importance
 **The interval column** is the interval number the model is asked about, not a property of
 the trial. Its value is set by the horizon, so it is kept apart (`Explanation.interval`) and
 never listed as a driver.
+
+**Fewer trees, the same values (ADR 0035).** The target reads two classes, and a tree that
+never splits on the interval column has the same SHAP values in every interval. So the stop
+and continue trees are cut into single-output models (`split_trees`): those without the
+interval column are explained once, those with it once per interval, and the completion
+class's trees not at all. The values are still `pred_contrib`'s; every call checks them
+against the full pass on its first rows and refuses a split that differs.
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import lightgbm as lgb
 import numpy as np
 import numpy.typing as npt
 
 from trialpulse.eval import EVENT_STOP
 from trialpulse.eval.rows import FloatArray, LandmarkRows
 from trialpulse.features.registry import BY_NAME, CATEGORY, FLAG, NUMBER
-from trialpulse.models.discrete_time import CLASSES, OUTCOME_CONTINUE, DiscreteTimeBoosting
+from trialpulse.models.discrete_time import (
+    CLASSES,
+    INTERVAL,
+    OUTCOME_CONTINUE,
+    DiscreteTimeBoosting,
+)
 
 TOP = 5  # drivers stored with each prediction (CLAUDE.md Section 13)
+PROBE_ROWS = 16  # rows of each call checked against the full pass (ADR 0035)
+PROBE_TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True)
@@ -66,6 +82,16 @@ class Driver:
         return "raises" if self.contribution > 0 else "lowers"
 
 
+@dataclass(frozen=True)
+class TargetTrees:
+    """The trees of the target as single-output models (None for a group without trees),
+    each pair the stop class's and the continue class's. `fixed` trees never split on the
+    interval column, so their SHAP values are the same in every interval; `moving` trees do."""
+
+    fixed: tuple[lgb.Booster | None, lgb.Booster | None]
+    moving: tuple[lgb.Booster | None, lgb.Booster | None]
+
+
 def _intervals(model: DiscreteTimeBoosting, months: int) -> int:
     count, rest = divmod(months, int(model.cfg.discrete_time.interval_months))
     if rest or not 1 <= count <= model.n_intervals:
@@ -76,6 +102,91 @@ def _intervals(model: DiscreteTimeBoosting, months: int) -> int:
     return count
 
 
+def _single_output(header: str, trees: Sequence[str], tail: str) -> lgb.Booster | None:
+    """A model of these trees, in LightGBM's text format: its one output is their sum."""
+    if not trees:
+        return None
+    head = re.sub(r"(?m)^tree_sizes=.*\n", "", header)
+    head = re.sub(r"(?m)^num_class=\d+$", "num_class=1", head)
+    head = re.sub(r"(?m)^num_tree_per_iteration=\d+$", "num_tree_per_iteration=1", head)
+    head = re.sub(r"(?m)^objective=.*$", "objective=regression", head)
+    body = "".join(re.sub(r"\ATree=\d+\n", f"Tree={i}\n", tree) for i, tree in enumerate(trees))
+    return lgb.Booster(model_str=head + body + tail)
+
+
+def _splits_on(tree: str, column: int) -> bool:
+    found = re.search(r"(?m)^split_feature=(.*)$", tree)
+    return found is not None and str(column) in found[1].split()
+
+
+def split_trees(booster: lgb.Booster) -> TargetTrees:
+    """The booster's stop and continue trees, grouped as `TargetTrees` says. The model text
+    holds one tree per class in each round, in the order of the classes."""
+    text = booster.model_to_string()
+    first, last = text.index("Tree=0\n"), text.index("end of trees")
+    header, tail = text[:first], text[last:]
+    trees = re.split(r"(?m)^(?=Tree=\d+$)", text[first:last])[1:]
+    per_round = len(CLASSES)
+    if booster.num_model_per_iteration() != per_round or len(trees) != booster.num_trees():
+        raise RuntimeError(
+            f"expected {per_round} trees a round and {booster.num_trees()} trees in the model "
+            f"text, found {booster.num_model_per_iteration()} and {len(trees)}"
+        )
+    column = booster.feature_name().index(INTERVAL)
+
+    def group(cls: int, moving: bool) -> lgb.Booster | None:
+        own = [tree for tree in trees[cls::per_round] if _splits_on(tree, column) is moving]
+        return _single_output(header, own, tail)
+
+    return TargetTrees(
+        fixed=(group(EVENT_STOP, False), group(OUTCOME_CONTINUE, False)),
+        moving=(group(EVENT_STOP, True), group(OUTCOME_CONTINUE, True)),
+    )
+
+
+def _at_interval(landmark: npt.NDArray[np.float32], j: int) -> npt.NDArray[np.float32]:
+    return np.column_stack([landmark, np.full(len(landmark), float(j), dtype=np.float32)])
+
+
+def _values(booster: lgb.Booster | None, x: npt.NDArray[np.float32]) -> FloatArray:
+    if booster is None:
+        return np.zeros((len(x), x.shape[1] + 1))
+    out: FloatArray = np.asarray(booster.predict(x, pred_contrib=True), dtype=np.float64)
+    return out
+
+
+def _difference(
+    pair: tuple[lgb.Booster | None, lgb.Booster | None], x: npt.NDArray[np.float32]
+) -> FloatArray:
+    """The SHAP values of a pair's stop trees less its continue trees."""
+    return _values(pair[0], x) - _values(pair[1], x)
+
+
+def _full_pass(booster: lgb.Booster, x: npt.NDArray[np.float32]) -> FloatArray:
+    """The same difference from every tree of the model, in one call."""
+    raw = np.asarray(booster.predict(x, pred_contrib=True), dtype=np.float64)
+    per_class = raw.reshape(len(x), len(CLASSES), x.shape[1] + 1)
+    out: FloatArray = per_class[:, EVENT_STOP] - per_class[:, OUTCOME_CONTINUE]
+    return out
+
+
+def _check_split(
+    booster: lgb.Booster,
+    trees: TargetTrees,
+    landmark: npt.NDArray[np.float32],
+    passes: int,
+) -> None:
+    """Refuse a split whose values on these rows are not the full pass's (ADR 0035)."""
+    fixed = _difference(trees.fixed, _at_interval(landmark, 1))
+    for j in range(1, passes + 1):
+        x = _at_interval(landmark, j)
+        gap = float(np.abs(fixed + _difference(trees.moving, x) - _full_pass(booster, x)).max())
+        if not gap <= PROBE_TOLERANCE:
+            raise RuntimeError(
+                f"the split trees differ from the full pass by {gap:.2e} in interval {j}"
+            )
+
+
 def explain(model: DiscreteTimeBoosting, rows: LandmarkRows, months: int) -> Explanation:
     """The SHAP values of the target at a horizon for each row (see the module text)."""
     return explain_horizons(model, rows, (months,))[months]
@@ -84,21 +195,23 @@ def explain(model: DiscreteTimeBoosting, rows: LandmarkRows, months: int) -> Exp
 def explain_horizons(
     model: DiscreteTimeBoosting, rows: LandmarkRows, horizons: tuple[int, ...]
 ) -> dict[int, Explanation]:
-    """The SHAP values at several horizons from one set of TreeSHAP passes: one pass per
-    interval of the longest horizon, each shorter horizon averaging the passes of its own
-    intervals (the 12-month target reuses the first two passes of the 24-month one)."""
+    """The SHAP values at several horizons from one set of TreeSHAP passes: one pass of the
+    fixed trees, one of the moving trees per interval of the longest horizon, each shorter
+    horizon averaging the passes of its own intervals (the 12-month target reuses the first
+    two passes of the 24-month one)."""
     if model.booster is None:
         raise RuntimeError(f"{model.name} is not fitted")
     counts = {months: _intervals(model, months) for months in horizons}
     landmark = model.tree_landmark_matrix(rows.features)
     n, width = landmark.shape
+    passes = max(counts.values())
+    trees = split_trees(model.booster)
+    _check_split(model.booster, trees, landmark[:PROBE_ROWS], passes)
+    fixed = _difference(trees.fixed, _at_interval(landmark, 1))
     running = np.zeros((n, width + 2))  # the features, the interval column, the expected value
     out: dict[int, Explanation] = {}
-    for j in range(1, max(counts.values()) + 1):
-        x = np.column_stack([landmark, np.full(n, float(j), dtype=np.float32)])
-        raw = np.asarray(model.booster.predict(x, pred_contrib=True), dtype=np.float64)
-        per_class = raw.reshape(n, len(CLASSES), width + 2)
-        running += per_class[:, EVENT_STOP] - per_class[:, OUTCOME_CONTINUE]
+    for j in range(1, passes + 1):
+        running += fixed + _difference(trees.moving, _at_interval(landmark, j))
         for months, count in counts.items():
             if count == j:
                 total = running / count
@@ -116,8 +229,9 @@ def log_odds(model: DiscreteTimeBoosting, rows: LandmarkRows, months: int) -> Fl
     landmark = model.tree_landmark_matrix(rows.features)
     out = np.zeros(len(landmark))
     for j in range(1, count + 1):
-        x = np.column_stack([landmark, np.full(len(landmark), float(j), dtype=np.float32)])
-        raw = np.asarray(model.booster.predict(x, raw_score=True), dtype=np.float64)
+        raw = np.asarray(
+            model.booster.predict(_at_interval(landmark, j), raw_score=True), dtype=np.float64
+        )
         out += raw[:, EVENT_STOP] - raw[:, OUTCOME_CONTINUE]
     result: FloatArray = out / count
     return result

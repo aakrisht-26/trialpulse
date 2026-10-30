@@ -150,3 +150,70 @@ def test_both_horizons_from_one_set_of_passes_equal_separate_explanations(
         alone = drivers.explain(m4, probe, months)
         assert np.array_equal(both[months].values, alone.values)
         assert np.array_equal(both[months].target, alone.target)
+
+
+def _every_tree(m4: DiscreteTimeBoosting, probe: LandmarkRows, months: int) -> np.ndarray:
+    """The target's values by the definition: every tree of the model, one pass per interval."""
+    landmark = m4.tree_landmark_matrix(probe.features)
+    total = np.zeros((len(landmark), landmark.shape[1] + 2))
+    count = months // 6
+    for j in range(1, count + 1):
+        x = np.column_stack([landmark, np.full(len(landmark), float(j), dtype=np.float32)])
+        raw = np.asarray(m4.booster.predict(x, pred_contrib=True))
+        per_class = raw.reshape(len(landmark), 3, landmark.shape[1] + 2)
+        total += per_class[:, EVENT_STOP] - per_class[:, OUTCOME_CONTINUE]
+    return total / count
+
+
+def test_the_split_trees_give_the_values_of_every_tree(
+    m4: DiscreteTimeBoosting, probe: LandmarkRows
+) -> None:
+    both = drivers.explain_horizons(m4, probe, (6, 12, 18, 24))
+    for months, explanation in both.items():
+        expected = _every_tree(m4, probe, months)
+        width = explanation.values.shape[1]
+        assert np.abs(explanation.values - expected[:, :width]).max() < 1e-9
+        assert np.abs(explanation.interval - expected[:, width]).max() < 1e-9
+        assert np.abs(explanation.base - expected[:, width + 1]).max() < 1e-9
+
+
+def test_the_trees_are_grouped_by_class_and_by_the_interval_column(
+    m4: DiscreteTimeBoosting,
+) -> None:
+    trees = drivers.split_trees(m4.booster)
+    fixed = [group for group in trees.fixed if group is not None]
+    moving = [group for group in trees.moving if group is not None]
+    assert fixed  # the small model holds trees of both kinds; a group may still be empty
+    assert moving
+    # Every stop and continue tree lands in exactly one group, and none of the third class.
+    assert m4.booster.num_trees() % 3 == 0
+    assert sum(g.num_trees() for g in (*fixed, *moving)) == 2 * m4.booster.num_trees() // 3
+    for group in fixed:
+        assert INTERVAL not in set(group.trees_to_dataframe()["split_feature"])
+    for group in moving:
+        frame = group.trees_to_dataframe()
+        splitting = frame[frame["split_feature"] == INTERVAL]["tree_index"].nunique()
+        assert splitting == group.num_trees()
+
+
+def test_a_group_without_trees_contributes_nothing() -> None:
+    x = np.ones((4, 3), dtype=np.float32)
+    assert drivers._values(None, x).shape == (4, 4)
+    assert not drivers._values(None, x).any()
+
+
+@pytest.mark.parametrize("wrong", ["swapped", "shifted"])
+def test_a_split_that_differs_from_the_full_pass_is_refused(
+    m4: DiscreteTimeBoosting, probe: LandmarkRows, monkeypatch: pytest.MonkeyPatch, wrong: str
+) -> None:
+    real = drivers.split_trees
+
+    def broken(booster: object) -> drivers.TargetTrees:
+        trees = real(booster)  # type: ignore[arg-type]
+        if wrong == "swapped":  # the continue class's trees in the stop class's place
+            return drivers.TargetTrees(trees.fixed[::-1], trees.moving[::-1])
+        return drivers.TargetTrees(trees.fixed, (None, None))  # the moving trees lost
+
+    monkeypatch.setattr(drivers, "split_trees", broken)
+    with pytest.raises(RuntimeError, match="differ from the full pass"):
+        drivers.explain_horizons(m4, probe, (12, 24))
