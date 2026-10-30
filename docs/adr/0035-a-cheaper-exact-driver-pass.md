@@ -21,7 +21,7 @@ Two parts of that walk cannot change the result:
 2. `explain_horizons` explains the fixed models once and the moving models once per interval, and adds them. The values are still LightGBM's `pred_contrib`, so ADR 0033's target, its additivity and every stored driver stay as they are.
 3. Every call checks the sum against the full pass on its first 16 rows, in every interval it uses, and refuses a difference above 1e-9. A change in the model format or in the order of the classes therefore stops the run instead of corrupting the drivers.
 
-Measured on the champion with a prototype of this rule, on 4,000 real rows: 52.5 s for all four passes, 13.1 ms a trial against 52.7 ms, so about 19 minutes for the 88,895 trials against about 78. The largest difference from the full pass on 300 rows was 1.69e-14.
+Measured on the champion with a prototype of this rule, on 4,000 real rows: 52.5 s for all four passes, 13.1 ms a trial against 52.7 ms. The largest difference from the full pass on 300 rows was 1.69e-14. The full run at the cutoff then took 1,319 s and 1,266 s for the drivers of the 88,895 trials, about 22 minutes against about 76, with a code review running on the laptop at the same time.
 
 ## Alternatives
 
@@ -35,5 +35,5 @@ Measured on the champion with a prototype of this rule, on 4,000 real rows: 52.5
 
 - A full scoring run with drivers fits under the hour, so Step 13's run needs no exception.
 - The code depends on LightGBM's text model format. `uv.lock` pins the version, a test checks the split on a small model, and the check of decision 3 guards every call on the real one.
-- Step 12's explanations go through the same code. Regenerating `docs/explanations.md` from it is the test at scale: the document must come out byte for byte.
+- Step 12's explanations go through the same code, which is the test at scale. Regenerated from it, the four figures came out byte for byte, and `docs/explanations.md` differs in two cells only, the largest additivity gaps, which print rounding noise (3.4e-14 became 2.4e-14 and 2.5e-14 became 2.8e-14). Every importance, rank agreement and timeline over the 40,000 explained rows stayed the same. The document was regenerated, so the command reproduces it.
 - ADR 0033's cost estimate of 6.5 ms a row is superseded by the measurements here: the served champion is larger than the per-origin models, and the drivers cover both horizons.

@@ -15,8 +15,8 @@ The explained log-odds is not the served risk, which also depends on the chance 
 
 | Origin | Evaluation rows | Rows explained | Model | Largest difference from the saved scores | Rank agreement, 12 months | Rank agreement, 24 months | Largest additivity gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2018-01-01 | 86,556 | 20,000 | 1,046 rounds (cache) | 0.0e+00 | 0.972 | 0.930 | 3.4e-14 |
-| 2019-01-01 | 90,985 | 20,000 | 1,146 rounds (cache) | 0.0e+00 | 0.975 | 0.934 | 2.5e-14 |
+| 2018-01-01 | 86,556 | 20,000 | 1,046 rounds (cache) | 0.0e+00 | 0.972 | 0.930 | 2.4e-14 |
+| 2019-01-01 | 90,985 | 20,000 | 1,146 rounds (cache) | 0.0e+00 | 0.975 | 0.934 | 2.8e-14 |
 
 ## What moves the explained log-odds
 

@@ -301,3 +301,19 @@ def test_the_check_reaches_the_later_intervals_of_the_horizon(
     monkeypatch.setattr(drivers, "_splits_on", lambda tree, column: False)
     with pytest.raises(RuntimeError, match="differ from the full pass"):
         drivers.explain_horizons(m4, probe, (12, 24))
+
+
+def test_the_check_reads_every_row_of_its_probe(
+    m4: DiscreteTimeBoosting, probe: LandmarkRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = drivers._full_pass
+
+    def off(booster: lgb.Booster, x: np.ndarray) -> np.ndarray:
+        out = real(booster, x)
+        if len(x) == 16:  # the probe of a call on more rows: a fault in its last row
+            out[-1, 0] += 1.0
+        return out
+
+    monkeypatch.setattr(drivers, "_full_pass", off)
+    with pytest.raises(RuntimeError, match="differ from the full pass"):
+        drivers.explain_horizons(m4, probe, (12,))
