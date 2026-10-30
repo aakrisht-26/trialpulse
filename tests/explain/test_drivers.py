@@ -2,6 +2,7 @@
 rows whose early stops a not-yet-recruiting status, a company sponsor and a small enrollment
 target drive. No real data."""
 
+import lightgbm as lgb
 import numpy as np
 import pytest
 from scipy.stats import spearmanr
@@ -196,10 +197,83 @@ def test_the_trees_are_grouped_by_class_and_by_the_interval_column(
         assert splitting == group.num_trees()
 
 
+@pytest.fixture(scope="module")
+def moving_booster() -> lgb.Booster:
+    """A small model of three classes whose stop and continue classes both depend on the
+    interval. Each tree sees two of the three columns, so some trees cannot split on it."""
+    rng = np.random.default_rng(5)
+    n = 3000
+    interval = rng.integers(1, 5, n).astype(np.float32)
+    x = np.column_stack([rng.normal(size=(n, 2)), interval]).astype(np.float32)
+    odds = np.column_stack([1.5 * x[:, 0], 0.8 * interval, x[:, 1] - 0.8 * interval])
+    labels = np.argmax(odds + rng.gumbel(size=(n, 3)), axis=1)
+    settings = {
+        "objective": "multiclass",
+        "num_class": 3,
+        "num_leaves": 7,
+        "verbosity": -1,
+        "feature_fraction": 0.67,
+        "seed": 1,
+        "deterministic": True,
+        "num_threads": 1,
+    }
+    data = lgb.Dataset(x, label=labels, feature_name=["a", "b", INTERVAL])
+    return lgb.train(settings, data, num_boost_round=30)
+
+
+def test_the_split_holds_when_the_interval_moves_both_classes(
+    moving_booster: lgb.Booster,
+) -> None:
+    trees = drivers.split_trees(moving_booster)
+    assert all(group is not None for group in (*trees.fixed, *trees.moving))
+    landmark = np.random.default_rng(6).normal(size=(200, 2)).astype(np.float32)
+    fixed = drivers._difference(trees.fixed, drivers._at_interval(landmark, 1))
+    for j in range(1, 5):
+        x = drivers._at_interval(landmark, j)
+        split = fixed + drivers._difference(trees.moving, x)
+        assert np.abs(split - drivers._full_pass(moving_booster, x)).max() < 1e-12
+
+
 def test_a_group_without_trees_contributes_nothing() -> None:
     x = np.ones((4, 3), dtype=np.float32)
     assert drivers._values(None, x).shape == (4, 4)
     assert not drivers._values(None, x).any()
+
+
+@pytest.mark.parametrize(
+    ("offset", "refused"),
+    [(5e-10, False), (2e-9, True), (float("nan"), True), (float("inf"), True)],
+)
+def test_the_check_refuses_a_gap_above_its_tolerance_and_anything_not_a_number(
+    moving_booster: lgb.Booster,
+    monkeypatch: pytest.MonkeyPatch,
+    offset: float,
+    refused: bool,
+) -> None:
+    real = drivers._full_pass
+
+    def off(booster: lgb.Booster, x: np.ndarray) -> np.ndarray:
+        out = real(booster, x)
+        if x[0, -1] == 4:  # the last interval only: the check must reach every interval
+            out[-1, -1] += offset
+        return out
+
+    monkeypatch.setattr(drivers, "_full_pass", off)
+    landmark = np.random.default_rng(6).normal(size=(8, 2)).astype(np.float32)
+    trees = drivers.split_trees(moving_booster)
+    if refused:
+        with pytest.raises(RuntimeError, match="differ from the full pass"):
+            drivers._check_split(moving_booster, trees, landmark, 4)
+    else:
+        drivers._check_split(moving_booster, trees, landmark, 4)
+
+
+def test_a_model_of_another_shape_is_refused() -> None:
+    x = np.random.default_rng(1).normal(size=(200, 2)).astype(np.float32)
+    data = lgb.Dataset(x, label=(x[:, 0] > 0).astype(int), feature_name=["a", INTERVAL])
+    two_classes = lgb.train({"objective": "binary", "verbosity": -1}, data, num_boost_round=3)
+    with pytest.raises(RuntimeError, match="expected 3 trees a round"):
+        drivers.split_trees(two_classes)
 
 
 @pytest.mark.parametrize("wrong", ["swapped", "shifted"])
@@ -215,5 +289,15 @@ def test_a_split_that_differs_from_the_full_pass_is_refused(
         return drivers.TargetTrees(trees.fixed, (None, None))  # the moving trees lost
 
     monkeypatch.setattr(drivers, "split_trees", broken)
+    with pytest.raises(RuntimeError, match="differ from the full pass"):
+        drivers.explain_horizons(m4, probe, (12, 24))
+
+
+def test_the_check_reaches_the_later_intervals_of_the_horizon(
+    m4: DiscreteTimeBoosting, probe: LandmarkRows, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A moving tree filed as fixed shows no gap in interval 1, where the fixed pass is taken,
+    so the call must check the later intervals of its horizons too."""
+    monkeypatch.setattr(drivers, "_splits_on", lambda tree, column: False)
     with pytest.raises(RuntimeError, match="differ from the full pass"):
         drivers.explain_horizons(m4, probe, (12, 24))

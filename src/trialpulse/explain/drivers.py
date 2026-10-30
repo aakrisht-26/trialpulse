@@ -126,11 +126,11 @@ def split_trees(booster: lgb.Booster) -> TargetTrees:
     first, last = text.index("Tree=0\n"), text.index("end of trees")
     header, tail = text[:first], text[last:]
     trees = re.split(r"(?m)^(?=Tree=\d+$)", text[first:last])[1:]
-    per_round = len(CLASSES)
-    if booster.num_model_per_iteration() != per_round or len(trees) != booster.num_trees():
+    per_round = booster.num_model_per_iteration()
+    if per_round != len(CLASSES) or len(trees) % per_round:
         raise RuntimeError(
-            f"expected {per_round} trees a round and {booster.num_trees()} trees in the model "
-            f"text, found {booster.num_model_per_iteration()} and {len(trees)}"
+            f"expected {len(CLASSES)} trees a round, found {per_round} a round and "
+            f"{len(trees)} in all"
         )
     column = booster.feature_name().index(INTERVAL)
 
