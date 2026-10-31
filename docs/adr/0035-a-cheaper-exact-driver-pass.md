@@ -31,7 +31,7 @@ This walks 25.9% of the leaves the full pass walks. Measured on the champion wit
 - **12-month drivers only.** About half the time, but the 24-month score would have no drivers of its own, which narrows Section 13.
 - **The full pass on every run,** as a declared exception to the one-hour rule. Nothing would be gained over this pass.
 - **More threads or worker processes.** No gain while the throttling held (above). Without it they scale (about 350 rows a second on 8 processes against 80), but they keep all the work this pass removes.
-- **Opting out of Windows' throttling instead.** One call at the start of a process. It speeds up every long job, not only this one: a full run at the cutoff with this pass and the opt-out took 304 s in all against about 1,450 s, with the same hashes. It depends on a behaviour of Windows whose trigger is not established, and it draws more power, so it is a separate question for Aakrisht. This pass does not depend on it.
+- **Opting out of Windows' throttling instead.** One call at the start of a process. It speeds up every long job, not only this one: a full run at the cutoff with this pass and the opt-out took 304 s in all against about 1,450 s, with the same hashes, though two later runs took 485 s and 368 s with no opt-out, so the throttling comes and goes by itself. It depends on a behaviour of Windows whose trigger is not established, and it draws more power, so it is a separate question for Aakrisht. This pass does not depend on it.
 - **Another TreeSHAP implementation** (the shap package, or our own). ADR 0033 rejected the package; our own would give up LightGBM's tested code.
 
 ## Consequences
