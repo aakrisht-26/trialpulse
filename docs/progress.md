@@ -89,8 +89,8 @@ Current step: **Step 13 (scoring pipeline and model registry)**: built and repor
 | 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
-| 13 | Scoring pipeline and model registry | Built, waiting for Aakrisht's review (ADR 0034 accepted, ADR 0035 proposed) |
-| 14 | Live ingestion and daily workflow | Not started |
+| 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
+| 14 | Live ingestion and daily workflow | Not built: the options wait for Aakrisht's decision |
 | 15 | API service | Not started |
 | 16 | Dashboard | Not started |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -139,6 +139,11 @@ Added on 2026-10-19, from Aakrisht's review of Step 10:
 20. **A job expected to pass an hour is estimated and proposed first,** except the jobs of Step 11 under item 19.
 21. **The locked test waits for Step 6,** so that the operational and scientific results use the final labels.
 22. **Step 6: the Windows scheduled task "TrialPulse labeling batch" runs the batch daily** (since 2026-10-19; it replaces item 14's batch once per session). When the sample reaches 10,000, Step 6 is finished as specified and the task is removed. Done: the sample was complete on 2026-10-21, Step 6 was finished and the task removed that day.
+
+Added on 2026-10-31, from Aakrisht's review of Step 13:
+
+23. **Step 17: the replay scores with a model fitted as of its start** (origin 2023-01-01, under ADR 0016's rules, with its own sponsor priors), never the served champion: it was trained on outcomes through 2026-09-25, so its replay scores would be in-sample. The replay's 79 weekly scorings get a cost estimate first, under the one-hour rule.
+24. **Steps 15 and 16: the API and every dashboard page that shows a score carry the "outside the validated range" flag and the reason codes,** and say that flagged scores (21% of those served at the cutoff) ran above the observed risk in development.
 
 ## Step 1: Repo skeleton, tooling, CI
 
@@ -2289,7 +2294,7 @@ Approved. ADR 0033 is accepted as written (Amendments line added) and the nine d
 
 ## Step 13: Scoring pipeline and model registry
 
-Date: 2026-10-26 (options), 2026-10-27 (decisions and build), 2026-10-30 (the driver pass and the full run). Status: **built, waiting for review.** Aakrisht chose B and option 1, each gated by a development check, in his review of the Step 12 follow-ups; ADR 0034 records the rules.
+Date: 2026-10-26 (options), 2026-10-27 (decisions and build), 2026-10-30 (the driver pass and the full run). Status: **approved 2026-10-31.** Aakrisht chose B and option 1, each gated by a development check, in his review of the Step 12 follow-ups; ADR 0034 records the rules.
 
 #### Checkpoints
 
@@ -2484,6 +2489,16 @@ Prepared by a design workflow (`wf_428987ee-35e`): one agent mapped how the feat
 - **The production fit:** origin = the day after the data cutoff, so training uses every interval that ended by the cutoff. The sponsor priors are fitted on those rows and saved with the model.
 
 **The margins and floors of the two checks are yours to set.** My proposal: B is accepted if its AUC at 12 months is not lower than A's by more than 0.005 at both development origins (the margin of Section 14's promotion gate); C replaces B only if it is higher by 0.005 at both. An age band is served if its AUC at 12 months is at least landmark 6's minus 0.03 and it has at least 1,000 rows at each origin.
+
+### Review of Step 13 (Aakrisht, 2026-10-31) and what was done
+
+Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` version 1 is READY with the alias `champion`, from run `b82c99e3` (commit `075f19c`, clean tree, no metrics). That settles the one claim no reviewer could check.
+
+- **ADR 0035 accepted,** with its Amendments line. The driver options A, B and C are closed.
+- **The throttling opt-out approved:** in `trialpulse.cli.run`, a no-op outside Windows, with tests and ADR 0036. Long jobs still run only with the charger in. One addition I made without asking: a child process does not inherit the setting, so each worker of the warehouse build makes the same call (`worker_pool`).
+- **The other decisions of the report approved.**
+- **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
+- **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 

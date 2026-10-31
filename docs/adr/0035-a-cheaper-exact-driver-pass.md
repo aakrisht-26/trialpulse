@@ -1,7 +1,7 @@
 # 0035. A cheaper exact driver pass
 
 - Date: 2026-10-30
-- Status: **Proposed.** Built under rule 3 of Step 13 (a job past about an hour needs a cheaper plan first) and flagged for Aakrisht's review of Step 13. It replaces no decision of his: the three options put to him on 2026-10-27 (carry drivers forward, 12-month drivers only, the full pass on every run) stay open to him.
+- Status: **Accepted.** Built under rule 3 of Step 13 (a job past about an hour needs a cheaper plan first) and approved by Aakrisht in the review of Step 13 on 2026-10-31. That closed the three options put to him on 2026-10-27 (carry drivers forward, 12-month drivers only, the full pass on every run).
 - Refines ADR 0033: how the SHAP values are computed, not what they are. No definition, target or stored field changes.
 
 ## Context
@@ -27,11 +27,11 @@ This walks 25.9% of the leaves the full pass walks. Measured on the champion wit
 
 ## Alternatives
 
-- **Carrying drivers forward** (explain a trial only when its history row is written). The first full run still takes the 76 minutes, and a stored driver can describe older features than the score beside it. It may still suit Step 14's daily job; that is a separate question, and this pass makes it less pressing.
-- **12-month drivers only.** About half the time, but the 24-month score would have no drivers of its own, which narrows Section 13.
-- **The full pass on every run,** as a declared exception to the one-hour rule. Nothing would be gained over this pass.
+- **Carrying drivers forward** (explain a trial only when its history row is written). The first full run still takes the 76 minutes, and a stored driver can describe older features than the score beside it. Closed.
+- **12-month drivers only.** About half the time, but the 24-month score would have no drivers of its own, which narrows Section 13. Closed.
+- **The full pass on every run,** as a declared exception to the one-hour rule. Nothing would be gained over this pass. Closed.
 - **More threads or worker processes.** No gain while the throttling held (above). Without it they scale (about 350 rows a second on 8 processes against 80), but they keep all the work this pass removes.
-- **Opting out of Windows' throttling instead.** One call at the start of a process. It speeds up every long job, not only this one: a full run at the cutoff with this pass and the opt-out took 304 s in all against about 1,450 s, with the same hashes, though two later runs took 485 s and 368 s with no opt-out, so the throttling comes and goes by itself. It depends on a behaviour of Windows whose trigger is not established, and it draws more power, so it is a separate question for Aakrisht. This pass does not depend on it.
+- **Opting out of Windows' throttling instead.** One call at the start of a process. It speeds up every long job, not only this one: a full run at the cutoff with this pass and the opt-out took 304 s in all against about 1,450 s, with the same hashes, though two later runs took 485 s and 368 s with no opt-out, so the throttling comes and goes by itself. It depends on a behaviour of Windows whose trigger is not established, and it draws more power. It was decided separately and added beside this pass (ADR 0036). This pass does not depend on it.
 - **Another TreeSHAP implementation** (the shap package, or our own). ADR 0033 rejected the package; our own would give up LightGBM's tested code.
 
 ## Consequences
