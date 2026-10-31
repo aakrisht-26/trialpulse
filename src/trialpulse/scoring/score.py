@@ -19,8 +19,9 @@ read. Among them:
 **What a score holds:** the risk of an early stop within 12 and within 24 months after d,
 the five ADR 0033 drivers of each horizon's log-odds with their direction, the true and the
 capped landmark index, the flag, and the content hash of the version scored (so a later run
-can tell a record change). The output is one Parquet file per date, sorted by registry id,
-whose SHA-256 is printed: scoring a date twice gives the same file.
+can tell a record change). The output is two Parquet files per date (the scores and the
+unscored trials), sorted by registry id, whose SHA-256 values are printed: scoring a date
+twice gives the same files.
 
 **What reaches the serving tables** (`trialpulse.scoring.serving`): a run with drivers, dated
 on or after the data cutoff of the champion's training rows. A run without drivers, or of an

@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 13 (scoring pipeline and model registry)**: built and reported on 2026-10-27, waiting for Aakrisht's review. One job is not run: the full scoring run with drivers would take about 76 minutes, so it waits for his choice of a cheaper plan (see "Step 13" below). Step 12 was approved on 2026-10-26, and its follow-ups are done (see the end of "Step 12: Explainability, model card, data card" below). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
+Current step: **Step 13 (scoring pipeline and model registry)**: built and reported, waiting for Aakrisht's review. The full scoring run with drivers ran on 2026-10-30: an exact driver pass with about a quarter of the work (ADR 0035, proposed) brought it under the hour, so no choice of plan was needed (see "Step 13" below). One new decision waits for him: whether long jobs opt out of Windows' throttling. Step 12 was approved on 2026-10-26, and its follow-ups are done (see the end of "Step 12: Explainability, model card, data card" below). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -89,7 +89,7 @@ Current step: **Step 13 (scoring pipeline and model registry)**: built and repor
 | 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
-| 13 | Scoring pipeline and model registry | Not started |
+| 13 | Scoring pipeline and model registry | Built, waiting for Aakrisht's review (ADR 0034 accepted, ADR 0035 proposed) |
 | 14 | Live ingestion and daily workflow | Not started |
 | 15 | API service | Not started |
 | 16 | Dashboard | Not started |
@@ -2289,7 +2289,7 @@ Approved. ADR 0033 is accepted as written (Amendments line added) and the nine d
 
 ## Step 13: Scoring pipeline and model registry
 
-Date: 2026-10-26 (options), 2026-10-27 (decisions and build). Status: **built, waiting for review; the full scoring run with drivers waits for a decision** (over the one-hour line). Aakrisht chose B and option 1, each gated by a development check, in his review of the Step 12 follow-ups; ADR 0034 records the rules.
+Date: 2026-10-26 (options), 2026-10-27 (decisions and build), 2026-10-30 (the driver pass and the full run). Status: **built, waiting for review.** Aakrisht chose B and option 1, each gated by a development check, in his review of the Step 12 follow-ups; ADR 0034 records the rules.
 
 #### Checkpoints
 
@@ -2299,7 +2299,10 @@ Date: 2026-10-26 (options), 2026-10-27 (decisions and build). Status: **built, w
 - The official checks ran from `9ea0f45` with a clean tree (1,000 resamples, MLflow run `6129572484154eacb1c743706031a3f0`, about 12 minutes). Option B is served (B minus A: +0.0155 at 2016, +0.0141 at 2017); both age bands are served, flagged (averaged AUC 0.7336 and 0.7271 against the floor 0.6861; fewest early stops 406 and 315). Written to `docs/scoring_checks.md` and `data/results/checks/step13_checks.json`.
 - The served scoring, the champion and the serving tables committed (`0ad72d5`, `87fb954`, `075f19c`); the champion fitted and registered (MLflow run `b82c99e32ef94f82a2865d8109723014`, `trialpulse-m4` version 1, alias `champion`); the model card's served scope committed (`5abef9c`).
 - The two-reviewer check found 23 findings; the fixes are in `e64737b`, `a04c880`, `950af55`, `161e908` and `ac6b064`, and the checks ran again from `161e908` (MLflow run `bdd39c07497b4e7592234ac7968665cd`, regenerated in `1d40fe1`): no point estimate or decision changed.
-- The local serving tables were emptied after the review (they held in-sample scores of 2019-06-30 and scores without drivers); they are filled by the full run with drivers once its plan is chosen.
+- The local serving tables were emptied after the review (they held in-sample scores of 2019-06-30 and scores without drivers). The full run with drivers filled them on 2026-10-30.
+- 2026-10-30, resumed: the verify list ran in PowerShell on `f44e841` and reproduced the hashes of the report, which had come from runs before the review fixes. CI's coverage lines (`serving.py` 89%) confirm that the publish tests ran there, which the report had only inferred.
+- 2026-10-30: an exact driver pass built (ADR 0035, proposed, `4f0e7ed`). The cutoff was scored with drivers and published from that commit while the first reviewer of the pass was working. Its tests were then strengthened (`531f180`), the explanations regenerated (`3c4cc2f`), and the cutoff scored once more from `531f180`: same hashes, nothing written.
+- 2026-10-31: the document review refuted my stated cause of the flat thread timings (memory). Windows was holding the workers on the efficiency cores; I confirmed it with my own check and a full run. The documents below are corrected, and the opt-out is a decision for Aakrisht.
 
 ### The checks' numbers (development evidence, ADR 0032)
 
@@ -2327,22 +2330,23 @@ From `docs/scoring_checks.md`: development origins only, 1,000 resamples, IPCW c
 
 ### What was built
 
-- **`score(as_of_date)`** (`src/trialpulse/scoring/score.py`, ADR 0034 decision 1): the population on the date (first posted since 2008, a version public on the date, interventional, open with SUSPENDED included, not lapsed under ADR 0014), the reason codes (`reversal`, `beyond_120_months`, `band_not_validated`), option B's served rows with the flag from month 42, the risks at 12 and 24 months and the five ADR 0033 drivers of each horizon. The features come from the offline feature code run on served keys (`scoring/features.py`, `scoring/rows.py`): every feature as of the date, the time features held at the last landmark passed (capped at 6), the recent-versions window sliding the trial's last landmark gap. One Parquet file per date with its SHA-256.
+- **`score(as_of_date)`** (`src/trialpulse/scoring/score.py`, ADR 0034 decision 1): the population on the date (first posted since 2008, a version public on the date, interventional, open with SUSPENDED included, not lapsed under ADR 0014), the reason codes (`reversal`, `beyond_120_months`, `band_not_validated`), option B's served rows with the flag from month 42, the risks at 12 and 24 months and the five ADR 0033 drivers of each horizon. The features come from the offline feature code run on served keys (`scoring/features.py`, `scoring/rows.py`): every feature as of the date, the time features held at the last landmark passed (capped at 6), the recent-versions window sliding the trial's last landmark gap. Two Parquet files per date (the scores and the unscored trials), each with its SHA-256.
 - **The development checks** (`scoring/checks.py`), run before anything was served, with the decisions written to `data/results/checks/step13_checks.json`, which the scoring reads.
 - **The served champion** (`scoring/champion.py`): M4 with the tuned settings on all 1,448,969 landmark rows of the final cohort (4,245,433 intervals), the origin set to the day after the data cutoff, 1,642 rounds, 2,239 s, 12.2 MB; its sponsor priors fitted on the same rows. Saved with SHA-256 checks, logged to MLflow with no metric, and registered as `trialpulse-m4` version 1 with the alias `champion` (the alias `challenger` waits for Step 17).
 - **The serving tables** (`scoring/serving.py`, Alembic revision 0003): the latest score with the true landmark index and the flag, the change-only history with the reasons of each row (`first_score`, `record_change`, `landmark_passed`, `new_model`, `calendar`), measured against each trial's last history row, and `serving.trials_not_scored` with the reason codes.
 - **The model card's served scope** (`docs/model_card.md`).
+- **A cheaper exact driver pass** (`src/trialpulse/explain/drivers.py`, ADR 0035, proposed): the completion class's trees are skipped, and the trees that never split on the interval column are explained once instead of once per interval. The values are still LightGBM's `pred_contrib`, and every call checks them against the full pass on its first 16 rows.
 
 ### Acceptance criteria, with evidence
 
 | Criterion | Evidence | Met |
 | --- | --- | --- |
-| Scoring the same date twice gives identical hashes | The cutoff (2026-09-25) scored twice without drivers: `scores_2026-09-25.parquet` sha256 `e326ef47...c41045` and `unscored_2026-09-25.parquet` sha256 `8859165a...a2c3e` both times (88,895 scored; 2,704 not scored: 2,192 at 120 months or older, 512 with a visible reversal). With drivers, the same check waits for the full run (below); TreeSHAP is deterministic and a test checks each row's drivers against the row explained alone. | Yes, without drivers |
+| Scoring the same date twice gives identical hashes | The cutoff (2026-09-25) scored with drivers twice from `4f0e7ed` and once more from the final code (`531f180`): `scores_2026-09-25.parquet` sha256 `41f84fa3...e550be` and `unscored_2026-09-25.parquet` sha256 `8859165a...a2c3e` all three times (88,895 scored; 2,704 not scored: 2,192 at 120 months or older, 512 with a visible reversal). | Yes |
 | Training-serving parity on a historical date | `tests/scoring/test_parity.py` (slow, real data): on 2016-06-30, score() with the 2016 development champion and its origin's priors scores every harness row dated that day, with the largest difference at 12 and 24 months at most 1e-12. Passed. | Yes |
 | MLflow registry with champion and challenger aliases | `trialpulse-m4` version 1 has the alias `champion` (run `b82c99e3...`, from `075f19c`, clean tree). `register(run_id, CHALLENGER_ALIAS, cfg)` is the same call; no challenger exists before Step 17. | Champion yes; challenger alias defined, not used |
 | Change-only score history | `tests/scoring/test_publish.py` on a scratch Postgres database: a second run the same day writes nothing; a slow drift writes a row each time the score is 0.01 from the last history row; a same-day rerun replaces the day's rows; a returning trial is not a first score; each row's reasons. | Yes |
-| Local Postgres serving tables | Revision 0003 upgrades, downgrades and upgrades with rows in the history table (tested). Before the review fixes, the cutoff was published (88,895 rows) and a second publish wrote nothing; those rows had empty drivers and were removed. | Yes; the tables are empty until the run with drivers |
-| Five drivers stored with every score, cost measured (rule 3) | Measured on a seeded sample of 5,000 open trials at the cutoff: 257 s for drivers, 51.5 ms a trial, so about 76 minutes for the 88,895 scored trials. Not run in full: see "Blocked". | Measured; the run waits |
+| Local Postgres serving tables | Revision 0003 upgrades, downgrades and upgrades with rows in the history table (tested). The cutoff is published: 88,895 latest rows, all with five drivers at each horizon and none empty; 88,895 history rows, all `first_score`; 2,704 rows in `trials_not_scored`. The second and third publishes wrote nothing. The tables take 168 MiB (latest 141.6, history 26.0, not scored 0.5). | Yes |
+| Five drivers stored with every score, cost measured on the full run (rule 3) | The first pass measured 51.5 ms a trial on a seeded sample of 5,000 open trials, an estimated 76 minutes in full, so it was rebuilt (ADR 0035). On the full run at the cutoff the drivers took 1,319 s and 1,266 s (about 14 ms a trial), and the whole run 1,495 s and 1,443 s. The third run's time is not usable: the laptop went into standby during it. | Yes |
 | ruff, ruff format, mypy, pytest | ruff, ruff format and mypy clean; the full suite including slow tests passed from `1d40fe1`: 1,033 passed in 628 s (one MLflow deprecation warning from an earlier test); the last test change (`ac6b064`) passed on its own (17 passed). | Yes (on my shell) |
 
 ### Decisions made without asking (flagged)
@@ -2354,7 +2358,9 @@ From `docs/scoring_checks.md`: development origins only, 1,000 resamples, IPCW c
 5. **CI's test step gets the Postgres service's DATABASE_URL**, so the publish tests (which make, migrate and drop a scratch database) run in CI.
 6. **The card test reads `docs/scoring_checks.md` as a source** of the model card, and checks the direction of the served-scope claims against its tables.
 7. **The decisions file and the champion's bundle are read from `data/`** (gitignored): the checks run logs the decisions file to MLflow, and the bundle is the registered version's files. Step 14 will load both from MLflow.
-8. **I emptied the local serving tables** (TRUNCATE) after the review: they held only my runs, which were invalid (in-sample 2019 rows, empty drivers).
+8. **I emptied the local serving tables** (TRUNCATE) after the review: they held only my runs, which were invalid (in-sample 2019 rows, empty drivers). The full run refilled them.
+9. **I built a cheaper driver pass instead of waiting for your choice among A, B and C** (ADR 0035, status Proposed). Your rule 3 asks for a plan only for a job past about an hour, and this pass gives the same values under the hour, so nothing you asked for is narrowed. I also ran the full scoring and published it to local Postgres from `4f0e7ed` while the review was still running, and scored again from the final code afterwards. The three options stay open to you, and you may refuse this pass.
+10. **I regenerated `docs/explanations.md`, an approved Step 12 document.** Two cells changed, both the largest additivity gap, which prints rounding noise: 3.4e-14 became 2.4e-14 and 2.5e-14 became 2.8e-14. The four figures are byte for byte the same, and so is every other line. The command ran with `--unlock-test` as Step 12's did: it read the locked origins' saved scores, evaluated no metric and logged nothing. The Step 12 section above keeps the old largest value, 3.4e-14, as its record.
 
 ### The two-reviewer check
 
@@ -2385,35 +2391,62 @@ Two independent reviewers (numbers and point-in-time rules; claims, tests and do
 | The not-scored date not refreshed | Low | Fixed: it follows each run |
 | Three mutants equivalent in output | | Left: a bare UNKNOWN after a terminal version (such a state is not open), the explicit -1 before registration (such a trial is outside the population), `any` against `all` on one date (now a one-date check) |
 
+**Second round (2026-10-30), on the driver pass (commit `4f0e7ed`).** One reviewer tried to break the exactness claim on the real champion. It compared the pass tree by tree and found no tree without an interval split that changes with the interval, and no fault in the values. It ran 52 mutants: 31 killed, 12 surviving and equivalent in output (for example the fixed pass read at another interval, which is claim 2 of the ADR itself), and 9 surviving that weakened the guard or the tests. All 9 are now killed by tests added afterwards: the reviewer reran 7, and I reran the last 2 on a scratch copy.
+
+| Finding | Severity | What was done |
+| --- | --- | --- |
+| The ADR said the regenerated document comes out byte for byte; two cells of rounding noise differ (I found it as well) | Medium | Fixed: the ADR says so, and the document was regenerated |
+| The small test model has no moving tree in the stop class | Low | Fixed: a second small model, where the interval moves both classes |
+| No test held the check's tolerance, its refusal of NaN, its reach to the last interval or the absolute value | Low | Fixed: tests added |
+| No test held the number of intervals passed to the check | Low | Fixed: a test with every tree filed as fixed |
+| `split_trees` refused a booster with a best iteration, which the old pass explained | Low | Fixed: it no longer compares with `num_trees()` |
+
+A second reviewer then checked every claim and number in these documents against the logs, commits, result files and Postgres (`3c4cc2f`). The numbers held, and Parquet equals Postgres row for row. It found 13 things, one of them serious, and I reproduced that one before acting.
+
+| Finding | Severity | What was done |
+| --- | --- | --- |
+| "The laptop's memory is the limit" is refuted: the reviewer's rerun of my script gave 12 s, then 54 s, and per-CPU samples show Windows holding the workers on the efficiency cores | High | Confirmed by my own check (below). ADR 0035, this report and the interview notes corrected; my memory note replaced |
+| The ruff and pytest row predated the driver pass, and some listed commands had not run on the final commit | Medium | Fixed: the verify list ran on the final commit (below) |
+| "About four times" against 76 and 22 minutes, which is 3.5 | Low | Fixed: about a quarter of the work, or 3.5 to 4 times |
+| The interview notes said the options were not yet offered, and that the old pass took 76 minutes; it was an estimate | Low | Fixed |
+| The interview notes gave the parity test "2019-era dates"; it uses 2016-06-30 | Low | Fixed |
+| The status table still said Step 13 "Not started" | Low | Fixed |
+| "The Step 12 section below": it is above, and holds one of the two values | Low | Fixed |
+| The verify list ran pytest before `docker compose up -d`, so the publish tests could skip with exit 0 | Low | Fixed: Docker first, with the expected count |
+| "One Parquet file per date": there are two | Low | Fixed in `score.py` and here |
+| The order of events, and decision 9 silent on the publish | Low | Fixed |
+| `3c4cc2f` not cited; `531f180` is typed `test:` but carries a source change | Low | Cited here; the commit's body states the change, and the commits stay as they are |
+| 1,060 bytes is text length (1,207 as stored), and 168 is MiB (176.3 MB) | Low | Fixed |
+| ADR 0033's 6.5 ms is per row and pass | Low | Fixed |
+
+**My own check of the throttling (2026-10-31).** 8 spin processes for 20 s, alternating: 31.6, 126.3, 31.6 and 121.5 million counts a second (control, opt-out, control, opt-out). A full cutoff run with drivers in a process that opted out took 304 s against 1,443 s and 1,495 s (drivers 257 s against 1,266 s and 1,319 s), and gave the same two hashes. It wrote to the scratch folder only and published nothing.
+
 ### Blocked, skipped or deferred
 
-1. **Blocked: the full scoring run with drivers.** At 51.5 ms a trial it would take about 76 minutes at the cutoff (and about 55 minutes for the 64,098 trials of 2019-06-30). LightGBM's TreeSHAP already runs on 8 threads, and more do not help: on 1,000 rows and one interval, 90.6 s on 1 thread, 29.7 s on 4, 26.6 s on 8 (the default), 27.5 s on 16. The served champion is larger than the per-origin models (1,642 rounds against about 1,100), and the drivers need four passes (one per interval of the 24-month horizon). Options, for your decision:
-   - **A. Carry drivers forward (recommended).** Compute a trial's drivers when its history row is written (a first score, a record change, a landmark passed, a new model, or a move of 0.01 or more) and otherwise keep the stored ones with the date they were computed (`drivers_as_of`). The first full run computes them all in resumable chunks of 20,000 trials (about 17 minutes each), so no single job passes the hour; later runs explain only the trials whose score changed. Every served score keeps exact drivers for the features they were computed on, which differ from today's by less than a 0.01 move. An ADR would record it.
-   - **B. Drivers at 12 months only.** Two passes instead of four: about 38 minutes for every full run. The 24-month score is served without drivers of its own, a narrowing of Section 13 and ADR 0033.
-   - **C. Full drivers on every run.** About 76 minutes for each full run here, more on GitHub's 4-core runners in Step 14, as a declared exception to the one-hour rule.
-2. **The verify command's drivers.** `score --as-of 2019-06-30` computes drivers by default (about 55 minutes) and, as an in-sample date, is not published. The verify list below uses `--no-drivers` for that reason.
-3. **Deferred to Step 14:** loading the bundle and the decisions file from MLflow (the daily job has no `data/`), the daily driver cost under whichever option is chosen, and the warehouse rebuild of ADR 0020.
-4. **Deferred to Step 17:** the alias `challenger`, and grading the flagged group separately (ADR 0034).
-5. **Not reported, by rule:** no metric of the served champion.
+1. **Nothing is blocked.** The full scoring run with drivers ran (see the acceptance table). None of the three options of 2026-10-27 was built: A (carry drivers forward), B (12-month drivers only) and C (the full pass on every run). ADR 0035 records why this pass made them unnecessary and that they stay open to you.
+2. **A decision for you: Windows' throttling of long jobs.** Windows held these background jobs on the four efficiency cores, at least part of the time. A one-call opt-out at the start of a process (`SetProcessInformation` with `ProcessPowerThrottling`) made a full cutoff run about 4.7 times faster with identical results, and it would apply to the long jobs of later steps. It is not adopted. Options: **(a)** add the call to the project's command wrapper `trialpulse.cli.run`, a no-op outside Windows (my recommendation); **(b)** leave it, since the pass is under the hour anyway. Against (a): more heat and power draw, and the laptop has already shut down once on battery during a long run. Not established: why Windows does this at some moments only, and whether a run from your own terminal in the foreground is affected. It is also not established that the evening's flat timings were this state; a control run reproduced the same rate the next day.
+3. **Not tested in the repository:** one-leaf trees in the split pass. The champion has none; the reviewer forced some outside the repository, with a gap of at most 2.2e-16. The second reviewer could not check the MLflow server (it had no access to the secrets); the registry claim rests on `meta.json` and the command's output.
+4. **Deferred to Step 14:** loading the bundle and the decisions file from MLflow (the daily job has no `data/`), the driver cost on GitHub's runners, the serving tables' 168 MiB (176 MB) in the Neon estimate (about 1,200 bytes of stored drivers a row), and the warehouse rebuild of ADR 0020.
+5. **Deferred to Step 17:** the alias `challenger`, and grading the flagged group separately (ADR 0034).
+6. **Not reported, by rule:** no metric of the served champion.
 
 ### Files touched
 
-- New: `docs/adr/0034-scoring-between-landmarks-and-beyond-landmark-6.md`, `docs/scoring_checks.md`, `alembic/versions/0003_served_scores.py`, `src/trialpulse/scoring/{__init__,rows,features,checks,score,champion,serving}.py`, `tests/features/test_served_keys.py`, `tests/scoring/{conftest,test_rows,test_checks,test_score,test_predict,test_champion,test_serving,test_publish,test_parity}.py`.
-- Changed: `CLAUDE.md` (Amendments), `docs/model_card.md`, `docs/progress.md`, `docs/interview_notes.md`, `docs/calibration_diagnosis.md` and `src/trialpulse/eval/diagnosis.py` (the Step 12 follow-up), `src/trialpulse/cohort/landmarks.py`, `src/trialpulse/features/{states,build}.py`, `src/trialpulse/dates.py`, `src/trialpulse/explain/drivers.py`, `tests/explain/test_drivers.py`, `tests/test_cards.py`, `tests/warehouse/test_migrations.py`, `.github/workflows/ci.yml`.
+- New: `docs/adr/0034-scoring-between-landmarks-and-beyond-landmark-6.md`, `docs/adr/0035-a-cheaper-exact-driver-pass.md`, `docs/scoring_checks.md`, `alembic/versions/0003_served_scores.py`, `src/trialpulse/scoring/{__init__,rows,features,checks,score,champion,serving}.py`, `tests/features/test_served_keys.py`, `tests/scoring/{conftest,test_rows,test_checks,test_score,test_predict,test_champion,test_serving,test_publish,test_parity}.py`.
+- Changed: `CLAUDE.md` (Amendments), `docs/model_card.md`, `docs/explanations.md`, `docs/progress.md`, `docs/interview_notes.md`, `docs/calibration_diagnosis.md` and `src/trialpulse/eval/diagnosis.py` (the Step 12 follow-up), `src/trialpulse/cohort/landmarks.py`, `src/trialpulse/features/{states,build}.py`, `src/trialpulse/dates.py`, `src/trialpulse/explain/drivers.py`, `tests/explain/test_drivers.py`, `tests/test_cards.py`, `tests/warehouse/test_migrations.py`, `.github/workflows/ci.yml`.
 
 ### Verify (PowerShell)
 
 ```
-uv run pytest tests/scoring -q
-uv run pytest tests/scoring tests/features/test_served_keys.py -q -m "slow or not slow"
 docker compose up -d
 uv run alembic upgrade head
-uv run python -m trialpulse.scoring.score --as-of 2019-06-30 --no-drivers
-uv run python -m trialpulse.scoring.score --as-of 2026-09-25 --no-drivers --no-serving
-uv run python -m trialpulse.scoring.score --as-of 2026-09-25 --no-drivers --no-serving
+uv run pytest tests/scoring tests/explain tests/features/test_served_keys.py -q -m "slow or not slow"
+uv run python -m trialpulse.scoring.score --as-of 2019-06-30
+uv run python -m trialpulse.scoring.score --as-of 2026-09-25
+uv run python -m trialpulse.scoring.score --as-of 2026-09-25
 ```
 
-The first scoring command writes 2019-06-30 to files only and prints why it is not published (no drivers; with drivers it would be held back as in-sample). The last two print the same two SHA-256 values. The slow parity test needs the real data and the cached development model (`data/scoring/dev_models/`). The checks and the champion are not in the list: they take about 12 and 37 minutes and are logged runs (`uv run python -m trialpulse.scoring.checks`, `uv run python -m trialpulse.scoring.champion`).
+The pytest line prints 102 passed and no skips, with Docker up. The three scoring commands took about 17, 25 and 25 minutes from this session, and may take about a fifth of that when Windows does not throttle them. The first writes 2019-06-30 to files only and prints why (in-sample). The other two print the hashes `41f84fa3...` and `8859165a...`, and every `serving:` count is 0, because the tables already hold the cutoff. The slow parity test needs the real data and the cached development model (`data/scoring/dev_models/`). The explanations, the checks and the champion are not in the list: they take about 16, 12 and 37 minutes (`uv run python -m trialpulse.explain.report --unlock-test`, `uv run python -m trialpulse.scoring.checks`, `uv run python -m trialpulse.scoring.champion`).
 
 ### The two decisions, with options
 
