@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 
-from trialpulse.cli import RefusedError, run
+from trialpulse.cli import RefusedError, opt_out_of_throttling, run
 from trialpulse.config import REPO_ROOT, ProjectConfig, load_project_config
 from trialpulse.contracts.sponsor import sponsor
 from trialpulse.contracts.text import EMAIL_MARKER, is_html
@@ -219,9 +219,17 @@ class _InlineExecutor(Executor):
         return future
 
 
+def worker_pool(workers: int) -> Executor:
+    """The chunk workers. Each opts out of Windows' throttling itself: a child process does
+    not inherit the setting (ADR 0036)."""
+    if workers > 1:
+        return ProcessPoolExecutor(max_workers=workers, initializer=opt_out_of_throttling)
+    return _InlineExecutor()
+
+
 @contextmanager
 def _executor(workers: int) -> Iterator[Executor]:
-    pool: Executor = ProcessPoolExecutor(max_workers=workers) if workers > 1 else _InlineExecutor()
+    pool = worker_pool(workers)
     try:
         yield pool
     finally:
