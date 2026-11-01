@@ -19,14 +19,14 @@ the dataset path (the bootstrap) and the API v2 path share one function.
 
 import hashlib
 import hmac
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from trialpulse.cohort.rules import CohortRules, submitted_status
-from trialpulse.contracts.sponsor import ORGANIZATION_WORD, has_identity
+from trialpulse.contracts.sponsor import has_identity, sponsor_key
 from trialpulse.features.design import resolved_title_phase
 from trialpulse.features.registry import INTERVENTION_TYPES
+from trialpulse.live import organization_words
 
 # Column name -> storage type, in the order of the compact row. The same names and types are
 # the columns of `live.study_versions` and the latest-record part of `live.trial_state`.
@@ -84,8 +84,9 @@ MARKER_GROUPS: dict[int, tuple[str, ...]] = {
     16: ("sponsor_id", "lead_sponsor_class", "organization_class"),
     32: ("title_phase", "intervention_types"),
 }  # fmt: skip
-HIDDEN_CLASSES: tuple[str, ...] = ("OTHER", "UNKNOWN", "AMBIG")
-_PLAIN_WORD = re.compile(r"^[^\W\d_]+(?:['\u2019-][^\W\d_]+)*$")  # an inner ' or -
+# ADR 0059: classes whose large sponsors may be shown without an organization word.
+SHOWN_CLASSES: tuple[str, ...] = ("INDUSTRY", "NIH", "FED", "OTHER_GOV", "NETWORK")
+MIN_TRIALS_LED = 5
 
 
 class MissingSecretError(RuntimeError):
@@ -102,21 +103,31 @@ def sponsor_id(key: str | None, individual: bool | None, secret: bytes) -> str |
     return hmac.new(secret, key.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def display_name(name: str | None, sponsor_class: str | None) -> str | None:
-    """The name shown for a sponsor, or None (ADR 0044): no name for a sponsor of class OTHER,
-    UNKNOWN or AMBIG whose name is two or three plain words with no organization word. The
-    stored name of an individual is already None (`contracts.sponsor`)."""
+def has_organization_word(name: str) -> bool:
+    """Whether a name holds a word of the committed list (`live.organization_words`)."""
+    if organization_words.DOTTED.search(name):
+        return True
+    for word in (sponsor_key(name) or "").split():
+        if word in organization_words.WORDS or word.startswith(organization_words.PREFIXES):
+            return True
+    return False
+
+
+def display_name(name: str | None, sponsor_class: str | None, trials_led: int) -> str | None:
+    """The name shown for a sponsor, or None (ADR 0059, an allowlist that replaces ADR 0044's
+    rule). A name is shown only if it holds an organization word, or it is a single word, or
+    its class is INDUSTRY, NIH, FED, OTHER_GOV or NETWORK and it leads at least 5 of the
+    live trials (`trials_led`). Every other name is hidden. The stored name of an
+    individual is already None (`contracts.sponsor`)."""
     if not name:
         return None
-    words = name.split()
-    plain = 2 <= len(words) <= 3 and all(_PLAIN_WORD.match(w) for w in words)
-    if (
-        (sponsor_class or "UNKNOWN") in HIDDEN_CLASSES
-        and plain
-        and not ORGANIZATION_WORD.search(name)
-    ):
-        return None
-    return name
+    if has_organization_word(name):
+        return name
+    if len((sponsor_key(name) or "").split()) == 1:
+        return name
+    if (sponsor_class or "") in SHOWN_CLASSES and trials_led >= MIN_TRIALS_LED:
+        return name
+    return None
 
 
 def distinct_intervention_types(pairs: Iterable[tuple[str | None, str | None]]) -> list[str]:

@@ -152,7 +152,7 @@ def test_a_daily_run_publishes_and_a_second_run_changes_nothing(dsn: str) -> Non
               for p in pages for s in _load(p)["studies"]}  # fmt: skip
     assert {n for n, _ in shown} == live & pulled
     assert all(title for _, title in shown)
-    assert "Example Sponsor Organization" not in names  # three plain words of class OTHER
+    assert "Example Sponsor Organization" in names  # an organization word (ADR 0059)
     assert names
     assert status == (DAY, "stand-in/1")
     before = _digest(dsn)

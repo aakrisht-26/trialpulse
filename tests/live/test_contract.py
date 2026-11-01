@@ -103,28 +103,85 @@ def test_the_sponsor_id_is_keyed_and_only_for_a_sponsor_with_an_identity() -> No
         contract.sponsor_id("acme pharma", False, b"")
 
 
+# The shapes the review of Steps 14 to 16 found shown under ADR 0044's rule, and the masked
+# shapes of its measurement on real records ("Aaaa A. Aaaa" and others), with what ADR 0059
+# shows. Synthetic names only.
+PERSON_SHAPES = [
+    ("Jane Example", "OTHER"),
+    ("Jane A. Example", "OTHER"),  # a middle initial
+    ("Example, Jane", "OTHER"),  # surname first
+    ("Jane Example, MSc", "OTHER"),  # degrees outside ADR 0012's list
+    ("Jane Example, PharmD", "OTHER"),
+    ("Jane Example, MBBS", "OTHER"),
+    ("Jane Example RN", "OTHER"),
+    ("Maria del Carmen Example", "OTHER"),  # four words
+    ("J. Example", "OTHER"),
+    ("Jane Q Example-Sample Jr", "OTHER"),
+    ("Jane Mary A. Example", "OTHER"),  # "Aaaa Aaaa A. Aaaa"
+    ("Ann B. Example Jr.", "OTHER"),  # "Aaa A. Aaaa Aa."
+    ("Jane A. Example, Sc.D.", "FED"),  # "Aaaa A. Aaaa, Aa.A." under a public class
+    ("Jane Ex Ample A Sample Ex Ample Ex Ample Ex Ample Example Ex Ample", "OTHER"),
+    ("Jane Example", "UNKNOWN"),
+    ("Mary-Jane O'Example", "AMBIG"),
+    ("Jane Example", "INDUSTRY"),  # a person under an industry class, leading one trial
+    ("Jane Example", "NIH"),
+    ("Jane Example", "NETWORK"),
+    ("Jane Example", "OTHER_GOV"),
+    ("Jane Example", None),
+    ("Carey Example", "OTHER"),  # opens "care", which is a whole word only
+    ("Charity Example", "OTHER"),
+    ("Lorenzo Medici", "OTHER"),  # opens "medic", which is not a stem
+    ("Jose Co", "OTHER"),  # "Co" without its dot
+    ("Kim Sa", "OTHER"),
+    ("Ab Example", "OTHER"),
+]
+
+
+@pytest.mark.parametrize(("name", "sponsor_class"), PERSON_SHAPES)
+def test_a_name_that_may_be_a_person_is_hidden(name: str, sponsor_class: str | None) -> None:
+    assert contract.display_name(name, sponsor_class, 1) is None
+
+
 @pytest.mark.parametrize(
-    ("name", "sponsor_class", "shown"),
+    "name",
     [
-        ("Jane Example", "OTHER", False),
-        ("Jane Q Example", "UNKNOWN", False),
-        ("Mary-Jane O'Example", "AMBIG", False),
-        ("Jane Example", "INDUSTRY", True),  # industry sponsors stay searchable
-        ("Jane Example", "NIH", True),
-        ("Jane Example", "NETWORK", True),
-        ("Jane Example", "OTHER_GOV", True),
-        ("Example University", "OTHER", True),  # an organization word
-        ("Example Medical Center", "OTHER", True),
-        ("Kestrel", "OTHER", True),  # one word
-        ("Four Words Name Here", "OTHER", True),
-        ("Example 2 Trust", "OTHER", True),
-        ("Acme Co.", "OTHER", True),  # not plain words
-        ("Jane Example", None, False),
-        (None, "OTHER", False),
+        "Example University", "Example Medical Center", "Example NHS Foundation Trust",
+        "Acme Co.", "Acme S.A.", "Acme A/S", "Acme GmbH", "Acme Pharma Inc.", "Acme AG",
+        "Universidad de Example", "Hospital Universitario Example", "Fundação Example",
+        "Hôpital Example", "Assistance Publique - Hôpitaux de Paris", "Groupe Example",
+        "Ospedale Example", "Azienda Ospedaliera Example", "IRCCS Example",
+        "Example Universitätsklinikum", "Example Krankenhaus", "Stiftung Example",
+        "Example Ziekenhuis", "Stichting Example", "Example Sjukhus", "Region Example",
+        "Example Yliopisto", "Szpital Example", "Example Egyetem", "Example Hastanesi",
+        "Example Eğitim ve Araştırma", "Example Study Group", "Example Trials Unit",  # noqa: RUF001
+    ],
+)  # fmt: skip
+def test_a_name_with_an_organization_word_is_shown(name: str) -> None:
+    assert contract.display_name(name, "OTHER", 1) == name
+
+
+@pytest.mark.parametrize(
+    ("name", "sponsor_class", "led", "shown"),
+    [
+        ("Kestrel", "OTHER", 1, True),  # a single word
+        ("Kestrel", None, 0, True),
+        ("Example-Sample", "OTHER", 1, False),  # two words once punctuation is a space
+        ("Hoffmann Example", "INDUSTRY", 5, True),  # a large sponsor of a listed class
+        ("Hoffmann Example", "INDUSTRY", 4, False),
+        ("Jane Example", "NIH", 5, True),
+        ("Jane Example", "FED", 5, True),
+        ("Jane Example", "OTHER_GOV", 5, True),
+        ("Jane Example", "NETWORK", 5, True),
+        ("Jane Example", "OTHER", 50, False),  # OTHER is not a listed class
+        ("Jane Example", "INDIV", 50, False),
+        (None, "INDUSTRY", 50, False),
+        ("", "INDUSTRY", 50, False),
     ],
 )
-def test_who_gets_a_display_name(name: str | None, sponsor_class: str | None, shown: bool) -> None:
-    assert (contract.display_name(name, sponsor_class) is not None) is shown
+def test_who_gets_a_display_name(
+    name: str | None, sponsor_class: str | None, led: int, shown: bool
+) -> None:
+    assert (contract.display_name(name, sponsor_class, led) is not None) is shown
 
 
 def test_interventions_count_distinct_pairs_on_exact_strings() -> None:
