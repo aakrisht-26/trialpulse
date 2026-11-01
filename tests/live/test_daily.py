@@ -523,3 +523,33 @@ def test_a_database_not_at_the_migration_head_is_refused(dsn: str) -> None:
         con.commit()
     with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0005"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+
+
+@respx.mock
+def test_a_trial_that_ends_loses_its_display_row(dsn: str) -> None:
+    """ADR 0051: display rows are those of the live trials; a trial that completes leaves the
+    live state, and its display row goes with it (found by a deliberate fault: nothing
+    tested the removal)."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    first = _load("delta_page_1.json")["studies"][0]["protocolSection"]
+    nct = first["identificationModule"]["nctId"]
+    with psycopg.connect(dsn) as con:
+        shown = con.execute("SELECT count(*) FROM serving.trial_display WHERE nct_id = %s",
+                            (nct,)).fetchone()  # fmt: skip
+    assert shown == (1,)
+
+    def completed(studies: list[dict[str, Any]], second: bool) -> list[dict[str, Any]]:
+        if second:
+            return studies
+        studies = _set(studies, "statusModule.overallStatus", "COMPLETED", {0})
+        return _set(studies, "statusModule.lastUpdatePostDateStruct.date", "2026-11-02", {0})
+
+    monday = daily.run_daily(CFG, dsn, SECRET, _edited_api(completed, "2026-11-02"), MODEL)
+    assert monday.status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        live = con.execute("SELECT count(*) FROM live.trial_state WHERE nct_id = %s", (nct,))
+        assert live.fetchone() == (0,)
+        shown = con.execute("SELECT count(*) FROM serving.trial_display WHERE nct_id = %s",
+                            (nct,)).fetchone()  # fmt: skip
+    assert shown == (0,)
