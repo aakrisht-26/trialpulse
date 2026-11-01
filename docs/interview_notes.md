@@ -317,3 +317,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "Your UI tests passed. How do you know the page really works?"
 
 **Short answer.** I also ran the real dashboard against the real API in a headless browser, and that found something the tests could not. After `st.stop()`, the live Streamlit runtime drops everything the page draws later, so the footer with the attribution and data date vanished on the page of a trial without a score. Streamlit's own test harness still drew it, so every AppTest passed. Two fixes followed. The pages now end early with `return` inside a function that the frame wraps. A source test forbids `st.stop` in the dashboard, because no AppTest can catch that fault. The stubs come from the real API on a seeded database, and a Postgres test fails when the API's answers drift from them. I also broke the code on purpose 23 times against the new tests; one fault got through (a timeline whose earlier points were named but not drawn), and the test that should have caught it was made stronger.
+
+## Step 18 (README only): the two-minute page
+
+**What was built.** A README for a reader with two minutes: what TrialPulse is and who it is for, the registered results with their intervals, the falsified hypotheses next to the ones that held, four short paragraphs on what makes it more than a classifier, an architecture diagram, a plain status table, and a quickstart that says which commands need the gated dataset.
+
+**Key decision and why.** Put the falsified hypotheses on the front page, in bold, beside the headline numbers. A reader who only sees the AUC learns less than one who also sees that the model did not beat a static classifier at registration and is not calibrated at 24 months. A test holds every number in the README to the results file and the model card, so the front page cannot drift from the record.
+
+**Rejected alternative and why not.** A README that carries the depth itself (method details, every table). It would duplicate the docs, drift from them, and lose the two-minute reader; depth stays in linked documents.
+
+**Likely interview question.** "Why lead with what failed?"
+
+**Short answer.** Because the claims I can defend are the registered ones, and the falsified predictions are part of that record. Showing them tells a reviewer that the test was real: the predictions were committed before the locked origins were opened, and some of them missed.
