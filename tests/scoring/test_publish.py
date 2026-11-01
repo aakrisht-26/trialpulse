@@ -37,7 +37,7 @@ def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     if secret is None:
         pytest.skip("DATABASE_URL is not set")
     base = _libpq(secret.get_secret_value())
-    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=3)
+    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
     name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
     try:
         with psycopg.connect(admin, autocommit=True) as con:

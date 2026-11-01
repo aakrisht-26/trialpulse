@@ -202,3 +202,27 @@ def test_organizations_keep_a_display_name_and_a_normalized_key() -> None:
     fullwidth = "\uff21\uff23\uff2d\uff25"  # ACME in fullwidth letters
     assert sponsor_key(f"{fullwidth}  Labs\u2014Europe") == "acme labs europe"
     assert sponsor(None, "OTHER") == type(stored)(None, None, False)
+
+
+def test_a_comment_line_between_markdown_lists_is_markup_not_text() -> None:
+    """API v2 separates adjacent lists with `<!-- -->` (ADR 0042); the HTML form of the same
+    criteria has no such line, and both normalize to the same text."""
+    markdown = "Inclusion:\n\n* Age 18\n* Consent\n\n<!-- -->\n\n1. Prior therapy\n2. ECOG 0"
+    html = (
+        "<p>Inclusion:</p><ul><li>Age 18</li><li>Consent</li></ul>"
+        "<ol><li>Prior therapy</li><li>ECOG 0</li></ol>"
+    )
+    expected = "Inclusion:\nAge 18\nConsent\nPrior therapy\nECOG 0"
+    assert normalize_text(markdown) == expected
+    assert normalize_text(html) == expected
+    # A comment line also ends a paragraph, and an empty comment carries no text.
+    assert normalize_text("First line\n<!-- note -->\nsecond") == "First line\nsecond"
+    assert normalize_text("<!-- -->") is None
+    # A comment inside a line is text the registry wrote, and stays.
+    assert normalize_text("Dose <!-- x --> 5 mg") == "Dose <!-- x --> 5 mg"
+
+
+def test_the_comment_rule_leaves_html_texts_unchanged() -> None:
+    """The dataset's HTML texts keep their path: the rule is on the Markdown path only."""
+    html = "<p>Before</p><!-- -->\n<p>After</p>"
+    assert normalize_text(html) == "Before\n<!-- -->\nAfter"
