@@ -278,9 +278,16 @@ def test_a_trial_without_a_score_keeps_its_earlier_points(stub_api: StubApi) -> 
     at = app("trial", nct="NCT00000005")  # beyond 120 months, scored once before
     assert not at.metric
     assert "Earlier scores: this trial has no current score." in texts(at)
-    names = [t["name"] for t in chart(at)["data"]]
-    assert names[:2] == ["Early-stop risk, 12 months (earlier scores)",
-                         "Early-stop risk, 24 months (earlier scores)"]  # fmt: skip
+    traces = chart(at)["data"]
+    assert [t["name"] for t in traces[:2]] == [
+        "Early-stop risk, 12 months (earlier scores)",
+        "Early-stop risk, 24 months (earlier scores)",
+    ]
+    points = next(e for e in STUBS if e["path"] == "/v1/trials/NCT00000005/timeline")["body"]
+    assert points["points"]  # the recorded earlier score
+    for trace, horizon in zip(traces[:2], ("12", "24"), strict=True):  # drawn, not just named
+        assert trace["x"] == [p["as_of_date"] for p in points["points"]]
+        assert trace["y"] == [p[f"risk_{horizon}m"] for p in points["points"]]
 
 
 def test_an_unknown_or_malformed_registry_id(stub_api: StubApi) -> None:

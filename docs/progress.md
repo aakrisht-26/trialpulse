@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 15 (API service)**, started on 2026-11-01 with Aakrisht's approval before the laptop half of Step 14: built and tested in the cloud (see "Step 15"); the deployment and the Neon parts are left for the laptop. **Step 14**'s cloud parts are merged; its laptop and Neon parts remain (see "Step 14", "Left for the laptop"). Step 13 was approved on 2026-10-31.
+Current step: **Step 16 (Dashboard)**, started on 2026-11-01 with Aakrisht's approval: built and tested in the cloud against the API and a seeded database (see "Step 16"); the deployment to Streamlit Community Cloud and the screenshots against the deployed API are left for the laptop. **Step 15** was approved on 2026-11-01; its deployment and Neon parts remain for the laptop. **Step 14**'s cloud parts are merged; its laptop and Neon parts remain (see "Step 14", "Left for the laptop"). Step 13 was approved on 2026-10-31.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -91,8 +91,8 @@ Current step: **Step 15 (API service)**, started on 2026-11-01 with Aakrisht's a
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045); the cloud part built on `step-14-cloud`, waiting for review; the laptop and Neon parts not started |
-| 15 | API service | Decided 2026-11-01 (ADRs 0046 to 0051); built and tested in the cloud on `step-15-cloud`, waiting for review; the deployment and Neon parts are left for the laptop |
-| 16 | Dashboard | Not started |
+| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; the deployment and Neon parts are left for the laptop |
+| 16 | Dashboard | Decided 2026-11-01 (ADRs 0052 to 0057); built and tested in the cloud on `step-16-cloud`, waiting for review; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
 | 18 | Documentation and polish | Not started |
 
@@ -2500,9 +2500,179 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
 
+## Step 16: Dashboard
+
+Date: 2026-11-01. Status: **built and tested in the cloud session, on branch `step-16-cloud`; waiting for review.** The dashboard was built against the API (Step 15) and a seeded database on this VM. The deployment to Streamlit Community Cloud and the screenshots against the deployed API are left for the laptop. Evidence below is from the session's shell on Linux with Postgres 16; it is not a claim about the laptop.
+
+### The decisions (ADRs 0052 to 0057, the branch's first commit `84c7e42`)
+
+| # | Decision | ADR |
+| --- | --- | --- |
+| 1 | One Trial detail layout for every trial. A score card shows the risk at 12 and 24 months, its date, the flag and five drivers per horizon. One chart shows every served point and the amendment markers on the same date axis, with the span before the first point shaded ("the risk line starts at go-live"). A trial without a score shows its reason and no risk, and keeps its earlier points. Registry ids link to ClinicalTrials.gov, and the drivers carry ADR 0033's note | 0052 |
+| 2 | Model health shows what exists: freshness (a warning past 3 days), the served model, the registered results with intervals, falsified hypotheses, limitations and today's scope. Drift and graded performance say they arrive with Step 17 | 0053 |
+| 3 | One client for every page retries a service that is starting and a database that is waking, honoring `Retry-After`, with about 3 minutes in all, and says on the page why it waits. `/health` comes first. After the limit, a plain message and "Try again". Answers are cached for 15 minutes, failures never. No keep-alive workflow | 0054 |
+| 4 | A flagged score keeps its number, with the badge "Outside the validated range" and the note. Rankings keep flagged trials in place, with a flag column, the note in the caption and a "Hide flagged" switch that starts off | 0055 |
+| 5 | Tests use stubs recorded from the real API on the seeded database; a Postgres test fails when the API's answers drift | 0056 |
+| Rules | Why trials stop is descriptive and calls only the reasons endpoint. Landscape shows the API's statements on areas | 0057 |
+
+### What was built
+
+| Part | Where | Held by |
+| --- | --- | --- |
+| The entry point and its navigation (Overview, Portfolio, Trial detail, Landscape, Why trials stop, Model health) | `app/Home.py`, `app/pages/` | A navigation test per page |
+| The API client: retries, waits, messages and the budget; no Streamlit import | `app/dashboard/client.py` | `tests/app/test_client.py` (8 tests) |
+| The frame (notice on top, risk wording, attribution, data-as-of date and notice at the foot), the 15-minute cache, the visible waits, the flag and ranking parts | `app/dashboard/ui.py` | The page tests |
+| The figures: the timeline, open trials per area, reasons per year or month | `app/dashboard/charts.py` | The page tests read each figure's data |
+| The packages: a `dashboard` dependency group (httpx, plotly, streamlit) and `app/requirements.txt` with uv.lock's versions for Community Cloud | `pyproject.toml`, `uv.lock`, `app/requirements.txt` | `tests/app/test_imports.py` |
+| Streamlit settings: viewers see no traceback, the toolbar is for viewers only, no usage statistics; `.streamlit/secrets.toml` is gitignored | `.streamlit/config.toml`, `.gitignore` | |
+| The recorded stubs: 46 answers of the real API on the seeded database (including a 404, the API's 503 with its database down and its 429 at the rate limit), plus one earlier score for a trial without a score | `tests/app/stubs.json`, `tests/app/test_stubs.py` | The Postgres test records them again and compares; `--record-stubs` writes them |
+| mypy now checks `app/` too, in CI and pre-commit | `.github/workflows/ci.yml`, `.pre-commit-config.yaml` | |
+
+**The page tests** (`tests/app/test_pages.py`, AppTest against the stubs through respx, no database):
+- **The frame:** on every page, the notice is on top and at the foot, with the attribution, the data-as-of date and "elevated early-stop risk". "will fail" appears nowhere, and every page also runs through the app's own navigation. The same holds on every page that ends early (a trial without a score, an unknown or malformed id, a short or unknown sponsor prefix). The dashboard's copy of the notice and attribution equals the API's in every recorded answer.
+- **Waking (every page):** the service starting (connection refused, the proxy's 502, a timeout) is waited out at 5, 10 and 20 seconds, with "/health" asked first. The database waking (the API's 503) is waited out for its `Retry-After`. Each wait shows its message, and a 429 is waited out for its `Retry-After`.
+- **Giving up (every page):** after the budget, the page says "The API did not answer within about 3 minutes." with "Try again". It shows no traceback and keeps the notice and attribution, with the date marked unknown. "Try again" then shows the page. A database that never wakes gives up within 180 seconds.
+- **Errors (every page):** a 500 is shown in plain words and not retried.
+- **Cache:** answers are kept for 15 minutes and asked again after; failures are never kept.
+- **Trial detail:**
+  - a flagged trial shows its numbers, badge, note, registry link, driver note, both driver tables, a flagged marker, the two amendment markers, and the shaded span ending at the first point;
+  - an unflagged trial has no badge;
+  - a reversal shows its reason and code with no risk and no drivers;
+  - a trial beyond 120 months keeps its earlier score drawn;
+  - an unknown id answers in words with the registry link;
+  - a malformed or empty id makes no call;
+  - a typed id is read in capitals.
+- **Portfolio:**
+  - ranked by risk, with the flagged trial in place;
+  - a trial without a score has its reason and no rank;
+  - the switch starts off and hides flagged trials when turned on;
+  - a short prefix makes no call.
+- **Landscape and Why trials stop:**
+  - Landscape shows the API's area note, which holds both statements, and the area's own note;
+  - Why trials stop calls the reasons endpoint only, says the scores do not predict a reason, shows no risk, and filters by sponsor class.
+- **Model health:** freshness within 3 days, a warning on day 4, the registered results with intervals, the falsified hypotheses, the limitations, the flagged share, and the two Step 17 sections. Without a statement or a data date, the page says so.
+- **Personal data:** a sponsor without a display name shows its class only. No seeded name or sponsor id appears on its trial's page.
+
+**The guards** (`tests/app/test_imports.py`): every file under `app/` imports only streamlit, plotly, httpx, its own `dashboard` package and the standard library. Nothing under `app/` opens a file, names `data/`, psycopg or `DATABASE_URL`, or calls `st.stop`. The Community Cloud pins equal uv.lock's versions.
+
+### The real dashboard against the real API, in a browser
+
+The API ran under uvicorn on a seeded database (403 scored and 22 unscored trials). The dashboard ran under `streamlit run app/Home.py`, and Playwright's Chromium opened every page. All seven views (the overview, a portfolio, a flagged trial, a trial without a score, the landscape, the reasons and Model health) showed the notice and the data-as-of date, with no traceback and no page error.
+
+The first browser run found a fault that AppTest cannot see. **After `st.stop()`, the live runtime drops everything the frame draws later**, so the page of a trial without a score lost its attribution and data-as-of date. AppTest still drew them, so every test passed. The pages now end early with `return` inside a function that the frame wraps (`ui.run`), and a source test forbids `st.stop` under `app/`. The browser run also showed "None" as the rank of a trial without a score; it is now blank, and a test holds that.
+
+### Faults against the new tests
+
+23 deliberate faults went into a scratch copy of the branch outside the repository; each was run against `tests/app`, F22 with Postgres required. 22 were caught at once. F23 got through: the test of earlier points checked the trace names, but not that the points were drawn. The test now compares the plotted dates and values with the recorded timeline, and it then caught F23.
+
+| Fault | Result |
+| --- | --- |
+| F1 the API's own 503 read as the service starting | Caught |
+| F2 `Retry-After` ignored | Caught |
+| F3 a 502 from the proxy not retried | Caught |
+| F4 no waiting budget | Caught |
+| F5 a 429 returned as the answer | Caught |
+| F6 failures kept in the cache | Caught |
+| F7 answers kept for 15 hours | Caught |
+| F8 `/health` not called first | Caught |
+| F9 the attribution dropped from the foot | Caught |
+| F10 the data-as-of date never recorded | Caught |
+| F11 "Hide flagged" does nothing | Caught |
+| F12 "Hide flagged" starts on | Caught |
+| F13 a sponsor without a display name shown without its class | Caught |
+| F14 no badge on a flagged score | Caught |
+| F15 the drivers' note dropped | Caught |
+| F16 the shaded span ends at the last point | Caught |
+| F17 the reasons page calls a score endpoint | Caught |
+| F18 the area note dropped from Landscape | Caught |
+| F19 stale data warned only after 30 days | Caught |
+| F20 a page stops its script | Caught |
+| F21 the dashboard imports the `trialpulse` package | Caught |
+| F22 the API's area note changes (the stubs drift) | Caught |
+| F23 a trial without a score loses its earlier points | Got through; caught after the stronger test |
+
+### Acceptance criteria, with evidence
+
+| Criterion (Step 16) | Met? | Evidence |
+| --- | --- | --- |
+| Every page works against the deployed API | Not here | Against the real API on a seeded database on this VM, yes (the browser run above). The deployed API is left for the laptop |
+| Cold starts are handled | Yes, here | The waking, budget and "Try again" tests on every page; the client tests |
+| The disclaimer is visible on every page | Yes, here | The frame tests, early ends included, and the browser run |
+| Screenshots are saved to docs/figures/ | No | They are to be taken against the deployed API, on the laptop. The browser run's screenshots are in this session's scratch folder only; they show synthetic data and are not committed |
+
+**Checks** (run the CI way with `TRIALPULSE_REQUIRE_POSTGRES=1`): `ruff check .` clean, `ruff format --check .` clean (330 files), `mypy src app` clean (133 files), `pytest -q -m "slow or not slow"`: **1,278 passed, 11 skipped** (10 need `data/`, one needs Windows).
+
+### Decisions made without asking (flagged)
+
+1. **Layout:** `app/Home.py` is the entry point and router (`st.navigation`), with an Overview page as the default and the five pages as files under `app/pages/`. Shared code is in `app/dashboard/`, which never imports `trialpulse`. On Community Cloud the entry point is `app/Home.py`.
+2. **The API's address:** `API_URL` in Streamlit's secrets. For a local run only, it falls back to the `TRIALPULSE_API_URL` environment variable, then `http://localhost:8000`.
+3. **Community Cloud's packages:** `app/requirements.txt` with uv.lock's exact versions, so the cloud does not install the project's modeling stack. That Community Cloud reads the file next to the entry point is from memory, to verify at deployment.
+4. **The wording:** the dashboard keeps its own copy of the notice and attribution, so both still show when the API does not answer; a test holds them to the API's. The API's `risk_language` field ("not whether a trial will fail") is not shown, because the rule is never to say "will fail".
+5. **The client's numbers:**
+   - waits of 5, 10, 20 and then 30 seconds without `Retry-After`;
+   - `Retry-After` bounded to 1 to 60 seconds;
+   - 2,000 cached answers, shared by every viewer of the process;
+   - 404 answers are cached like 200 answers; every other status is never cached.
+6. **Freshness** compares the data-as-of date with the dashboard server's date. The 3-day line is a constant in the page, citing Section 14, because the dashboard reads nothing but the API.
+7. **Pages end early with `return`, never `st.stop`** (the browser finding above).
+8. **Display details:**
+   - driver features are shown by their column names, because the API gives no descriptions;
+   - a portfolio page holds up to 200 trials, with a page number beyond that;
+   - Why trials stop shows years by default, with months on request;
+   - an unscored trial's rank is blank.
+9. **Rate limit:** on Community Cloud the dashboard is a single client address for the API's limit of 60 requests a minute. The 15-minute cache keeps a demo well under it, and a 429 is waited out. Heavy use would need the limit raised for that address.
+10. **The stub recorder** adds one earlier score to the seeded database for NCT00000005, so a trial without a score has a point to draw; `tests/api/seed.py` is unchanged.
+11. **Tests:** `tests/test_workflows.py` now expects `dashboard` among the default dependency groups, and a root `--record-stubs` option writes the stubs.
+
+### Left for the laptop, and why
+
+| Item | Why not here |
+| --- | --- |
+| The deployment to Streamlit Community Cloud (repository `aakrisht-26/trialpulse`, branch `main`, entry point `app/Home.py`, Python 3.12) | Needs Aakrisht's Streamlit account |
+| `API_URL` in the app's secrets on Community Cloud: the Hugging Face Space's address | Needs the deployed API (Step 15's deployment) and the Streamlit account |
+| The screenshots of every page against the deployed API, saved to `docs/figures/` | Needs the deployed API and dashboard, and real data behind them |
+| Checking on the deployed pair that a cold start of the Space and of Neon is waited out on screen | Needs the deployed pair |
+
+### Files touched
+
+- `CLAUDE.md`, `docs/adr/0052` to `0057`, `docs/progress.md`, `docs/interview_notes.md`
+- `app/` (new: `Home.py`, `requirements.txt`, `dashboard/__init__.py`, `client.py`, `ui.py`, `charts.py`, and `pages/overview.py`, `portfolio.py`, `trial.py`, `landscape.py`, `reasons.py`, `model_health.py`), `.streamlit/config.toml` (new)
+- `pyproject.toml`, `uv.lock`, `.gitignore`, `.github/workflows/ci.yml`, `.pre-commit-config.yaml`
+- `tests/app/` (new: `conftest.py`, `stubbed_api.py`, `stubs.json`, `test_stubs.py`, `test_pages.py`, `test_client.py`, `test_imports.py`), `tests/conftest.py`, `tests/test_workflows.py`
+
+### Verify (PowerShell, on main after the merge)
+
+```powershell
+git fetch origin
+git checkout main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src app
+docker compose up -d
+uv run alembic upgrade head
+uv run pytest tests/app -q
+uv run pytest -q -m "slow or not slow"
+```
+
+To see the dashboard locally against the local API, start the API in one terminal and the dashboard in a second:
+
+```powershell
+$env:API_DATABASE_URL = "postgresql+psycopg://trialpulse:trialpulse@localhost:15432/trialpulse"
+uv run uvicorn trialpulse.api.main:app --port 8000
+```
+
+```powershell
+$env:TRIALPULSE_API_URL = "http://localhost:8000"
+uv run streamlit run app/Home.py
+```
+
+The local database holds the Step 13 rows. Until the bootstrap and the bulk commands fill them, it has no display rows, statement or data-as-of date, so the pages show what exists and say what does not.
+
 ## Step 15: API service
 
-Date: 2026-11-01. Status: **built and tested in the cloud session, on branch `step-15-cloud`; waiting for review.** Aakrisht approved starting Step 15 before the laptop half of Step 14. The session had no `data/`, no laptop and no Neon, so the deployment and every Neon step are left for the laptop. Evidence below is from the session's shell on Linux with Postgres 16 and Docker; it is not a claim about the laptop.
+Date: 2026-11-01. Status: **approved on 2026-11-01 (ADRs 0046 to 0051 accepted) and merged from `step-15-cloud`; the deployment and the Neon parts are left for the laptop.** Aakrisht approved starting Step 15 before the laptop half of Step 14. The session had no `data/`, no laptop and no Neon, so the deployment and every Neon step are left for the laptop. Evidence below is from the session's shell on Linux with Postgres 16 and Docker; it is not a claim about the laptop.
 
 ### The decisions (ADRs 0046 to 0051, the branch's first commit `502c24a`)
 
