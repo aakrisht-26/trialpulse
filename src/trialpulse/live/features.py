@@ -23,12 +23,12 @@ import pandas as pd
 
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import ProjectConfig
-from trialpulse.features.build import feature_select_sql
+from trialpulse.features.select import feature_select_sql
 from trialpulse.live.contract import LIVE_FIELDS
 from trialpulse.live.sponsors import SponsorFile
 from trialpulse.live.state import FIRST_FIELDS, Wide
-from trialpulse.scoring import features as served_features
 from trialpulse.scoring import rows as served
+from trialpulse.scoring.predict import keys_for
 
 LIVE_INPUTS = "live_feature_inputs"
 TYPES: dict[str, str] = {
@@ -161,7 +161,7 @@ def served_keys(scored: pd.DataFrame, day: dt.date, rules: CohortRules, cfg: Pro
     pd.DataFrame
 ):  # fmt: skip
     """The served keys of the scored trials on `day` (as `scoring.score.score` makes them)."""
-    return served_features.keys_for(
+    return keys_for(
         scored["trial_id"], scored["t0"], scored["true_index"],
         np.full(len(scored), np.datetime64(day, "D")), rules, cfg.features.recent_versions_months,
     )  # fmt: skip

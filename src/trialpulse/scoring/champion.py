@@ -17,33 +17,35 @@ the alias `champion`. A challenger (Step 17) gets the alias `challenger` the sam
 
 import argparse
 import datetime as dt
-import hashlib
 import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import duckdb
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
 from trialpulse import tracking
 from trialpulse.cli import RefusedError, run
-from trialpulse.config import PROJECT_CONFIG_PATH, REPO_ROOT, ProjectConfig, load_project_config
+from trialpulse.config import PROJECT_CONFIG_PATH, ProjectConfig, load_project_config
 from trialpulse.eval.rows import LANDMARKS_PATH, LandmarkRows, load_landmark_rows
 from trialpulse.eval.walkforward import FEATURES_DIR, training_rows
+from trialpulse.features.arrays import as_arrays
 from trialpulse.features.build import FEATURES_NAME
-from trialpulse.features.frame import as_arrays
 from trialpulse.features.transforms import SponsorPriors
 from trialpulse.models import discrete_time
 from trialpulse.models.discrete_time import DiscreteTimeBoosting
-from trialpulse.scoring.score import Bundle
+from trialpulse.scoring.bundle import BOOSTER as BOOSTER
+from trialpulse.scoring.bundle import CHAMPION_DIR as CHAMPION_DIR
+from trialpulse.scoring.bundle import LEVELS as LEVELS
+from trialpulse.scoring.bundle import META as META
+from trialpulse.scoring.bundle import MODEL_NAME as MODEL_NAME
+from trialpulse.scoring.bundle import PRIORS as PRIORS
+from trialpulse.scoring.bundle import load_bundle as load_bundle
+from trialpulse.scoring.bundle import sha256_of as sha256_of
 
-CHAMPION_DIR = REPO_ROOT / "data" / "scoring" / "champion"
-MODEL_NAME = "trialpulse-m4"
 CHAMPION_ALIAS, CHALLENGER_ALIAS = "champion", "challenger"
-BOOSTER, LEVELS, PRIORS, META = "model.txt", "levels.json", "sponsor_priors.json", "meta.json"
 
 
 def served_origin(cfg: ProjectConfig) -> dt.date:
@@ -103,10 +105,6 @@ def fit_served(cfg: ProjectConfig) -> tuple[DiscreteTimeBoosting, SponsorPriors,
     return model, priors, origin
 
 
-def sha256_of(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def save_bundle(
     model: DiscreteTimeBoosting,
     priors: SponsorPriors,
@@ -123,34 +121,6 @@ def save_bundle(
                                                                            PRIORS)}}  # fmt: skip
     (folder / META).write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
     return meta
-
-
-def load_bundle(cfg: ProjectConfig, folder: Path = CHAMPION_DIR) -> Bundle:
-    """The served champion from its folder, refused if a file is not the one recorded."""
-    meta_path = folder / META
-    if not meta_path.is_file():
-        raise RefusedError(
-            f"{meta_path} not found: fit the served champion with: "
-            "uv run python -m trialpulse.scoring.champion"
-        )
-    meta: dict[str, Any] = json.loads(meta_path.read_text(encoding="utf-8"))
-    for name, digest in meta["files"].items():
-        if sha256_of(folder / name) != digest:
-            raise RefusedError(f"{folder / name} is not the file the champion was saved with")
-    model = discrete_time.build("m4", cfg)
-    assert isinstance(model, DiscreteTimeBoosting)
-    model.booster = lgb.Booster(model_file=str(folder / BOOSTER))
-    if model.booster.feature_name() != list(model.columns):
-        raise RefusedError(
-            f"the trees in {folder / BOOSTER} read other columns than M4 reads now; fit the "
-            "served champion again"
-        )
-    levels = json.loads((folder / LEVELS).read_text(encoding="utf-8"))
-    model.levels = {name: tuple(values) for name, values in levels.items()}
-    model.summary = meta.get("summary", {})
-    priors = SponsorPriors.from_json(json.loads((folder / PRIORS).read_text(encoding="utf-8")))
-    return Bundle(model, priors, MODEL_NAME, str(meta.get("version", meta["files"][BOOSTER][:12])),
-                  meta)  # fmt: skip
 
 
 def register(run_id: str, alias: str, cfg: ProjectConfig) -> dict[str, str]:

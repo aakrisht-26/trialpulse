@@ -38,7 +38,7 @@ import pandas as pd
 
 from trialpulse.config import ProjectConfig, Secrets
 from trialpulse.features.registry import model_columns
-from trialpulse.scoring.score import Scored
+from trialpulse.scoring.predict import Scored
 
 MOVE = 0.01
 FIRST, RECORD, LANDMARK, MODEL, CALENDAR = (

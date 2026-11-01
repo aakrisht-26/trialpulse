@@ -1,0 +1,304 @@
+{
+ "studies": [
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT02472028",
+     "organization": {
+      "class": "OTHER"
+     },
+     "briefTitle": "Blood Pressure Reduction to Limit the Evolution of Vascular Brain Lesions in Elderly Individuals",
+     "officialTitle": "LEukoaraiosis and blOod Pressure Reduction in OLD People"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-10",
+     "overallStatus": "RECRUITING",
+     "startDateStruct": {
+      "date": "2015-09",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2028-09-11",
+      "type": "ESTIMATED"
+     },
+     "completionDateStruct": {
+      "date": "2028-09-11",
+      "type": "ESTIMATED"
+     },
+     "studyFirstSubmitDate": "2015-04-27",
+     "studyFirstPostDateStruct": {
+      "date": "2015-06-15",
+      "type": "ESTIMATED"
+     },
+     "lastUpdateSubmitDate": "2026-10-26",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "Example Sponsor Organization",
+      "class": "OTHER"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "The purpose of the study is to test the hypothesis of slowing the progression of White Matter Lesions (WML) by lowering blood pressure (BP) in patients with cognitive complaints and a moderate to high grade of WML on brain MRI."
+    },
+    "designModule": {
+     "studyType": "INTERVENTIONAL",
+     "designInfo": {
+      "allocation": "RANDOMIZED",
+      "interventionModel": "PARALLEL",
+      "primaryPurpose": "PREVENTION",
+      "maskingInfo": {
+       "masking": "NONE"
+      }
+     },
+     "enrollmentInfo": {
+      "count": 820,
+      "type": "ESTIMATED"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "OTHER",
+       "name": "blood pressure lowering algorithm"
+      },
+      {
+       "type": "OTHER",
+       "name": "usual strategy"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n* 60 to 88 years old patients;\n* Patient with cognitive complaint with MMSE ≥ 20performed within 6 months prior to enrollment (with or without dementia)\n* Patient with a socio-educational level ≥ 3\n* Presence of hyperintensities of moderate to high grade on the last MRI or old scan (grades C and D on the modified Scheltens scale, grades 2/3 Fazekas).\n* Hypertension defined by a Systolic Blood Pressure (SBP) and / or a Diastolic Blood Pressure (DBP) ≥ 140/90 mmHg, treated or not\n* Affiliation to a social security system\n* Informed consent given, signed consent\n\nExclusion Criteria:\n\n* Presence of severe orthostatic hypotension defined as a decrease of 30 mmHg in SBP standing within 3 minutes\n* Contraindication to MRI (presence of ferromagnetic foreign body (especially some intracranial clips, some heart valves, intraocular foreign bodies, metal prosthesis), subject carrying pacemaker, claustrophobic participants)\n* Severe diseases associated with a life expectancy of less than 3 months;\n* Major physical impairments that can interfere with the feasibility of the tests (sight, hearing ...)\n* Presence of another dementia different than Alzheimer's disease vascular dementia or mixed dementia,\n* Persons under guardianship;\n* Secondary hypertension: renovascular hypertension, primary aldosteronism, pheochromocytoma ...;\n* Patient already receiving 4 or more antihypertensive drugs at maximum dosage\n* Patient participating in another clinical research study on drug requiring exclusion period\n* severe renal impairment",
+     "healthyVolunteers": false,
+     "sex": "ALL",
+     "minimumAge": "60 Years",
+     "maximumAge": "88 Years"
+    }
+   }
+  },
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT07247747",
+     "organization": {
+      "class": "OTHER"
+     },
+     "briefTitle": "Turkish Validity and Reliability of VRSUQ",
+     "officialTitle": "Turkish Validity and Reliability of Virtual Reality System Usability Questionnaire"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2025-03",
+     "overallStatus": "COMPLETED",
+     "startDateStruct": {
+      "date": "2025-10-15",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2026-01-15",
+      "type": "ACTUAL"
+     },
+     "completionDateStruct": {
+      "date": "2026-06-15",
+      "type": "ACTUAL"
+     },
+     "studyFirstSubmitDate": "2025-11-18",
+     "studyFirstPostDateStruct": {
+      "date": "2025-11-25",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-27",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "Example Sponsor Organization",
+      "class": "OTHER"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "The aim of this study is to conduct a Turkish validity and reliability study of the Virtual Reality System Usability Questionnaire (VRSUQ), which can evaluate virtual reality from various aspects by taking into account the characteristics of virtual reality and usability evaluation indicators."
+    },
+    "designModule": {
+     "studyType": "OBSERVATIONAL",
+     "designInfo": {},
+     "enrollmentInfo": {
+      "count": 70,
+      "type": "ACTUAL"
+     }
+    },
+    "armsInterventionsModule": {},
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n* Accepting to participate in the research\n* To be between the ages of 18-50\n* Ability to stand and walk independently\n\nExclusion Criteria:\n\n* Scores below 24 on the mini mental test\n* Scoring 10 and above on the simulator disease questionnaire\n* People with amblyopia, strabismus and pathologies that interfere with focusing, depth perception or normal 3D vision\n* Failure of the fly test in the Titmus test",
+     "healthyVolunteers": true,
+     "sex": "ALL",
+     "minimumAge": "18 Years",
+     "maximumAge": "50 Years"
+    }
+   }
+  },
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT07284758",
+     "organization": {
+      "class": "INDUSTRY"
+     },
+     "briefTitle": "A Study to Evaluate the Efficacy of Cemsidomide + Dexamethasone in Participants With Relapsed/Refractory Multiple Myeloma",
+     "officialTitle": "A Phase 2, Open-Label, Single-Arm, Multicenter Study to Evaluate the Efficacy of Cemsidomide + Dexamethasone in Subjects With Relapsed/Refractory Multiple Myeloma"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-09",
+     "overallStatus": "RECRUITING",
+     "startDateStruct": {
+      "date": "2026-02-18",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2030-03",
+      "type": "ESTIMATED"
+     },
+     "completionDateStruct": {
+      "date": "2030-03",
+      "type": "ESTIMATED"
+     },
+     "studyFirstSubmitDate": "2025-12-09",
+     "studyFirstPostDateStruct": {
+      "date": "2025-12-16",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-28",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-30",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "C4 Therapeutics, Inc.",
+      "class": "INDUSTRY"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "This is a Phase 2, open-label, single-arm, multicenter study to assess the antimyeloma activity and further characterize the safety, tolerability, PK, and PD of cemsidomide in combination with dexamethasone in participants with relapsed/refractory multiple myeloma (r/r MM)."
+    },
+    "designModule": {
+     "studyType": "INTERVENTIONAL",
+     "designInfo": {
+      "allocation": "NA",
+      "interventionModel": "SINGLE_GROUP",
+      "primaryPurpose": "TREATMENT",
+      "maskingInfo": {
+       "masking": "NONE"
+      }
+     },
+     "enrollmentInfo": {
+      "count": 100,
+      "type": "ESTIMATED"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "DRUG",
+       "name": "Cemsidomide"
+      },
+      {
+       "type": "DRUG",
+       "name": "Dexamethasone"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n1. Be willing and able to provide signed informed consent for the study.\n2. Age ≥ 18 years at the time of signed consent.\n3. Subjects must have a documented diagnosis of MM and measurable disease at enrollment.\n4. Received at least 3 prior anti-myeloma regimens (for a minimum of 2 or more consecutive cycles) that must have included an immunomodulatory drug (i.e., IKZF 1/3 degrader), a proteasome inhibitor, an anti-CD38 antibody, and a T-cell engager (TCE) or chimeric antigen receptor T-cell (CAR-T) therapy, unless not available per local standard of care.\n5. Subjects need to have adequate organ function.\n6. Toxicities from prior anticancer therapies must have resolved to baseline severity or CTCAE ≤ Grade 1.\n7. Female subjects may not be pregnant or intend to become pregnant, may not breastfeed or intend to breastfeed, or donate ova during their participation in this study until 30 days after the last dose of study treatment.\n8. Male subjects must agree to use a condom when having intercourse with a person of childbearing potential during the Treatment Period and for at least 30 days after the last dose of study treatment.\n9. Male subjects must refrain from donating sperm during the Treatment Period and for 30 days after discontinuation.\n10. Subjects must refrain from donating blood during study treatment and for 30 days after discontinuation.\n\nExclusion Criteria:\n\n1. Presence of myeloma in the central nervous system (CNS).\n2. Subjects with any of the following:\n\n   * Systemic light chain amyloidosis\n   * Polyneuropathy, Organomegaly, Endocrinopathy, Monoclonal gammopathy, and Skin changes (POEMS) Syndrome\n   * Myelodysplastic syndrome (MDS).\n3. Previously treated with cemsidomide.\n4. Clinically significant impaired cardiac function or cardiac disease.\n5. Thromboembolic event within 3 months prior to enrollment.\n6. Known malignancy other than study indication that has progressed or required treatment within the past 3 years.\n7. Uncontrolled active bacterial, fungal, or viral infection.\n8. Inability or difficulty swallowing tablets.\n\nNOTE: Other inclusion/exclusion criteria may apply, per protocol.",
+     "healthyVolunteers": false,
+     "sex": "ALL",
+     "minimumAge": "18 Years"
+    }
+   }
+  },
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT06286332",
+     "organization": {
+      "class": "OTHER"
+     },
+     "briefTitle": "Individualized Music Listening in Acute Leukemia Patients With Fatigue",
+     "officialTitle": "The Effectiveness of Individualized Music Listening in Acute Leukemia Patients With Fatigue on Fatigue and Laboratory Values in Acute Leukemia Patients Undergoing Chemotherapy"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-10",
+     "overallStatus": "COMPLETED",
+     "startDateStruct": {
+      "date": "2024-04-01",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2024-11-30",
+      "type": "ACTUAL"
+     },
+     "completionDateStruct": {
+      "date": "2025-01-30",
+      "type": "ACTUAL"
+     },
+     "studyFirstSubmitDate": "2024-02-22",
+     "studyFirstPostDateStruct": {
+      "date": "2024-02-29",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-27",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "Example Sponsor Organization",
+      "class": "OTHER"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "The objective of this study is to assess the efficacy of employing music therapy in alleviating fatigue and medical laboratory values among patients with acute myeloid leukemia."
+    },
+    "designModule": {
+     "studyType": "INTERVENTIONAL",
+     "designInfo": {
+      "allocation": "RANDOMIZED",
+      "interventionModel": "PARALLEL",
+      "primaryPurpose": "SUPPORTIVE_CARE",
+      "maskingInfo": {
+       "masking": "DOUBLE"
+      }
+     },
+     "enrollmentInfo": {
+      "count": 60,
+      "type": "ACTUAL"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "OTHER",
+       "name": "Music Therapy"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n1. Diagnosed with acute myeloid leukemia by a clinical specialist.\n2. Patients undergoing chemotherapy for the first time.\n3. Aged 18 years or older, capable of communicating in Mandarin or Taiwanese.\n4. Normal hearing ability.\n5. No history of psychiatric disorders and clear consciousness.\n6. Participants with no prior involvement in any intervention studies related to fatigue management.\n7. Demonstrates understanding of the research objectives, willingly participates in the study, and completes the informed consent form.\n8. Willing to cooperate with study procedures throughout the research period.\n\nExclusion Criteria:\n\n1. Severe hearing impairment.\n2. Individuals with unstable vital signs or altered consciousness.",
+     "healthyVolunteers": false,
+     "sex": "ALL",
+     "minimumAge": "18 Years"
+    }
+   }
+  }
+ ]
+}

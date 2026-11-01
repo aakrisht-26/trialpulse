@@ -21,7 +21,7 @@ from trialpulse.config import ProjectConfig
 from trialpulse.live import features as live_features
 from trialpulse.live.sponsors import SponsorFile, from_day_number
 from trialpulse.live.state import Closed, Event, Outcome, Wide, apply_record, lapse_events
-from trialpulse.scoring.score import classify
+from trialpulse.scoring.predict import classify
 
 
 @dataclass

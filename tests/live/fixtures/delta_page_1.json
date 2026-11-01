@@ -1,0 +1,317 @@
+{
+ "totalCount": 8,
+ "studies": [
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT07904767",
+     "organization": {
+      "class": "INDUSTRY"
+     },
+     "briefTitle": "A Phase 2 Study to Compare Efficacy and Safety of a Novel Topical Therapy (APT-001, Spinosad 1.8%) in Patients With Blepharitis",
+     "officialTitle": "Vision and Inflammation Study Testing Anti-acarid Therapeutics (VISTA-1X): A Phase 2, Open-Label, Multicenter Study to Compare Efficacy and Safety of a Novel Topical Therapy (APT-001, Spinosad 1.8%) in Adults With Blepharitis."
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-10",
+     "overallStatus": "NOT_YET_RECRUITING",
+     "startDateStruct": {
+      "date": "2026-12",
+      "type": "ESTIMATED"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2027-01",
+      "type": "ESTIMATED"
+     },
+     "completionDateStruct": {
+      "date": "2027-02",
+      "type": "ESTIMATED"
+     },
+     "studyFirstSubmitDate": "2026-10-23",
+     "studyFirstPostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-28",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-30",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "Aperta Biosciences, LLC",
+      "class": "INDUSTRY"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "The purpose of this study is to establish the clinical efficacy of APT-001 topical therapy 1.8% in patients with blepharitis as compared to placebo, and to establish that the therapeutic is safe and generally well tolerated by patients."
+    },
+    "designModule": {
+     "studyType": "INTERVENTIONAL",
+     "designInfo": {
+      "allocation": "NON_RANDOMIZED",
+      "interventionModel": "PARALLEL",
+      "primaryPurpose": "TREATMENT",
+      "maskingInfo": {
+       "masking": "NONE"
+      }
+     },
+     "enrollmentInfo": {
+      "count": 15,
+      "type": "ESTIMATED"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "DRUG",
+       "name": "APT-001 topical ophthalmic ointment (spinosad)"
+      },
+      {
+       "type": "DRUG",
+       "name": "Placebo control for APT-001 topical ophthalmic ointment"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n* Symptomatic blepharitis\n* At least 18 years of age\n* Eyelid collarette score of at least 2\n* Demodex mite density of at least 1.5 mites per lash or higher\n* Willing and able to follow all instructions and attend all study visit\n* Able to avoid prohibited medication for the duration of the study\n* Patients can willingly provide consent on the informed consent form\n\nExclusion Criteria:\n\n* Women with confirmed pregnancies\n* Utilizing any medical or surgical therapy for acute or subacute conditions of the eye\n* History of allergic reaction to spinosad or any formulation component\n* Patients using eyelid hygiene or other treatment(s) for blepharitis within 14 days of screening\n* History of ocular surgery within the past 3 months\n* Presence of other ocular diseases that may affect study outcomes\n* Use of investigational drug, chronic glaucoma medications, or steroids\n* Uncontrolled systemic disease\n* Acute or chronic illness that would confound study results",
+     "healthyVolunteers": false,
+     "sex": "ALL",
+     "minimumAge": "18 Years"
+    }
+   }
+  },
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT05744336",
+     "organization": {
+      "class": "OTHER"
+     },
+     "briefTitle": "Impact of Virtual Reality on Anxiety in Patients Undergoing Interventional Procedures",
+     "officialTitle": "Assessing the Impact of Immersive Virtual Reality Experience on Injection-related Anxiety in Patients Undergoing Interventional Pain Spine Procedures: a Prospective Randomized Trial"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-10",
+     "overallStatus": "RECRUITING",
+     "startDateStruct": {
+      "date": "2023-03-12",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2026-10-31",
+      "type": "ESTIMATED"
+     },
+     "completionDateStruct": {
+      "date": "2026-11-30",
+      "type": "ESTIMATED"
+     },
+     "studyFirstSubmitDate": "2023-02-15",
+     "studyFirstPostDateStruct": {
+      "date": "2023-02-27",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-27",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "Example Sponsor Organization",
+      "class": "OTHER"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "Periprocedural anxiety is a common problem for patients who undergo interventional pain procedures. Virtual Reality (VR) is an immersive experience that has gained acceptance in the medical field as a tool for reducing anxiety and pain for patients.Research Aim:\n\nTo evaluate the effect of immersive virtual reality (VR) on periprocedural anxiety related to therapeutic cervical epidural steroid injections (ESI).\n\nThe investigators hypothesize that immersive virtual reality will result in a clinically meaningful anxiety reduction, defined as the proportion of participants with \\> 50% reduction in Numeric Rating Scale (NRS) anxiety scores when compared to participants in the non-treatment group who will have standard preprocedural waiting time conditions in clinic, but no VR experience. Similarly, the investigators hypothesize a significant reduction in objective sympathetic tone as measured by skin sympathetic nerve activity (SKNA)."
+    },
+    "designModule": {
+     "studyType": "INTERVENTIONAL",
+     "designInfo": {
+      "allocation": "RANDOMIZED",
+      "interventionModel": "PARALLEL",
+      "primaryPurpose": "OTHER",
+      "maskingInfo": {
+       "masking": "NONE"
+      }
+     },
+     "enrollmentInfo": {
+      "count": 64,
+      "type": "ESTIMATED"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "OTHER",
+       "name": "Group 1 Immersive Virtual Reality (VR)"
+      },
+      {
+       "type": "OTHER",
+       "name": "Group 2 Control Group"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n* Age 18-80 years old at day of enrollment\n* Neck pain patient deemed to be a candidate for pain control treatment with interventional fluoroscopically guided cervical epidural steroid injection as determined by their pain medicine provider based on history, physical exam, and radiographic findings\n* Willingness to undergo pre-procedural intervention of VR viewing experience or equivalent pre-procedural wait time\n* No history of prior epidural steroid injections\n* Did not receive sedatives prior to or during procedure\n\nExclusion Criteria:\n\n* Refusal / inability to participate or provide consent\n* Contraindications to injection (anticoagulated states, allergy to components of injection, local infection at injection site, current infectious process or treatment of antibiotics for current infection)\n* Uncontrolled anxiety disorder or untreated/inadequately treated psychiatric disorder\n* History of Alzheimer's, dementia, or cognitive dysfunction\n* Patient currently taking benzodiazepines\n* Severe motion sickness\n* Seizure disorder\n* Vision loss\n* Non-English speaking patients",
+     "healthyVolunteers": false,
+     "sex": "ALL",
+     "minimumAge": "18 Years",
+     "maximumAge": "80 Years"
+    }
+   }
+  },
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT06845644",
+     "organization": {
+      "class": "OTHER"
+     },
+     "briefTitle": "Longitudinal Quantitative Neuromuscular MRI in Neuropathic Patients",
+     "officialTitle": "Longitudinal Quantitative Neuromuscular MRI Evaluation in Patients With Acquired and Hereditary Neuropathy"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-10",
+     "overallStatus": "RECRUITING",
+     "startDateStruct": {
+      "date": "2025-05-23",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2027-05-23",
+      "type": "ESTIMATED"
+     },
+     "completionDateStruct": {
+      "date": "2028-05",
+      "type": "ESTIMATED"
+     },
+     "studyFirstSubmitDate": "2025-02-20",
+     "studyFirstPostDateStruct": {
+      "date": "2025-02-25",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-27",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "Example Sponsor Organization",
+      "class": "OTHER"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "The pathophysiological process common to neuropathies is fatty replacement of muscle tissue, more commonly known as intramuscular fat fraction (F.F). MRI is an imaging technique that enables us to distinguish between muscle and fat tissue, and thus to objectify in vivo structural changes within nerves and muscles in neuropathic patients. In addition to visualizing these changes, quantitative neuromuscular MRI (qMRI) can be used to quantify a number of biomarkers associated with these pathophysiological processes. Over the past few years, this procedure has become a relevant tool in a number of neuromuscular pathologies, such as acquired and hereditary neuropathies. Thanks to its non-ionizing nature and its ability to explore tissues in three dimensions, MRI is the technique of choice for evaluating these diseases, complementing the clinical and electrophysiological scores available.\n\nIn a context where numerous therapic strategies are being evaluated for the treatment of peripheral nervous system diseases, the clinical and electrophysiological scores currently available are proving inadequate for the detection of early change or a positive therapeutic effect. On the basis of a limited number of studies, quantitative MRI could provide much more sensitive therapeutic monitoring data over short periods of time which is crucial for future therapeutic trials.\n\nThe most interesting MRI biomarker to date would therefore be the FF, which represents the percentage of fatty infiltration of muscles following pathological nerve damage. Other MRI biomarkers, such as quantified magnetization transfer ratio (MTR), proton density (PD), water transverse relaxation time (wT2) and three-dimensional volume, enable us to study the degenerative and inflammatory phenomena at work in these neuropathies from different angles, detailing the nerve and muscle damage in patients compared with healthy controls or presymptomatic patients. In patients with Charcot-Marie-Tooth (CMT) neuropathy in particular, qMRI is the only tool to detect significant longitudinal variation over a one-year period, revealing an average increase in FF in the lower limbs of +1.5% over 12 months. Confirmation of these results and their extension to other neuropathies such as hereditary amyloid neuropathies (ATTR-PN) or acquired demyelinating neuropathies (ADN) is therefore justified, but requires the implementation of standardized longitudinal studies including these different pathologies.\n\nAs strong correlations between these MRI biomarkers and the main clinical scores have been demonstrated in several cross-sectional studies, the clinical value of this non-invasive tool is beyond doubt.\n\nThe main limitation to the clinical deployment of this technology remains the time required for the manual segmentation step to delineate the areas of interest. The ongoing development of new image analysis techniques, as well as the contribution of artificial intelligence and deep learning to the imaging data extraction process, are well on the way to solving this problem, but require continuous updating of practices to identify the most interesting MRI biomarkers, facilitate their extraction and thus measure their clinical application with a view to future therapeutic trials."
+    },
+    "designModule": {
+     "studyType": "INTERVENTIONAL",
+     "designInfo": {
+      "allocation": "NON_RANDOMIZED",
+      "interventionModel": "PARALLEL",
+      "primaryPurpose": "OTHER",
+      "maskingInfo": {
+       "masking": "NONE"
+      }
+     },
+     "enrollmentInfo": {
+      "count": 120,
+      "type": "ESTIMATED"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "OTHER",
+       "name": "Quantitative neuromuscular MRI"
+      },
+      {
+       "type": "OTHER",
+       "name": "Neuromuscular ultrasound"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "Inclusion Criteria:\n\n* Male or female between 18 and 80 years of age,\n* Patients who have freely given their consent to participate in this study,\n* Patient with genetically confirmed hereditary CMT neuropathy\n* or patient with an acquired demyelinating neuropathy such as typical PIDC or anti-MAG of typical form\n* or a patient with a genetically confirmed pathogenic mutation in the transthyretin (TTRn) gene,\n* Patients who are beneficiaries or entitled beneficiaries of a social security scheme.\n\nExclusion Criteria:\n\n* Patients with co-morbidity or a history of other peripheral neuropathy,\n* Patients with alcohol or psychoactive substance abuse,\n* Patients with contraindications to MRI exploration: claustrophobia, pacemakers, Holter systems, IUDs, metal surgical clips, metal prostheses or implants (or other metal foreign bodies),\n* Patient unable to perform the MRI due to severe handicap,\n* Patient in a period of exclusion from another research protocol at the time of signing the consent/non-opposition form,\n* Subjects covered by articles L1121-5 to 1121-8 of the French Public Health Code (minors, adults under guardianship or trusteeship, patients deprived of their liberty, pregnant or breast-feeding women),\n* Persons who cannot read and understand the French language well enough to be able to give their consent to participate in research.",
+     "healthyVolunteers": false,
+     "sex": "ALL",
+     "minimumAge": "18 Years"
+    }
+   }
+  },
+  {
+   "protocolSection": {
+    "identificationModule": {
+     "nctId": "NCT05707806",
+     "organization": {
+      "class": "NIH"
+     },
+     "briefTitle": "Development and Validation of Learning and Decision-Making Tasks",
+     "officialTitle": "Development and Validation of Learning and Decision-Making Tasks"
+    },
+    "statusModule": {
+     "statusVerifiedDate": "2026-10-27",
+     "overallStatus": "RECRUITING",
+     "startDateStruct": {
+      "date": "2023-03-29",
+      "type": "ACTUAL"
+     },
+     "primaryCompletionDateStruct": {
+      "date": "2032-12-31",
+      "type": "ESTIMATED"
+     },
+     "completionDateStruct": {
+      "date": "2032-12-31",
+      "type": "ESTIMATED"
+     },
+     "studyFirstSubmitDate": "2023-01-31",
+     "studyFirstPostDateStruct": {
+      "date": "2023-02-01",
+      "type": "ACTUAL"
+     },
+     "lastUpdateSubmitDate": "2026-10-28",
+     "lastUpdatePostDateStruct": {
+      "date": "2026-10-29",
+      "type": "ACTUAL"
+     }
+    },
+    "sponsorCollaboratorsModule": {
+     "leadSponsor": {
+      "name": "National Institute on Drug Abuse (NIDA)",
+      "class": "NIH"
+     }
+    },
+    "descriptionModule": {
+     "briefSummary": "Background:\n\nSubstance use disorders (SUD) can be considered disorders in the way people process incentives, learn, and make decisions. To understand why some people develop SUD, researchers need to develop reliable tests that show how people think and learn. This natural history study seeks to develop a set of tasks that could then be used to test how people learn and make decisions.\n\nObjective:\n\nTo develop and validate behavioral tasks that could be used in future studies.\n\nEligibility:\n\nHealthy people aged 18-45 years from the Baltimore area. They must also be enrolled in the NIDA screening protocol.\n\nDesign:\n\nParticipants will perform different tasks. Most tasks require 1-4 study visits; some may require up to 12. Visits are 1-14 days apart. All visits will last about 1-7 hours.\n\nParticipants will perform tasks on a computer. As they work they may be given different stimuli:\n\nSmells. Participants will sniff odors through a plastic tube or mask on their nose.\n\nFlavors. Participants will wear a mouthpiece and small amounts of different flavored liquids will be placed in their mouth.\n\nPictures. Participants will look at different images.\n\nSounds. Participants will wear headphones and various sounds will be played for them.\n\nFood. Participants may be asked to eat a meal before, during, or after a task. The researchers will provide the meal.\n\nDuring each task, participants will wear sensors to monitor their heart rate, blood pressure, breathing, and other physical changes in their bodies.\n\nSome participants will have a functional magnetic resonance imaging (fMRI) scan. They will lie on a table that slides into a cylinder. They will perform tasks on a computer screen during the fMRI."
+    },
+    "designModule": {
+     "studyType": "OBSERVATIONAL",
+     "designInfo": {},
+     "enrollmentInfo": {
+      "count": 550,
+      "type": "ESTIMATED"
+     }
+    },
+    "armsInterventionsModule": {
+     "interventions": [
+      {
+       "type": "DEVICE",
+       "name": "MRI"
+      }
+     ]
+    },
+    "eligibilityModule": {
+     "eligibilityCriteria": "* INCLUSION CRITERIA:\n\nThere are two levels of inclusion and exclusion criteria; those applying to all participants and those applying to participants in the 'MRI' phase only. Participants will be cleared for both the behavioral and MRI phases, if eligible, and will be invited to sign one or both consents depending on what tasks are active at the time of consent. If a person is not MRI compatible, they will only be offered enrollment into the behavioral phase of the study.\n\nIn order to be eligible to participate in this study, an individual must meet the following criteria:\n\n1. Male or female, aged 18-45 years old. Justification: Many neural processes change with age, and these changes could introduce unwanted variability in both behavioral and MRI signals.\n2. In good general health.\n\n   In order to be eligible to participate in the MRI phase of this study, an individual must - in addition - also meet all of the following criteria:\n3. Right-handed.\n\nEXCLUSION CRITERIA:\n\nIndividuals who meet any of the following criteria will be excluded from participation:\n\n1. History of neurological illnesses or neurosurgery including but not limited to cerebrovascular accident, Parkinson disease, Alzheimer disease, Huntington disease, CNS tumor, significant head trauma with sequelae, multiple sclerosis or other demyelinating diseases, epilepsy, movement disorders. The MAI will also retain discretion to exclude based on a history of a neurological illness or trauma that may compromise data integrity.\n2. History of currently unresolved psychiatric disorders with current (past 12 months) regular use of psychiatric medications. Past/remitted (\\>12 months ago) psychiatric disorders with no currently active symptoms and no current use of psychiatric medications may be included in the study, per MAI discretion.\n3. Pattern of alcohol and drug use in the past 12 months that is indicative of harmful use, loss of control over use, or physical dependence.\n4. Daily nicotine, alcohol, or drug use (excluding caffeine) for at least 4 continuous weeks in the past 12 months.\n5. Current use of psychoactive medications and medications that affect alertness and that cannot (in principle) be withheld the night before the study visit. Participants who can withhold these medications will either (1) withhold the medication during this time or (2) not withhold the medication and pass a clinical assessment for intoxication on the day of the study visit. Based on participant preferences and MAI/PI judgement, participants who fail the clinical assessment for intoxication will either be withdrawn or rescheduled and asked to withhold the medication.\n6. For tasks that involve gustatory or olfactory stimuli, food intake: History of anaphylaxis, e.g., due to severe asthma or food and non-food allergies (e.g., latex, detergents, soap, etc.). This will disqualify participants for tasks that involve chemosensory stimuli or food intake, but not from the study itself.\n7. Uncorrected impairments in visual acuity.\n8. Non-English speaking. Justification: To include non-English speakers, we would have to translate the consent and other study documents and hire and train bilingual staff, which would require resources that we do not have and could not justify, given the small sample size for each experiment. Additionally, the data integrity of some of the cognitive tasks used in this study would be compromised as they have only been validated in English. Most importantly, ongoing communication regarding safety procedures is necessary when participants are undergoing MRI procedures. The inability to effectively communicate MRI safety procedures in a language other than English could compromise the safety of non-English speaking participants.\n9. Pregnancy.\n10. Any other condition that in the judgment of the investigators is incompatible with participation.\n\n    An individual who meets any of the following criteria will be excluded from participation in the MRI phase of this study:\n11. Unable to undergo MRI scanning due to certain metallic or magnetic devices or implants in the body, or claustrophobia.",
+     "healthyVolunteers": true,
+     "sex": "ALL",
+     "minimumAge": "18 Years",
+     "maximumAge": "45 Years"
+    }
+   }
+  }
+ ],
+ "nextPageToken": "recorded-token-2"
+}
