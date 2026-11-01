@@ -410,6 +410,16 @@ def save_score_file(cur: Any, day: dt.date, model_version: str, content: bytes, 
     )  # fmt: skip
 
 
+# Every table the daily job writes (held to its SQL by tests/live/test_store.py): a rebuild
+# clears them all, so nothing of an earlier live state survives it.
+REBUILT_TABLES: tuple[str, ...] = (
+    "live.trial_state", "live.study_versions", "live.sponsor_file", "live.outcome_events",
+    "live.quarantine", "serving.amendment_markers", "serving.trial_scores_latest",
+    "serving.trial_score_history", "serving.trials_not_scored", "serving.trial_display",
+    "serving.sponsors", "monitoring.score_files",
+)  # fmt: skip
+
+
 def load_bootstrap(
     cur: Any,
     wides: Mapping[str, Wide],
@@ -420,15 +430,22 @@ def load_bootstrap(
 ) -> int:
     """Load seeded state (`live.seed`) in the caller's one transaction, with a succeeded
     `bootstrap` run whose watermark is the release date (ADR 0045). Refuses over live rows
-    unless `rebuild`. The bootstrap command itself runs on the laptop (ADR 0040)."""
+    unless `rebuild`. A rebuild takes the lease first, then clears every table the daily job
+    writes (`REBUILT_TABLES`), every other run's row, and the daily job's columns of
+    `serving.data_status` (the reason counts' `labeled_through` is the laptop's and stays), so
+    the next daily run is a first run on the new state. The bootstrap command itself runs on
+    the laptop (ADR 0040)."""
     present = cur.execute("SELECT count(*) FROM live.trial_state").fetchone()[0]
     if present and not rebuild:
         raise RuntimeError("live state exists: the bootstrap refuses to load over it")
+    run_id = start_run(cur, "bootstrap", "bootstrap", release, 120)  # the lease, first
     if rebuild:
-        for table in ("live.trial_state", "live.study_versions", "live.sponsor_file",
-                      "serving.amendment_markers"):  # fmt: skip
-            cur.execute(f"DELETE FROM {table}")
-    run_id = start_run(cur, "bootstrap", "bootstrap", release, 120)
+        cur.execute(f"TRUNCATE {', '.join(REBUILT_TABLES)}")
+        cur.execute("DELETE FROM monitoring.pipeline_runs WHERE run_id <> %s", (run_id,))
+        cur.execute(
+            """UPDATE serving.data_status SET data_as_of = NULL, model_version = NULL,
+              early_stops_after_labels = NULL, updated_at = now()"""
+        )
     sponsors.last_run_id = run_id
     save_wides(cur, wides.values(), run_id)
     save_file(cur, sponsors)

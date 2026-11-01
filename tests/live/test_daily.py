@@ -757,3 +757,65 @@ def test_a_run_that_lost_its_lease_cannot_renew_or_finish(dsn: str) -> None:
             store.finish_run(cur, run, "succeeded", {})
         con.rollback()
     assert not daily.record_failure(dsn, 10_000, {}, "no such run")
+
+
+# A rebuild of the bootstrap (review finding 4) ----------------------------------------------
+
+
+def _rebuild(dsn: str) -> None:
+    aliases = (CFG.features.sponsor_alias_min_trials, CFG.features.sponsor_alias_wait_days)
+    seeded = seed(compact_history(120), RELEASE, RULES, KEEP, *aliases)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        store.load_bootstrap(cur, seeded.wides, seeded.sponsors, seeded.markers, RELEASE,
+                             rebuild=True)  # fmt: skip
+        con.commit()
+
+
+@respx.mock
+def test_a_rebuild_after_daily_runs_is_a_fresh_bootstrap(dsn: str) -> None:
+    """A rebuild clears every table the daily job writes and every other run's row, keeps
+    the reason labels' date, and the next daily run is a first run: the tables then equal
+    those of a fresh bootstrap and one run."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        con.execute("UPDATE serving.data_status SET labeled_through = %s", (RELEASE,))
+        con.execute("INSERT INTO live.quarantine (nct_id, payload_hash, reasons) "
+                    "VALUES ('NCT00000099', 'x', 'status: check')")  # fmt: skip
+        con.commit()
+    _rebuild(dsn)
+    with psycopg.connect(dsn) as con:
+        counts = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                  for t in store.REBUILT_TABLES}  # fmt: skip
+        runs = con.execute("SELECT job, status FROM monitoring.pipeline_runs").fetchall()
+        status = con.execute("SELECT data_as_of, model_version, early_stops_after_labels, "
+                             "labeled_through FROM serving.data_status").fetchone()  # fmt: skip
+    seeded = {"live.trial_state", "live.sponsor_file", "serving.amendment_markers"}
+    assert all(n == 0 for t, n in counts.items() if t not in seeded), counts
+    assert all(counts[t] > 0 for t in seeded)
+    assert runs == [("bootstrap", "succeeded")]
+    assert status == (None, None, None, RELEASE)
+    first = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    assert first.status == "succeeded"
+    assert first.counts["details"]["full"] is True
+    rebuilt = _digest(dsn, skip=("serving.data_status",))
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # a fresh bootstrap and one run
+        for table in (*TABLES, "live.sponsor_file", "monitoring.pipeline_runs"):
+            cur.execute(f"DELETE FROM {table}")
+        con.commit()
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    assert _digest(dsn, skip=("serving.data_status",)) == rebuilt
+
+
+@respx.mock
+def test_a_rebuild_waits_for_the_lease(dsn: str) -> None:
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        store.start_run(cur, "daily", "daily", DAY, 120)
+        con.commit()
+    before = _digest(dsn)
+    with pytest.raises(store.LeaseError):
+        _rebuild(dsn)
+    assert _digest(dsn) == before
