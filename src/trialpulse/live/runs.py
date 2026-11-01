@@ -5,7 +5,9 @@
   pull starts `overlap_days` before it.
 - The NULL gate: among pulled records whose trial and post date match a stored row, a field
   that was set in the stored row and is NULL in the record, in more than `share` of them,
-  stops the run before any write. API shape changes that rename a field look like this.
+  stops the run before any write. API shape changes that rename a field look like this. A
+  quarantined record that matches a stored row counts as having lost every field the stored
+  row had: a shape change that makes records fail their contract stops the run the same way.
 - The overlap check: stored live rows posted in the pull's window must come back with their
   date or a later one; more than `allowed` missing fails the run.
 - A full run (every open trial rescored) is due when the last full run is `days` old.
@@ -42,17 +44,24 @@ def null_gate(
     records: Sequence[Mapping[str, Any]],
     stored: Mapping[tuple[str, dt.date], Mapping[str, Any]],
     share: float,
+    quarantined: Sequence[tuple[str | None, dt.date | None]] = (),
 ) -> dict[str, float]:
-    """The fields that turned NULL in more than `share` of the matched records (none: {})."""
-    matched = [(r, stored[(r["nct_id"], r["effective_date"])]) for r in records
-               if (r["nct_id"], r["effective_date"]) in stored]  # fmt: skip
-    if not matched:
+    """The fields that turned NULL in more than `share` of the matched records (none: {}).
+    `quarantined` holds the (trial, post date) of the run's quarantined records."""
+    matched: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = [
+        (r, stored[(r["nct_id"], r["effective_date"])]) for r in records
+        if (r["nct_id"], r["effective_date"]) in stored
+    ]  # fmt: skip
+    lost_rows = [stored[key] for key in quarantined if key in stored]  # type: ignore[index]
+    total = len(matched) + len(lost_rows)
+    if not total:
         return {}
     out = {}
     for name in LIVE_FIELDS:
         lost = sum(1 for new, old in matched if old.get(name) is not None and new.get(name) is None)
-        if lost / len(matched) > share:
-            out[name] = lost / len(matched)
+        lost += sum(1 for old in lost_rows if old.get(name) is not None)
+        if lost / total > share:
+            out[name] = lost / total
     return out
 
 

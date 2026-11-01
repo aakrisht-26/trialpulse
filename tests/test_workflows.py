@@ -90,3 +90,37 @@ def test_the_daily_job_has_two_crons_and_a_separate_failure_job() -> None:
     assert notify["permissions"] == {"contents": "read", "issues": "write"}
     assert daily["env"] == {"HF_HUB_OFFLINE": "1", "UV_NO_SYNC": "1"}
     assert daily["concurrency"]["cancel-in-progress"] is False
+
+
+def test_ci_requires_postgres_for_the_database_tests() -> None:
+    """Review finding 4: in CI an unreachable Postgres fails the database tests."""
+    ci = _load(REPO_ROOT / ".github" / "workflows" / "ci.yml")
+    (tests,) = [s for s in ci["jobs"]["checks"]["steps"] if s.get("name") == "Tests"]
+    assert tests["env"]["TRIALPULSE_REQUIRE_POSTGRES"] == "1"
+
+
+def test_a_missing_postgres_skips_locally_and_fails_where_it_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "root_conftest", REPO_ROOT / "tests" / "conftest.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(root)
+    REQUIRE_POSTGRES, no_postgres = root.REQUIRE_POSTGRES, root.no_postgres  # noqa: N806
+
+    # Any outcome is caught and its type checked, so a helper that skipped where it must
+    # fail could not turn this test itself into a skip.
+    monkeypatch.delenv(REQUIRE_POSTGRES, raising=False)
+    with pytest.raises(BaseException) as local:  # noqa: PT011 (the type is checked below)
+        no_postgres("no Postgres answers")
+    assert local.type is pytest.skip.Exception
+    monkeypatch.setenv(REQUIRE_POSTGRES, "1")
+    with pytest.raises(BaseException) as ci:  # noqa: PT011
+        no_postgres("no Postgres answers")
+    assert ci.type is pytest.fail.Exception
+    assert "TRIALPULSE_REQUIRE_POSTGRES is set" in str(ci.value)

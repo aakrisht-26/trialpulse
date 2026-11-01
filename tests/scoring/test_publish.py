@@ -7,9 +7,6 @@ DATABASE_URL to its Postgres service)."""
 import datetime as dt
 import hashlib
 import json
-import uuid
-from collections.abc import Iterator
-from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -17,12 +14,11 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-from trialpulse.config import REPO_ROOT, Secrets, load_project_config
+from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.scoring import serving
 from trialpulse.scoring.score import Scored
 
 psycopg = pytest.importorskip("psycopg")
-from psycopg import conninfo  # noqa: E402 (after the import check)
 
 DAY1, DAY2 = dt.date(2026, 9, 25), dt.date(2026, 9, 26)
 DRIVERS = {
@@ -38,35 +34,6 @@ DRIVERS = {
 
 def _libpq(url: str) -> str:
     return url.replace("postgresql+psycopg://", "postgresql://", 1)
-
-
-@pytest.fixture
-def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """A migrated scratch database; its SQLAlchemy URL, also set as DATABASE_URL."""
-    secret = Secrets().database_url
-    if secret is None:
-        pytest.skip("DATABASE_URL is not set")
-    base = _libpq(secret.get_secret_value())
-    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
-    name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
-    try:
-        with psycopg.connect(admin, autocommit=True) as con:
-            con.execute(f"CREATE DATABASE {name}")
-    except psycopg.OperationalError as exc:  # the address is not printed: it holds a password
-        pytest.skip(f"no Postgres answers at DATABASE_URL ({type(exc).__name__})")
-    parts = conninfo.conninfo_to_dict(base)
-    url = (
-        f"postgresql+psycopg://{quote(str(parts.get('user', '')), safe='')}:"
-        f"{quote(str(parts.get('password', '')), safe='')}@{parts.get('host', 'localhost')}:"
-        f"{parts.get('port', 5432)}/{name}"
-    )
-    monkeypatch.setenv("DATABASE_URL", url)
-    try:
-        command.upgrade(Config(str(REPO_ROOT / "alembic.ini")), "head")
-        yield url
-    finally:
-        with psycopg.connect(admin, autocommit=True) as con:
-            con.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
 
 
 def _hex(content: str) -> str:
@@ -276,3 +243,24 @@ def test_the_migration_converts_served_drivers_down_and_up(scratch: str) -> None
     assert row is not None
     assert row[0] == [12, 12, 24]
     assert row[2] == ["3", "OTHER", "RECRUITING"]
+
+
+def test_a_rerun_that_changes_nothing_keeps_the_run_that_wrote_the_history(scratch: str) -> None:
+    """Review finding 9 (ADR 0045, decision 11): history rows carry the run that wrote them,
+    and a same-day rerun with the same scores neither rewrites them nor takes them over."""
+    with psycopg.connect(_libpq(scratch)) as con:
+        first, second = (
+            con.execute(
+                "INSERT INTO monitoring.pipeline_runs (job, status) VALUES ('daily', 'succeeded') "
+                "RETURNING run_id"
+            ).fetchone()[0]
+            for _ in range(2)
+        )
+        con.commit()
+    cfg = load_project_config()
+    serving.publish(_one(DAY1, 0.10), cfg, scratch, run_id=first)
+    again = serving.publish(_one(DAY1, 0.10), cfg, scratch, run_id=second)
+    assert again["history_written"] == 0
+    with psycopg.connect(_libpq(scratch)) as con:
+        runs = con.execute("SELECT run_id FROM serving.trial_score_history").fetchall()
+    assert runs == [(first,)]

@@ -5,21 +5,15 @@ API pages, the real ingest, sponsor pass, features and publication, with a stand
 import datetime as dt
 import hashlib
 import json
-import uuid
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 import pandas as pd
 import pytest
 import respx
-from alembic import command
-from alembic.config import Config
 from tenacity import wait_none
 
-from trialpulse.config import REPO_ROOT, Secrets
 from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL, ApiClient
 from trialpulse.live import daily, store
 from trialpulse.live.seed import seed
@@ -28,7 +22,6 @@ from trialpulse.live.sponsors import SponsorFile
 from .conftest import CFG, DECISIONS, KEEP, RULES, SECRET, compact_history
 
 psycopg = pytest.importorskip("psycopg")
-from psycopg import conninfo  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RELEASE = dt.date(2026, 10, 20)
@@ -36,32 +29,9 @@ DAY = dt.date(2026, 10, 30)  # the recorded dataTimestamp
 
 
 @pytest.fixture
-def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """A migrated scratch database (as in tests/scoring/test_publish.py); its libpq DSN."""
-    secret = Secrets().database_url
-    if secret is None:
-        pytest.skip("DATABASE_URL is not set")
-    base = secret.get_secret_value().replace("postgresql+psycopg://", "postgresql://", 1)
-    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
-    name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
-    try:
-        with psycopg.connect(admin, autocommit=True) as con:
-            con.execute(f"CREATE DATABASE {name}")
-    except psycopg.OperationalError as exc:
-        pytest.skip(f"no Postgres answers at DATABASE_URL ({type(exc).__name__})")
-    parts = conninfo.conninfo_to_dict(base)
-    user = quote(str(parts.get("user", "")), safe="")
-    password = quote(str(parts.get("password", "")), safe="")
-    host, port = parts.get("host", "localhost"), parts.get("port", 5432)
-    monkeypatch.setenv(
-        "DATABASE_URL", f"postgresql+psycopg://{user}:{password}@{host}:{port}/{name}"
-    )
-    try:
-        command.upgrade(Config(str(REPO_ROOT / "alembic.ini")), "head")
-        yield f"postgresql://{user}:{password}@{host}:{port}/{name}"
-    finally:
-        with psycopg.connect(admin, autocommit=True) as con:
-            con.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+def dsn(scratch: str) -> str:
+    """The libpq form of the scratch database's URL (tests/conftest.py)."""
+    return scratch.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
 def _bootstrap(dsn: str) -> None:
@@ -146,13 +116,13 @@ def _digest(dsn: str) -> dict[str, str]:
 
 
 @respx.mock
-def test_a_daily_run_publishes_and_a_second_run_changes_nothing(scratch: str) -> None:
-    _bootstrap(scratch)
-    report = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+def test_a_daily_run_publishes_and_a_second_run_changes_nothing(dsn: str) -> None:
+    _bootstrap(dsn)
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
     assert (report.status, report.day, report.exit_code) == ("succeeded", DAY, 0)
     assert report.counts["records_fetched"] == 8
     assert report.counts["details"]["actions"] == {"new_trial": 8}
-    with psycopg.connect(scratch) as con:
+    with psycopg.connect(dsn) as con:
         latest = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
         kinds = con.execute(
             "SELECT run_kind, status, data_timestamp FROM monitoring.pipeline_runs "
@@ -164,46 +134,47 @@ def test_a_daily_run_publishes_and_a_second_run_changes_nothing(scratch: str) ->
     assert kinds == [("full", "succeeded", DAY)]
     assert through == DAY - dt.timedelta(days=1)
     assert files == 1
-    before = _digest(scratch)
+    before = _digest(dsn)
     # The second cron: the day already succeeded, so nothing runs.
-    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "noop"
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "noop"
     # Forced (the idempotence check of Step 14): it runs, and changes nothing.
-    again = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL, force=True)
+    again = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL, force=True)
     assert again.status == "succeeded"
     assert again.counts["details"]["actions"] == {"overlap": 8}
     assert again.counts["trials_rescored"] == 0
-    assert _digest(scratch) == before
+    assert _digest(dsn) == before
+    _assert_served_is_the_population(dsn, DAY)
 
 
 @respx.mock
 @pytest.mark.parametrize("stage", [daily.INGEST, daily.SPONSORS])
-def test_a_run_that_fails_after_a_stage_heals_on_the_rerun(scratch: str, stage: str) -> None:
+def test_a_run_that_fails_after_a_stage_heals_on_the_rerun(dsn: str, stage: str) -> None:
     """The crash matrix: fail after each committed stage, rerun, and the tables equal those
     of an uninterrupted run on another database."""
-    _bootstrap(scratch)
-    with pytest.raises(daily.InjectedFailureError):
-        daily.run_daily(CFG, scratch, SECRET, _api(), MODEL, fail_after=stage)
-    with psycopg.connect(scratch) as con:
+    _bootstrap(dsn)
+    with pytest.raises(daily.JobFailedError, match=f"{stage}: InjectedFailureError: {stage}"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL, fail_after=stage)
+    with psycopg.connect(dsn) as con:
         status, error = con.execute(
             "SELECT status, error FROM monitoring.pipeline_runs WHERE job = 'daily'"
         ).fetchone()
     assert status == "failed"
     assert error == f"{stage}: InjectedFailureError"
-    healed = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    healed = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
     assert healed.status == "succeeded"
-    crashed = _digest(scratch)
-    with psycopg.connect(scratch) as con, con.cursor() as cur:  # an uninterrupted run, afresh
+    crashed = _digest(dsn)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # an uninterrupted run, afresh
         for table in (*TABLES, "live.sponsor_file", "monitoring.pipeline_runs"):
             cur.execute(f"DELETE FROM {table}")
         con.commit()
-    _bootstrap(scratch)
-    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
-    assert _digest(scratch) == crashed
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    assert _digest(dsn) == crashed
 
 
 @respx.mock
-def test_quarantined_records_end_the_run_in_failure_after_publishing(scratch: str) -> None:
-    _bootstrap(scratch)
+def test_quarantined_records_end_the_run_in_failure_after_publishing(dsn: str) -> None:
+    _bootstrap(dsn)
     page = _load("delta_page_1.json")
     page["studies"][0]["protocolSection"]["statusModule"]["overallStatus"] = "NOT_A_STATUS"
     api = _api()
@@ -212,9 +183,9 @@ def test_quarantined_records_end_the_run_in_failure_after_publishing(scratch: st
             200, json=_load("delta_page_2.json") if "pageToken" in request.url.params else page
         )
     )
-    report = daily.run_daily(CFG, scratch, SECRET, api, MODEL)
+    report = daily.run_daily(CFG, dsn, SECRET, api, MODEL)
     assert (report.status, report.exit_code) == ("failed", daily.QUARANTINED_EXIT)
-    with psycopg.connect(scratch) as con:
+    with psycopg.connect(dsn) as con:
         reasons = con.execute("SELECT reasons FROM live.quarantine").fetchall()
         published = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
         error = con.execute("SELECT error FROM monitoring.pipeline_runs WHERE job = 'daily'")
@@ -227,30 +198,30 @@ def test_quarantined_records_end_the_run_in_failure_after_publishing(scratch: st
 
 
 @respx.mock
-def test_the_job_refuses_without_a_bootstrap_and_does_nothing_on_a_weekend(scratch: str) -> None:
+def test_the_job_refuses_without_a_bootstrap_and_does_nothing_on_a_weekend(dsn: str) -> None:
     from trialpulse.cli import RefusedError
 
     with pytest.raises(RefusedError, match="bootstrap"):
-        daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
     respx.get(VERSION_URL).mock(
         return_value=httpx.Response(200, json={"dataTimestamp": "2026-10-31T09:00:04"})
     )
     api = ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
-    assert daily.run_daily(CFG, scratch, SECRET, api, MODEL).status == "weekend"
+    assert daily.run_daily(CFG, dsn, SECRET, api, MODEL).status == "weekend"
 
 
 @respx.mock
-def test_one_running_job_at_a_time(scratch: str) -> None:
-    _bootstrap(scratch)
-    with psycopg.connect(scratch) as con, con.cursor() as cur:
+def test_one_running_job_at_a_time(dsn: str) -> None:
+    _bootstrap(dsn)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
         store.start_run(cur, "daily", "daily", DAY, 120)
         con.commit()
-    with pytest.raises(store.LeaseError):
-        daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
-    with psycopg.connect(scratch) as con, con.cursor() as cur:  # a stale lease is released
+    with pytest.raises(daily.JobFailedError, match="start: LeaseError: another live job"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # a stale lease is released
         cur.execute("UPDATE monitoring.pipeline_runs SET started_at = now() - interval '3 hours'")
         con.commit()
-    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
 
 
 @respx.mock
@@ -259,13 +230,13 @@ def test_one_running_job_at_a_time(scratch: str) -> None:
     [(120.0, [], 0), (650.0, [600], 0), (720.0, [600, 700], daily.RETENTION_EXIT)],
 )
 def test_retention_alerts_at_600_and_700_mb(
-    scratch: str, monkeypatch: pytest.MonkeyPatch, size: float, alerts: list[int], code: int
+    dsn: str, monkeypatch: pytest.MonkeyPatch, size: float, alerts: list[int], code: int
 ) -> None:
     """ADR 0045: the run records the alerts; at the last one it ends non-zero so the
     failure issue opens. It never deletes anything itself."""
-    _bootstrap(scratch)
+    _bootstrap(dsn)
     monkeypatch.setattr(store, "database_mb", lambda cur: size)
-    report = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
     assert report.status == "succeeded"
     assert report.counts["details"]["retention_alerts"] == alerts
     assert report.exit_code == code
@@ -273,14 +244,14 @@ def test_retention_alerts_at_600_and_700_mb(
 
 @respx.mock
 def test_a_change_no_feature_reads_makes_no_version_history_row_or_record_change(
-    scratch: str,
+    dsn: str,
 ) -> None:
     """ADR 0042, condition 4: the same records again with another summary, other
     eligibility text, a title in other case and the sponsor's name in other case leave
     every live and serving table as it was."""
-    _bootstrap(scratch)
-    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
-    before = _digest(scratch)
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    before = _digest(dsn)
 
     def edited(name: str) -> Any:
         page = _load(name)
@@ -301,6 +272,229 @@ def test_a_change_no_feature_reads_makes_no_version_history_row_or_record_change
         )
     )  # fmt: skip
     api = ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
-    again = daily.run_daily(CFG, scratch, SECRET, api, MODEL, force=True)
+    again = daily.run_daily(CFG, dsn, SECRET, api, MODEL, force=True)
     assert again.counts["details"]["actions"] == {"overlap": 8}
-    assert _digest(scratch) == before
+    assert _digest(dsn) == before
+
+
+def _too_risky(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    out = _scorer(scored, features, day)
+    out["risk_12m"] = 2.0  # breaks the serving table's check constraint
+    return out
+
+
+@respx.mock
+def test_a_database_error_prints_no_value_of_the_row(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Review finding 1 (ADR 0040): a CheckViolation in publication, whose message repeats the
+    failing row, is reported as one line with the stage, the type and the SQLSTATE; no value
+    of any row reaches stdout, stderr, the run's ledger or the workflow's output."""
+    from trialpulse.cli import run
+
+    _bootstrap(dsn)
+    _api()
+    outputs = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+    monkeypatch.setenv("SPONSOR_ID_KEY", SECRET.decode())
+    risky = daily.Model("stand-in/1", _too_risky, DECISIONS)
+    monkeypatch.setattr(daily, "champion_model", lambda cfg, folder: risky)
+    code = run(daily.main, ["--target", "local"])
+    printed = capsys.readouterr()
+    text = printed.out + printed.err
+    assert code == 1
+    (line,) = [x for x in printed.err.splitlines() if x.strip()]
+    assert line.startswith("failed: publish: CheckViolation 23514 (at ")
+    assert outputs.read_text().strip() == "error_class=CheckViolation"
+    with psycopg.connect(dsn) as con:
+        (error,) = con.execute(
+            "SELECT error FROM monitoring.pipeline_runs WHERE job = 'daily'"
+        ).fetchone()
+        trials = [r[0] for r in con.execute("SELECT nct_id FROM live.trial_state").fetchall()]
+        hashes = [bytes(r[0]).hex()[:12] for r in con.execute(
+            "SELECT feature_hash FROM live.trial_state").fetchall()]  # fmt: skip
+    assert error == "publish: CheckViolation 23514"
+    for leaked in ("Failing row", "DETAIL", "stand-in/1", "2026-10-30", *trials, *hashes):
+        assert leaked not in text, leaked
+        assert leaked not in error, leaked
+
+
+# Review findings 2, 3, 5, 8 and 9 -------------------------------------------------------------
+
+
+def _edited_api(edit: Any, version_day: str = "2026-10-30") -> ApiClient:
+    """The recorded pages with `edit(studies)` applied to each page's records; returns only
+    the records `edit` keeps, with the count to match."""
+
+    def page(request: httpx.Request) -> httpx.Response:
+        second = "pageToken" in request.url.params
+        data = _load("delta_page_2.json" if second else "delta_page_1.json")
+        data["studies"] = edit(data["studies"], second)
+        if not second:
+            first, rest = len(data["studies"]), len(edit(_load("delta_page_2.json")["studies"],
+                                                         True))  # fmt: skip
+            data["totalCount"] = first + rest
+            if not rest:
+                data.pop("nextPageToken")
+        return httpx.Response(200, json=data)
+
+    respx.get(VERSION_URL).mock(
+        return_value=httpx.Response(200, json={"dataTimestamp": f"{version_day}T09:00:04"})
+    )
+    respx.get(STUDIES_URL).mock(side_effect=page)
+    return ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+
+
+def _set(studies: list[dict[str, Any]], path: str, value: Any, which: Any = None) -> list[
+    dict[str, Any]
+]:  # fmt: skip
+    for i, study in enumerate(studies):
+        if which is not None and i not in which:
+            continue
+        node = study["protocolSection"]
+        keys = path.split(".")
+        for key in keys[:-1]:
+            node = node.setdefault(key, {})
+        if value is None:
+            node.pop(keys[-1], None)
+        else:
+            node[keys[-1]] = value
+    return studies
+
+
+def _assert_served_is_the_population(dsn: str, day: dt.date) -> None:
+    """ADR 0038 layer 1: after any run, the served rows and the not-scored rows are the
+    population of the day, each trial once."""
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        rows = store.population_rows(cur, day, RULES.open_statuses, RULES.study_type,
+                                     RULES.min_first_post_date)  # fmt: skip
+        latest = {r[0] for r in cur.execute("SELECT nct_id FROM serving.trial_scores_latest")}
+        not_scored = {r[0] for r in cur.execute("SELECT nct_id FROM serving.trials_not_scored")}
+    assert not latest & not_scored
+    assert latest | not_scored == {r[0] for r in rows}
+    assert latest
+
+
+@respx.mock
+def test_a_record_that_cannot_be_converted_is_quarantined_and_the_run_goes_on(dsn: str) -> None:
+    """Review finding 2: the "about 40" enrollment count quarantines its record by the
+    field's name; the other 7 records are ingested and published."""
+    _bootstrap(dsn)
+    api = _edited_api(lambda s, second: s if second else _set(
+        s, "designModule.enrollmentInfo.count", "about 40", {0}))  # fmt: skip
+    report = daily.run_daily(CFG, dsn, SECRET, api, MODEL)
+    assert (report.status, report.exit_code) == ("failed", daily.QUARANTINED_EXIT)
+    assert report.counts["details"]["actions"] == {"new_trial": 7}
+    with psycopg.connect(dsn) as con:
+        held = con.execute("SELECT nct_id, reasons FROM live.quarantine").fetchall()
+        error = con.execute("SELECT error FROM monitoring.pipeline_runs WHERE job = 'daily'")
+        (message,) = error.fetchone()
+    assert [r for _, r in held] == ["enrollment_count: wrong JSON type"]
+    assert held[0][0] == _load("delta_page_1.json")["studies"][0]["protocolSection"][
+        "identificationModule"]["nctId"]  # fmt: skip
+    assert "about 40" not in message
+    _assert_served_is_the_population(dsn, DAY)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [("designModule.enrollmentInfo", None), ("designModule.enrollmentInfo.count", "about 40")],
+    ids=["field_turned_null", "records_quarantined"],
+)
+def test_the_gate_stops_a_run_before_any_write(dsn: str, path: str, value: Any) -> None:
+    """Review finding 3: on the next run every refetched record lost its enrollment count, or
+    was quarantined for it; either way more than 1% of the matched records lost the field,
+    and the run stops before writing anything."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    before = _digest(dsn)
+    api = _edited_api(lambda s, second: _set(s, path, value))
+    with pytest.raises(daily.JobFailedError, match=r"ingest: GateError: .*enrollment_count"):
+        daily.run_daily(CFG, dsn, SECRET, api, MODEL, force=True)
+    assert _digest(dsn) == before
+
+
+@respx.mock
+def test_a_pull_that_misses_stored_overlap_rows_fails(dsn: str) -> None:
+    """Review finding 3: the next pull returns 2 of the 8 records stored in its window, so 6
+    stored rows did not come back (more than 5): the run fails before any write."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    before = _digest(dsn)
+    api = _edited_api(lambda s, second: [] if second else s[:2])
+    with pytest.raises(daily.JobFailedError, match="6 stored overlap rows were not returned"):
+        daily.run_daily(CFG, dsn, SECRET, api, MODEL, force=True)
+    assert _digest(dsn) == before
+    # Five missing is within the allowance.
+    api = _edited_api(lambda s, second: s[:1] if second else s[:2])
+    assert daily.run_daily(CFG, dsn, SECRET, api, MODEL, force=True).status == "succeeded"
+
+
+@respx.mock
+def test_a_new_model_rescores_every_scored_trial_on_a_daily_run(dsn: str) -> None:
+    """Review finding 5: a run that is not a full run still rescores every served trial
+    when the model changed, and the history says why."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        served = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
+
+    def newer_scorer(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+        return _scorer(scored, features, day).assign(model_version="stand-in/2")
+
+    newer = daily.Model("stand-in/2", newer_scorer, DECISIONS)
+    monday = _edited_api(lambda s, second: s, "2026-11-02")  # history compares earlier days
+    report = daily.run_daily(CFG, dsn, SECRET, monday, newer)
+    assert report.counts["details"]["full"] is False
+    assert report.counts["trials_rescored"] == served
+    with psycopg.connect(dsn) as con:
+        latest = "SELECT DISTINCT model_version FROM serving.trial_scores_latest"
+        versions = con.execute(latest).fetchall()
+        reasons = con.execute(
+            "SELECT DISTINCT reasons FROM serving.trial_score_history "
+            "WHERE model_version = 'stand-in/2'"
+        ).fetchall()
+    assert versions == [("stand-in/2",)]
+    assert reasons == [(["new_model"],)]
+    _assert_served_is_the_population(dsn, dt.date(2026, 11, 2))
+
+
+@respx.mock
+def test_a_record_posted_after_the_run_date_waits_for_a_later_run(dsn: str) -> None:
+    """Review finding 9: a record posted after d is not applied (it would be refused), and
+    the next run, whose date has reached it, applies it."""
+    _bootstrap(dsn)
+    late = _load("delta_page_1.json")["studies"][0]["protocolSection"]["identificationModule"][
+        "nctId"]  # fmt: skip
+
+    def after(studies: list[dict[str, Any]], second: bool) -> list[dict[str, Any]]:
+        if second:
+            return studies
+        return _set(studies, "statusModule.lastUpdatePostDateStruct.date", "2026-10-31", {0})
+
+    report = daily.run_daily(CFG, dsn, SECRET, _edited_api(after), MODEL)
+    assert report.status == "succeeded"
+    assert report.counts["details"]["deferred"] == 1
+    with psycopg.connect(dsn) as con:
+        held = con.execute("SELECT count(*) FROM live.trial_state WHERE nct_id = %s", (late,))
+        assert held.fetchone()[0] == 0
+    monday = daily.run_daily(CFG, dsn, SECRET, _edited_api(after, "2026-11-02"), MODEL)
+    assert monday.status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        row = con.execute(
+            "SELECT effective_date FROM live.trial_state WHERE nct_id = %s", (late,)
+        ).fetchone()
+    assert row == (dt.date(2026, 10, 31),)
+    _assert_served_is_the_population(dsn, dt.date(2026, 11, 2))
+
+
+@respx.mock
+def test_a_database_not_at_the_migration_head_is_refused(dsn: str) -> None:
+    """Review finding 9: migrations run by hand, so the job refuses another revision."""
+    _bootstrap(dsn)
+    with psycopg.connect(dsn) as con:
+        con.execute("UPDATE alembic_version SET version_num = '0003'")
+        con.commit()
+    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0004"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)

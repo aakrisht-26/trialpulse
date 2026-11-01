@@ -142,3 +142,36 @@ def test_a_marker_says_what_changed() -> None:
     assert contract.marker_code(before, after) == 1 | 4
     later = _compact(_canonical(sponsor_key="other pharma"), types=["DEVICE"])
     assert contract.marker_code(before, later) == 16 | 32
+
+
+def test_every_live_column_reads_only_whitelisted_fields() -> None:
+    """Review finding 8 (ADR 0038, layer 1): the feature whitelist covers the live state.
+    Every compact field and every column of the wide row comes from fields the offline
+    features may read, and none from a forbidden one (why stopped, names, post-date types)."""
+    from trialpulse.features.registry import (
+        ALLOWED_VERSION_FIELDS,
+        FORBIDDEN_VERSION_FIELDS,
+        INTERVENTION_FIELDS,
+    )
+    from trialpulse.live.state import FIRST_FIELDS
+    from trialpulse.live.store import VERSION_COLUMNS, WIDE_COLUMNS
+
+    allowed = set(ALLOWED_VERSION_FIELDS) | set(INTERVENTION_FIELDS)
+    assert set(contract.SOURCES) == set(contract.LIVE_FIELDS)
+    for name, sources in contract.SOURCES.items():
+        assert sources, name
+        assert set(sources) <= allowed, name
+        assert not set(sources) & set(FORBIDDEN_VERSION_FIELDS), name
+    assert set(FIRST_FIELDS.values()) <= allowed
+    bookkeeping = {"nct_id", "feature_hash", "run_id"}
+    history = {*FIRST_FIELDS, "n_versions", "ever_suspended", "recent_post_dates", "lapse_from",
+               "reversal"}  # fmt: skip
+    assert set(WIDE_COLUMNS) == set(contract.LIVE_FIELDS) | bookkeeping | history
+    assert set(VERSION_COLUMNS) == set(contract.LIVE_FIELDS) | bookkeeping
+
+
+def test_a_compact_row_holds_only_its_columns() -> None:
+    """Fields outside the compact row (a name, a why-stopped text) never enter it."""
+    row = _compact(_canonical(why_stopped_hash="f" * 64, submitted_date=dt.date(2026, 9, 1)))
+    assert list(row) == ["nct_id", *contract.LIVE_FIELDS, "feature_hash"]
+    assert "Acme Pharma" not in str(row.values())

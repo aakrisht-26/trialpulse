@@ -281,3 +281,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "How do you know your streaming features equal your batch features?"
 
 **Short answer.** By stating what equal can mean and testing exactly that. The API shows only the latest record of a trial, so the live path can never see versions the API hid; equality is promised for the feed both paths read, and what the API hides is measured separately as an accepted loss. The test replays a synthetic registry through the real live code and the real offline code and compares every feature and every row with exact equality, including with most runs missed and around the day a sponsor rename starts to count. A mutation test showed the comparison catches a one-day shift in when events apply, which only matters around a rename's one-year mark.
+
+## Step 14 review: breaking my own tests on purpose
+
+**What was built.** An independent review of the merged live path, then fixes for its 11 findings: a failed run is reported in one line that holds no value of any row; one record that cannot be converted is quarantined while the run goes on; API booleans and counts are strict JSON types; the database tests fail in CI instead of skipping when Postgres is down; and tests for the NULL gate, the overlap check, a model change, the privacy scrub and the population invariant.
+
+**Key decision and why.** Measure the tests with deliberate faults instead of trusting a green run. Of 27 faults put into a copy of the code, 8 got through, every one in run control or privacy hardening; the parity tests caught all of theirs. The 8 now fail, and each fix was itself undone to check that its test notices. One new test also found a real bug: refetched records that were all quarantined never reached the gate.
+
+**Rejected alternative and why not.** Trusting coverage numbers. Every line of the gate ran in the old tests, so line coverage would have looked complete, but no test ever made the gate fire; only a fault that disables it showed the gap.
+
+**Likely interview question.** "How do you know your tests would catch a real bug?"
+
+**Short answer.** I put the bug in and see. For each guard I write the smallest fault that defeats it (the gate returns nothing, the scrub is skipped, a rerun rewrites the history) and run the suite against a copy of the code. A fault that survives means a missing test, not a safe system. The same check applies to the fix: undo it and the new test must fail. One of mine did not at first: undoing the CI rule turned its own test into a skip, which pytest reports as harmless.
