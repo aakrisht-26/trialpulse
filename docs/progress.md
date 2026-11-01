@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 13 (scoring pipeline and model registry)**: built and reported, waiting for Aakrisht's review. The full scoring run with drivers ran on 2026-10-30: an exact driver pass with about a quarter of the work (ADR 0035, proposed) brought it under the hour, so no choice of plan was needed (see "Step 13" below). One new decision waits for him: whether long jobs opt out of Windows' throttling. Step 12 was approved on 2026-10-26, and its follow-ups are done (see the end of "Step 12: Explainability, model card, data card" below). **Step 6** is finished (2026-10-21): the 10,000-text sample is labeled, the final distilled classifier scored once on test (macro-F1 0.769), every early stop labeled and the reasons addendum written; the labeling task was removed.
+Current step: **Step 14 (live ingestion and daily workflow)**: the options are reported and wait for Aakrisht's decisions, as his review of Step 13 asked (see "Step 14" below). Nothing is built yet. Step 13 was approved on 2026-10-31.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ Current step: **Step 13 (scoring pipeline and model registry)**: built and repor
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Not built: the options wait for Aakrisht's decision |
+| 14 | Live ingestion and daily workflow | Options reported 2026-11-01, waiting for Aakrisht's decisions; nothing built |
 | 15 | API service | Not started |
 | 16 | Dashboard | Not started |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2499,6 +2499,302 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 14: Live ingestion and daily workflow
+
+Date: 2026-11-01. Status: **options only, waiting for Aakrisht's decisions (rule 1 of his review).** Nothing is built: no code, migration, workflow or ADR, and no Neon project exists. "Measured" below means run on this laptop on real data, or against the public API. Nothing has run on Neon or on a GitHub runner. Neon's and GitHub's limits were read on their own pages on 2026-10-31 and 2026-11-01. Sizes assume go-live on 2026-12-01, 67 days after the data cutoff. "Part N" is a part of this section, "Section N" a section of CLAUDE.md, and "item N" an item of "Guidance for later steps" above.
+
+The evidence is a design pass, four attacks on it (parity, failure, sizing, fairness of the options), a census of API v2 and two rounds of independent checks of this text. None gives a reason to change a recommendation below.
+
+### In short
+
+| Question | Recommendation | Main evidence |
+| --- | --- | --- |
+| Computing the 54 features | **Option 3:** compact state in Neon, the sponsor record resumed from a stored file, one final SELECT shared with the offline path | A prototype equal to the offline path on 30 of 54 features at 3 dates on 2 feeds, 0 differences; the other 24 were checked separately or are still to test (Part 1) |
+| Testing parity | **Parity C:** one rule on any feed, five layers | The rule is what a replay can honestly promise; what the API hides is reported apart as the accepted loss |
+| Neon after 12 months | **512 to 534 MB,** 47% to 49% headroom against 1 GB, with compact rows and row-level grades outside Neon's tables | Row sizes from local Postgres 16; history growth from 4 weeks of real scoring |
+| Replay rows | **They do not fit:** 14.22M rows and 2,341 MB row by row, 584 MB compact | The total would be 2,853 to 2,875 MB, or 1,096 to 1,118 MB |
+| Row-level grades | **Aggregates in Neon, one small score file per month in Neon, replay rows on this laptop** | The Model health page needs aggregates only; the promotion gate must run on the laptop anyway |
+| Rule 2 | Would be held by no token, no dataset package on the runner, allowlisted uploads and a test. Its literal words need a reading from Aakrisht | Decision 5 |
+| Rule 3 | A runner job on 5,000 generated rows before Neon exists, then every stage of a weekly run timed | Estimated 21 to 41 minutes a week; nothing has run on a runner |
+
+### Part 1. Computing the 54 features (decision 1)
+
+| Features | Count | Needs on a scoring day d |
+| --- | --- | --- |
+| Design, status, classes, title phase, interventions, dates against d | 39 | The latest record and d |
+| Date slips and enrollment ratios | 5 | Also the five version-0 values |
+| `n_versions`, `ever_suspended`, `n_versions_recent` | 3 | Update history |
+| Sponsor track record | 4 | Every sponsor's record with aliases, and the priors from MLflow |
+| `open_interventional_trials` | 1 | Every trial's current state |
+| `landmark_index`, `months_since_t0` | 2 | t0 and d |
+
+API v2 gives the latest record of a changed trial and nothing else, so the options differ in where the rest comes from.
+
+| | Option 1: versions in Neon, offline SQL on the runner | Option 2: compact state, expanded into the offline tables | **Option 3: compact state, shared final SELECT (recommended)** |
+| --- | --- | --- | --- |
+| Neon holds | Every version of open or lapsed trials, all study types (1,218,844 rows at the cutoff) | One wide row per trial that can still be scored or counted; thin data for every trial; sponsor state | Same as Option 2 |
+| Version-0 values, history | Read from version rows | Columns on the wide row | Same as Option 2 |
+| Runner reads | About 1.2M version rows a week, 27% of the dataset's rows | About 66 MB a week, 5.9 MB a day | Same as Option 2 |
+| Approved offline code | `build_states` and `build_at_landmark` unchanged; `compute_features` gains injection points, because its sponsor and competition steps read every trial | About eight places: `build_states` gains a seed, and an `expand` step writes blank per-day rows for `build_at_landmark` | `build_states` and `build_at_landmark` unchanged; the final SELECT moves into a function both paths call |
+| New logic held by tests | Sponsor pass, events | Sponsor pass, events, expansion, export adapter | Sponsor pass, events, state update, a small at-landmark query, export adapter |
+| Evidence | No prototype | 0 of 88,895 rows differ on 30 features, with no feed and with every version fed; blank rows gave silent NULL features when state ran ahead of d | 0 differences on 30 features at 3 dates, on a feed of 244 daily pulls and one with 7 missed, against offline on the same feed |
+| Month 12, MB | 689 to 710 if a trial's versions are deleted when it closes; 748 to 770 if append-only, as Section 12 says | 512 to 534 | 512 to 534 |
+| Transfer of 5 GB, CU-hours of 100, a month (estimated) | About 1.9 GB, 2.4 to 8.6 | About 0.63 GB, 2.3 to 6.1 | Same as Option 2 |
+| Rule 2 | Closest to rows that amount to the dataset. Rule 1 says "update history", so the reading is Aakrisht's | Per-trial summaries, no version rows from the dataset | Same as Option 2 |
+| Its merit | Amendment markers and any future history feature come free | Accumulation stays in approved SQL | No blank rows; approved accumulation code untouched |
+
+All three use the same sponsor file and monthly score files.
+
+**Recommendation: Option 3.** Options 2 and 3 store the same rows, and neither holds by construction: the 54 expressions keep one definition, but state accumulation, title phase at ingest, intervention pairs, reversal from state, the open count and event derivation are new code in both. The replay test is the real protection. Option 3 reaches that test with less change to approved code than Option 2, and it cannot land on a blank row. Option 1 is the honest alternative: it keeps the most offline code and gets markers free, but it sits at or past the 700 MB line at month 12 and puts 27% of the dataset's row count on a runner every week. Expect 3,000 to 4,000 lines with tests for Option 3 (my estimate; Step 13 alone was 2,569), and fewer for Option 1.
+
+**A run under Option 3, in order:** read the API's `dataTimestamp` as d; pull the delta; update state in Neon and commit; advance the sponsor pass to d and commit its file; load the rows in scope, the sponsor file and the open count into DuckDB on the runner; build one row per trial as of d with a small at-landmark query; run the shared final SELECT for the 54 features; score and compute drivers with the champion from MLflow; publish. No connection stays open across the driver pass.
+
+**What Option 3 stores.**
+
+- A wide row for about 218,000 trials (236,565 after a year): the 217,306 never terminal and first posted from 2008, the 512 open with a reversal, and the 218 open from before 2008. Each holds 26 latest-record fields API v2 also gives, and 8 values only the dataset can give at bootstrap: five version-0 values, `n_versions`, `ever_suspended`, and post dates of the last 185 days (the longest window is 184). The first date a state counts as lapsed is stored with it.
+- For all 604,583 trials, the last post date, the current sponsor key, the sponsor key at registration, an ended code (open, stopped, completed) and a flag for ever having been terminal; and for about 52,000 sponsor keys their counts and the alias rule's running totals (ADR 0018). These go in one stored file of about 6 MB, which the pass reads and rewrites each day. It takes up to 12 MB in Neon, because a rewrite and VACUUM alternate between one and two copies. The measured file left out the post date and the flag, which should add a few MB at most.
+- Versions appended from API v2 after go-live, every study type, because the alias rule reads them all: 296,069 a year. These rows are compact (decision 4): `title_phase` stands in for the titles, types for the interventions, a sponsor id for the key. So exported rows need a small adapter before layer 5a or Step 17's laptop retrain can read them; through unchanged offline code the joins would silently blank 14 of the 54 features.
+
+No version row from the dataset is stored, and no eligibility, summary or `why_stopped` text. Display rows (titles, sponsor display names, area codes) come from API v2 only, never from the dataset: one bulk pull when Step 15 needs them, then each record's delta, inside the 40 MB allowance of Part 3.
+
+**What each incoming record does.**
+
+| Record against state | Action |
+| --- | --- |
+| Unknown trial | New registration: its values are version 0 |
+| Later post date, wide row exists | New version: count + 1, add the post date, update flags and latest columns, queue sponsor events |
+| Later post date, closed trial | Update thin data; a wide row only if it reopened; a reversal, counted but never scored (30,053 of 294,798 states in 12 months land on closed trials, and 331 of them reopen one) |
+| Same post date, same hash | Overlap refetch: nothing |
+| Same post date, new hash | Replace latest columns, keep the count and the version-0 values, update `ever_suspended`; a key change is a replacement on the day seen (ADR 0018) |
+| Earlier post date | Ignore and count (393 trials open or UNKNOWN in the API are behind the dataset today) |
+
+**Each group, measured on real data:**
+
+- Sponsor records resumed from a dumped state: 134,860 of 134,860 queries of the last 12 months match. Resuming daily, a key first seen on its query day, and late records are not yet tested.
+- The eight history-based amendment features: 12,230 of 12,230 landmark rows match.
+- The open count from current state alone: 3 of 3 stored dates match.
+- 30 row-level features through the prototype: 0 differences, above.
+- Interventions on all 146,982 unchanged trials: the distinct (name, type) count matches on 146,980 and the type set on 146,981. API v2 repeats pairs on 2,009 of them, so the live path counts distinct pairs on exact strings, as the dataset does.
+- `title_phase`: 123 unchanged trials differ on a title, and the stated phase moves on 0 of them.
+
+**Rejected by evidence:**
+
+- **No dataset-derived values in Neon at all.** With all 8 dataset-only values unknown, the median risk moves 0.006 at 12 months and 0.013 at 24, 33% and 61% of rows move by 0.01 or more, mean risk rises 31% and 33%, and only 66% to 67% of the top decile stays there (5,000 rows).
+- **A weekly bulk pull instead of deltas.** 44,262 hidden versions in 12 months against 1,271.
+- **A second implementation of the 54 expressions.** No reason to carry it.
+- **The internal history endpoint.** Section 7 forbids it in production.
+
+### Part 2. Testing serving parity (decision 2)
+
+A feed is what the live path is given: the versions up to a seed date, then what the API would have shown.
+
+| | What | Cost | Weakness |
+| --- | --- | --- | --- |
+| Parity A | CI, the day-0 check and the census only (layers 1, 3 and 4 below) | Least: no replay to build | Nothing tests accumulation over time, the sponsor pass resumed daily, or the open count on a later date. A bug that shows on day 30 passes all three |
+| Parity B | Two legs: with every version fed the result must be exact, and on an API-shaped feed the differing rows must be exactly the trials with a hidden version | A replay on warehouse rows | The real update rule keeps the count on a same-date record, so the first leg either fails or tests code the runner never runs. The second checks only `n_versions`, and it is wrong with missed runs, where a hidden version moves sponsor counts on other trials |
+| **Parity C (recommended)** | The rule below through local Postgres, plus layers 1, 3, 4 and 5 | The replay harness, and 30 to 45 minutes a run on the laptop (my estimate) | It cannot see what the API hides, because both sides read the same feed. That is why the loss is reported apart and layer 5b exists |
+
+**The rule of Parity C:** for any feed F that holds at most one record per trial and post date, and in which every record is seen before the sponsor pass goes past its post date, live(F) equals offline(F) on all 54 features and all rows, on several dates. offline(F) is `compute_served` on a view of the warehouse filtered to F, and the difference between offline(all) and offline(F) is reported separately as the accepted loss. A same-date replacement and a late record have no offline twin (tested on the real functions with synthetic rows), so they sit outside the rule, each with a layer 1 fixture whose answer is worked by hand.
+
+| Layer | Where, when | Time | What it does | Mainly catches |
+| --- | --- | --- | --- | --- |
+| 1 | CI, every push; no data, no network | Minutes | Synthetic registry and recorded API pages through the real path to the final SELECT, with fixtures for NULL keys, a late record, a same-date replacement, a new key, a closed trial, a lapse exit, a weekend date and mutated API shapes. Crash matrix: fail after each write, rerun, tables equal an uninterrupted run. After any sequence, `latest` plus `trials_not_scored` equals the population. The feature whitelist test covers the columns of the live state | Run control, shape changes |
+| 2 | Laptop, slow test, before go-live | 30 to 45 minutes (my estimate) | The rule above. Feeds: no misses, 1 in 30 missed, and the gap of decision 6. Dates: month crossing, weekend, landmark | Accumulation, sponsors, the open count |
+| 3 | Laptop, then one runner, before go-live | About 5 minutes on the laptop, 14 to 22 on a runner (estimated) | State at the cutoff plus live code reproduces Step 13's risks and drivers for all 88,895 trials. Exact on the laptop. On a runner the tolerance is declared before the run (1e-9 proposed, since LightGBM's output can differ across operating systems), and it logs counts and the largest difference only | The refactor; the runner's own arithmetic |
+| 4 | Laptop, at bootstrap | About 12 minutes as run | Census: every unchanged trial, API path against dataset path (decision 7) | API mapping on real records |
+| 5a | Laptop, after go-live | Minutes | Offline path on pinned plus exported live versions, compared on risks. Tests accumulation only, since both sides share the feed | Drift between the paths over time |
+| 5b | Laptop, once, under Gap (b) | One read | The later dataset read (decision 6), run after the real API pull: what the API really hid | Versions the API never showed |
+
+**What no test here can prove:**
+
+- The mapping of API shapes not yet seen. Layer 1 mutates today's shapes, and the gate in Part 6 stops the rest.
+- That the delta filter returns every record. A weekly check of (id, last post date) on the open set covers it: about 92 pages, about 2.5 minutes, and a later API date is then fetched and applied.
+- Versions that never appeared in any pull, except once through layer 5b.
+- A row not rescored on day d equals offline only on its own scoring date, so the API must say which date a score is from.
+
+**Differences accepted and recorded.** Anything else fails a layer.
+
+| Difference | Measured | Effect |
+| --- | --- | --- |
+| Same-day versions the API hides | 1,271 of 296,069 versions in 12 months; 411 of 88,895 scored rows differ at the cutoff (`n_versions` gap up to 6) | One version hidden: median risk move 0.0006 at 12 months, 1.3% of rows move 0.01 or more (24 months: 0.0010, 4.1%). Three hidden: 0.0016, 7.1% (24 months: 0.0027, 15.7%) |
+| Missed runs | 520 rows with 7 of 244 posting days missed | Same kind |
+| Bootstrap gap | At an analog of the 67 days to 2026-12-01: 17,748 hidden versions, 4,932 scored rows differ, 2,382 new trials with a hidden version 0 | Roughly 60 to 780 rows move 0.01 or more (my arithmetic from the first row). `n_versions` and first values stay wrong for good; `n_versions_recent` heals in 184 days. Decision 6 |
+| Versions the API never showed | At least 1,249 trials, 553 in the last 12 months; 0 of 1,248 visible now; the dataset's last version differs on 645 | 324 or more are terminal in the dataset and open officially, 82 of them TERMINATED, 0.23% of 35,772 early stops. The new dataset card's note on versions that failed review fits this but does not prove the cause. The data card should say so |
+| Silent registry edits | On 146,982 unchanged trials: lead sponsor name 1,384 rows (72 old keys, 5 of them hold 1,143), lead or organization class 40, titles on 123 trials, nearly all a change of case. No date, enrollment or design field on any row, and the submitted status on 0 rows | A delta pull cannot see them. They arrive with the trial's next version, as they do offline |
+| Same-date replacement | Not measured live | The count and version-0 values stay, `ever_suspended` is an OR, and a key change is a replacement on the day seen |
+| Late record | Not measured; indirect evidence suggests a few a day at most | Its sponsor events apply on the later of its post date and the pass's last day plus 1. Counts catch up within days, but an alias link can start later or differ for good |
+
+### Part 3. Neon after 12 months (decisions 3, 4)
+
+Against the Free plan: 1 GB per project, decimal (10^9 bytes), capped on `logical_size` across branches, so the line for 30% headroom is 700 MB. Row sizes are measured on local Postgres 16 with real rows. Neon's glossary defines logical data size as the database's tables, indexes, views and stored procedures and does not mention catalogs; I count them, the cautious choice. Parts are rounded.
+
+| Schema | Parts, MB | Total, MB |
+| --- | --- | --- |
+| `live` | State rows 61.0; appended versions, every study type, 66.9; outcome events 14.5; lapse exits 2.8; sponsor file 11.4, plus about 3 for the post date and flag (estimate); quarantine 1.2; the 67 days from the cutoff to go-live 13.4; columns the sized row left out 1.4 (estimate) | 175.6 |
+| `serving` | Latest 70.7; score history 153.2 to 174.9; new-model rows on a grown set 3.3; the first live run's history rows 10 (estimate); amendment markers 12 (decision 8); stop reasons 4.5; not scored 1.1; display allowance 40 (not measured) | 294.8 to 316.5 |
+| `monitoring` | Runs, promotions, drift summary and aggregates (the replay's 0.40 included) 1.45; 12 monthly score files 7.4 | 8.9 |
+| Catalogs | Postgres system catalogs | 32.5 |
+| **Total** | | **511.8 to 533.5** |
+
+- **Headroom:** 46.7% to 48.8%, or 166 to 188 MB under the 700 MB line. Without the markers the total is 500 to 522 MB. `run_id` on history (decision 11) would add up to 8 MB, not measured.
+- **History and new-model rows:** 879,000 to 1,058,000 rows: the first 88,895, about 56,000 on the first live run (scaled from 23,329 rows over 28 real days), then 7,281 to 10,714 a week, then 4 quarterly promotions that each add a row per trial (the worst case). The history growth comes from 4 weeks of real scoring, one crossing a month, and was sized at 7,800 and 10,700 rows a week, so the low end is about 5 MB cautious.
+- **Growth:** about 250 to 280 MB a year, so 700 MB falls around month 19 to 21 and 1 GB around month 32 to 35. Size only grows, so month 12 is that year's peak. A missed VACUUM adds 36 MB, and the worst stack on these figures, with weekly float32 files, is about 614 MB.
+- **Compute and transfer (estimated):** 2.3 to 6.1 CU-hours of 100 and about 0.63 GB of 5 a month. A Neon keep-alive every 5 minutes or less would use the 100 CU-hours by day 16.7 and take the daily job down, so `/health` must never touch Neon, and `/v1` reads need a cache and a rate limit (Step 15).
+
+**Compact rows are required (decision 4).** With today's serving rows the total passes 838 MB. `trial_scores_latest` is 1,664 bytes a row, and one rewrite doubles the table because plain VACUUM does not shrink it (148, 295.6, 440.4 MB). The compact row holds drivers as feature number, value and contribution to 3 decimals, with the sign as the direction (0 of 888,950 lost or wrong), and a date for each row. It is 382 bytes and settles at 67.3 MB. Ages stay double (float4 changes 69,054 and 38,708 values). The API expands the row on read, and the job runs VACUUM after publishing. Compact `live.study_versions` rows are 226 bytes against 841 to 870; full rows would add 182 to 191 MB and give 694 to 724 MB, past the line at the top of the range.
+
+**Replay rows (79 dates, about 90,000 trials) do not fit in any row form:**
+
+| Form | Rows | MB | Total with the above |
+| --- | --- | --- | --- |
+| Row by row, two horizons | 14.22M | 2,341 (2,204 to 2,537) | 2,853 to 2,875 |
+| Compact, one row per trial and date | 7.11M | 584 | 1,096 to 1,118 |
+| Aggregates per date and group | 2,844 | 0.40 | Counted above |
+
+At the true scored set of about 79,000 a date it is still about 2,060 MB, or 515 MB compact. Live grades row by row would add 1,541 MB in 12 months.
+
+**Where row-level grades live (decision 3):**
+
+| Way | Neon, a year | Good | Bad |
+| --- | --- | --- | --- |
+| **Grades 1 (recommended).** Aggregates per prediction date, for all rows and flagged rows, per horizon and landmark index, in `monitoring`; one compressed Parquet per month in `monitoring`, from the month's last full run; replay row-level files in `data/` on this laptop | 0.67 MB plus 7.4 MB (15 MB at 24 months) | Exact served numbers, private, no new service. 4 decimals move AUC by 0.00000 and the slope by at most 0.00004. The replay files are 45 to 73 MB and can be regenerated | `graded_predictions` holds aggregates, so Section 12 changes by ADR |
+| Grades 2. Rebuild grades from the change-only history plus exit rows | About 6 MB | Smallest | The 0.01 tolerance is half the median 12-month score. Uniform error of up to 0.01 moves AUC by up to 0.0098 and the slope by up to 0.13; 4 weeks of real staleness move them 0.0004 and 0.008. Never for the gate |
+| Grades 3. MLflow artifacts on DagsHub | 0 | No Neon cost | Dataset-derived rows on a service reported public; breaks "No data rows" in `tracking.py` |
+| Grades 4. A second Neon project | 0 here | Its own 1 GB | More moving parts for a problem Grades 1 solves |
+
+Monthly rather than weekly, because Section 14 needs no weekly grade date: weekly files at 4 decimals would add 25 MB a year, and in float32 44 MB. The Model health page reads aggregates only. The promotion gate cannot use score files at all, because a challenger needs features at past dates, which Neon does not hold. It is a laptop job (about 13 dates at 47 s), and only its result reaches `monitoring.promotions`.
+
+**Step 14 grades nothing:** the first 12-month predictions mature a year after go-live, and grading is built in Step 17, so Section 12's fifth daily step is deferred there. Step 14 records what grading and monitoring will need: from the first month, the score file (trial, prediction date, risks at 12 and 24 months to 4 decimals, sponsor class, landmark index, flagged, model version); lapse exits and status changes in `live.outcome_events`; and on every run in `pipeline_runs` the watermark, `dataTimestamp` (a new column, needed for ADR 0008 from day one), records fetched, versions added, records quarantined, trials rescored and stage durations.
+
+### Part 4. Rule 2: the gated dataset
+
+**Read literally, rule 2 forbids what it plainly does not mean to:** the warehouse rebuild that items 10 and 13 require, parity layers 2 to 4, the replay and the retrain all read the dataset on this laptop. Proposed reading, for Aakrisht to confirm (decision 5): *on this laptop the dataset may be read by any job he approves; the one-time bootstrap is the only path from it into the live system; after that, only aggregates, models and the summaries named in the ADR leave the laptop.*
+
+**What crosses at bootstrap:** the per-trial state of Part 1, sponsor tables summed from all 4.4M versions, the cutoff's scores regenerated on the rebuilt warehouse (held to Step 13's risks and drivers, because the content hash must come from the same contract as the state), the stop-reason labels of 35,198 early stops, and, if decision 8 stands, amendment markers for 217,295 versions as one array per trial. No full version rows and no text. The markers are the closest of these to the version history itself, and the public timeline would show them, so decisions 5 and 8 go together.
+
+**How it would be held (none of this exists yet):**
+
+- No `HF_TOKEN` secret in GitHub, with `gh secret list` in verify. Today the repository has no secrets at all.
+- `huggingface-hub` moves to its own default dependency group, because `mypy src` needs it. The daily job installs without that group, and every step sets `UV_NO_SYNC=1`, because `uv run` would reinstall a default group (tested on uv 0.11.26, on Windows). `HF_HUB_OFFLINE=1` as well.
+- `ingest.history` and the bootstrap refuse under `GITHUB_ACTIONS`.
+- A test walks the imports from every `python -m` in the workflows and fails on `ingest.history`, `warehouse.build` or `features.build`. Today `scoring.serving`, `scoring.champion` and `scoring.features` reach all three, so they must be split.
+- The same test scans strings for `hf://`, `huggingface.co` and `data/raw`, and allows only named `uses:` actions. `log_run` gets a suffix allowlist and a size limit.
+- Failure paths log step, exception type and SQLSTATE only, because a failed COPY's message holds the row twice and `split_valid` can re-raise with values. A test forces both on a sentinel row, and the failure issue carries only the run id and error class. Run logs of a public repository are readable by any logged-in GitHub user, for 90 days by default.
+- Caches hold dependencies and the model bundle only: GitHub says anyone with read access can reach a cache through a pull request.
+
+This guards against accidents, not intent. The real barriers are no token, no data on the runner and allowlisted uploads. `GITHUB_ACTIONS` can simply be unset.
+
+**Checked and clean today:** the champion bundle (4 files, 12 MB, no ids), the decisions file (5.4 KB, no ids), the git history (no data file ever added), `live.quarantine` (hash and reasons only).
+
+**Not designed yet, each a rule 2 risk in a later step:** the Evidently reference (5,000 values per feature, columns shuffled independently, no ids, under 1 MB, built on the laptop); the reason model (3.3 MB, vocabulary from dataset text, not on DagsHub); a `.dockerignore`, which does not exist while `data/` is 6.7 GB and `.env` sits in the build context.
+
+### Part 5. Rule 3: driver cost on a runner
+
+**To be measured first, before Neon exists.** A manual dispatch job loads the real bundle from MLflow, times the driver pass and predictions on 5,000 rows generated from the feature types, and logs `lscpu`. Driver time did not depend on feature values here (25.0 s with every feature shuffled, 24.8 s real), so no dataset-derived row needs to reach a runner. That test shuffled real values, so the generated rows are an assumption the first full run replaces. The same job calls `/version` and one real API page, because no request has ever gone from a GitHub runner to ClinicalTrials.gov. If that address is blocked, Section 12's host fails, whichever option is chosen.
+
+**Then every stage of a full weekly run is timed** against the hour, on a public repository's standard runner (4 CPU, 16 GB, 14 GB SSD). The job alarms at 60 minutes and is killed at 90. A full run is due when the last succeeded one is 7 or more days old, so a failure repeats the next day rather than losing a week.
+
+| Laptop, 5,000 rows, otherwise idle, opt-out accepted | Seconds |
+| --- | --- |
+| 16 threads | 13.2 to 13.5 |
+| 4 threads on 2 P cores with their SMT siblings (closest to a runner) | 41.5 to 42.1 |
+| 1 thread | 98.0 |
+
+**Estimate, none of it run on a runner:** drivers 14 to 23 minutes; everything else 7 to 18 (rough); weekly total 21 to 41; daily under 30 s of drivers on an ordinary day; the first run adds 2 to 4 minutes. Converting a record costs about 20 ms on this laptop, nearly all of it pandas hashing one row at a time, and the daily path will use the batch `content_hashes`, which exists. Passing the hour would take two driver passes in one job, a re-tune to many more leaves, losing ADR 0035, or unmeasured stalls on Neon. If it passes, the first move is a 4-way matrix by trial number; anything further comes back as a proposal, since carrying drivers forward would reopen a closed option.
+
+### Part 6. Run control, common to every option
+
+These are the rules I would build. Their numbers are in decision 13.
+
+- **The date.** d is the date of the API's `dataTimestamp`, read once at the start and passed everywhere. Records dated after d wait. Weekend runs do nothing, and a weekend month crossing is scored on Monday.
+- **The pull** starts at the last stored watermark minus 3 days, never today minus 3. The watermark is the earlier of the latest stored post date and d. It fails on zero rows (a future date answers 200 with totalCount 0), on a total that differs from totalCount, and when stored live rows of the overlap come back neither with their date nor with a later one, beyond a small count. The first run skips that last check, because about 9 dataset rows of its overlap are versions the API never showed.
+- **A gate before any write:** among overlap rows with the same trial and post date, stop if a field turned NULL in more than a set share. Six of ten API shape changes passed validation silently, and one crashed the run. Records get a per-record try that quarantines, a strict bool, and a refusal of any NULL status or NULL join key: API rows have no version number, so the join at `features/build.py:280-281` would silently zero 13 intervention features. Intervention types move onto the state row.
+- **New categories.** A value outside the contract quarantines its record, so the trial keeps its old state and score. The run therefore ends in failure after publishing, and opens the issue with column and count. Intervention types are checked the same way. A value the contract accepts but the model never saw (today `ECT` and `AMBIG`, on 0 of 88,895 scored rows) reaches the trees as NaN, so the run counts such rows and a test holds the contract's lists against `levels.json`.
+- **Scope is computed, not remembered.** The population on d is first posted from 2008-01-01 through d, and open, interventional and unlapsed on d. A run touches its trials with no row in `latest` or `trials_not_scored`, or with a different hash, uncapped landmark index or model, plus rows outside it. So failed runs heal, and the roughly 15,000 lapse exits a year, about 13,500 of them on the first of a month, leave on the day. Exits go to `live.outcome_events` with to_status LAPSED.
+- **Three stages, each its own transaction:** ingest, the sponsor pass, publication. The pass has one commit point, the write of its file, which holds the thin data, the last day reached and the last consumed run id. So state may run ahead of the file but never the reverse, and a rerun reads only later runs' rows. Applying a replacement twice would merge two sponsors a year later, so this matters. Publication refuses when the pass is behind d minus 1. `publish` takes a scope: every delete stays inside it, and an empty scope writes nothing.
+- **The sponsor file** starts through the cutoff minus 1, with the cutoff day's rows queued (1,369 states). A late record applies on the later of its post date and the pass's last day plus 1.
+- **The model.** `model_version` comes from the registry at load, and a run whose model differs must be full. The band decisions of ADR 0034 (`step13_checks.json`, 5.4 KB, no ids) join the registered run as a fifth file, because the runner has no `data/` and `served_decisions` refuses without them. If the registry is down: cached bundle plus the version in Neon, while ingest and exits still run.
+- **Writers.** A lease by a partial unique index on running jobs, with a stale rule. Quarantine has a unique key on the payload hash and a `--since` backfill. Bootstrap loads in one transaction and writes a `job='bootstrap'` row; the daily job refuses without it; the bootstrap refuses over live rows unless told to rebuild. Migrations run by hand, and the job refuses when `alembic_version` is not head. No page cache in the daily path. VACUUM runs after publish, in a finally step.
+- **Failure.** A separate notify job needs the daily job and runs on `always() && (needs.daily.result == 'failure' || needs.daily.result == 'cancelled')`, because GitHub's pages say a job at its timeout is cancelled but do not say `failure()` or `cancelled()` then hold. It has `contents: read` and `issues: write`, reuses one open issue, and runs only on main.
+
+### Part 7. Decisions for Aakrisht
+
+Each has a recommendation. Decisions 1 to 9 change what gets built. Decisions 5, 6, 8 and 9 must be settled before the one-time bootstrap, because undoing them later means another dataset read or a rewrite of Neon. Decisions 10 to 14 are defaults I would build unless told otherwise.
+
+| # | Decision | Recommendation |
+| --- | --- | --- |
+| 1 | Feature computation | Option 3 |
+| 2 | Parity | Parity C. Layers 1 to 4 pass before go-live; the tolerance is declared before the first runner run |
+| 3 | Row-level grades | Grades 1, monthly files. `graded_predictions` holds aggregates (Section 12 changes by ADR) |
+| 4 | Compact rows | Yes, for serving rows and `live.study_versions`, with the export adapter of Part 1 |
+| 5 | Rule 2 | Confirm the reading and the list of what crosses in Part 4, and the state in Part 1. This also means the retrain and the promotion gate run on this laptop, which changes Section 14 and Step 17 by ADR |
+| 6 | Bootstrap gap | Gap (b): one later read of the `core` rows for the gap, once, before go-live, on this laptop, with the real API pull run first so the same read also serves as layer 5b. Fallback: Gap (a) |
+| 7 | The 50-trial acceptance | Option 7b. This changes an acceptance criterion, so it is his call |
+| 8 | Timeline before go-live | Store amendment markers as arrays (12 MB), and start the risk line at go-live |
+| 9 | Sponsor keys in Neon | The pass needs equality only, so Neon and the sponsor file hold a hash, not the name; the replay must hold any tie that today sorts by key. Names appear only in the display table, and whether a sponsor that may be a person gets a display name is his rule, set before the bootstrap: 4,786 keys on 8,893 scored trials are two or three plain words (an upper bound that includes brand names), and ADR 0022 says the true number is unknown |
+| 10 | Reason labels for new stops | Defer to Step 15. The text stays in the API record; store only labels, never `why_stopped` |
+| 11 | Backups | A weekly pull of `live.study_versions` and score history to this laptop (3 to 4 MB a week), by hand on a set day or by a scheduled task, his choice; not a public artifact. `run_id` on history; the seed kept as a file here. Neon's restore reaches back 6 hours only |
+| 12 | Missed runs | A second daily cron that does nothing if the day succeeded. Section 12 names one; the no-op test bypasses that check |
+| 13 | Run-control numbers | Gate at 1% of overlap rows for any one field (no such field turned NULL on any census row); more than 5 missing overlap rows fail a run; alarm at 60 minutes, kill at 90; a full run after 7 days; a lease stale after 120 minutes; weekend runs do nothing; `outcome_events` also holds LAPSED exits. Job on the direct URL, API on the pooled one; a role created by SQL that lets the API read `serving` only, because roles made in Neon's Console, CLI or API can read and write all data |
+| 14 | Retention | Alerts at 600 and 700 MB. The retention step goes in this step's ADR now, because at the cap deletes fail too: at 600 MB, export score history and `live.study_versions` older than 12 months to this laptop, confirm the export, then delete them from Neon |
+
+**Decision 6 in detail.**
+
+| Way | Effect | Cost |
+| --- | --- | --- |
+| **Gap (b), recommended.** One later read, before go-live | State exact to the release, minus a tail of 1 to 7 days. Also serves as layer 5b and measures the never-shown versions | Aakrisht requests access to `anamnesis-data/clinical_trials_history` (approvals do not carry over), an ADR, a pinned commit because tags can move, about 150 lines. The card lists breaking changes: `interventions` keyed by `ord`, with repeated pairs as separate rows; post date empty for failed-review versions; a new column; rich text now Markdown |
+| Gap (a). Accept and record, with a flag per trial | No new read; layer 5b does not exist. The Part 2 table stands, and each week of delay adds about 600 to 700 differing rows | The flag covers about 5 to 7 times the rows affected. `n_versions` and first values stay wrong for good |
+| Gap (c). A newer full pin | One clean revision | Loses the day-0 match to Step 13, ties the evidence of Steps 3 to 13 to the old pin, and the tail remains. Not recommended |
+
+As of 2026-10-30, 21,483 records were posted after the cutoff, 4,995 of them new trials. The new card totals 609,579 trials and 4,473,881 versions, 29,339 versions past the pin, so about 7,856 are already hidden from the API.
+
+**Decision 7 in detail.** Step 14 asks that 50 unchanged trials give identical canonical rows on both paths. I ran that comparison on every open or UNKNOWN interventional trial: 160,060 records, of which 146,982 are unchanged (the official post date equals the dataset's last version). "Unchanged" needs that definition, or the 393 trials behind the dataset fail for a reason unrelated to the mapping.
+
+| Column group | Rows differing, of 146,982 | Cause |
+| --- | --- | --- |
+| 28 of 39 compared columns: every date, its precision and type, enrollment, ages, design fields, study type | 0 | None |
+| Submitted status | 0 | The registry's UNKNOWN label differs on 8,901 rows, and item 10 keeps it out of the hash |
+| Lead sponsor name or key | 1,384 | All raw differences: another name 1,376, case or punctuation 6, class changed with the same name 2. 0 rows with the same raw values and a different canonical value |
+| Lead class 27, organization class 40 | 40 (the 27 are among the 40); 9 overlap the row above, 31 do not | Raw value changed |
+| Official and brief titles | 123 trials | Case only on 114 and 79 fields, spread over 84 and 60 sponsors. `title_phase` moves on 0 |
+| Eligibility 363, summary 58 | 421 fields | No served feature reads them. **288 are a bug:** API v2 writes `<!-- -->` between adjacent lists, and `normalize_text` keeps it. The rest are escapes, entities and list numbers that differ between the HTML and Markdown forms, and a handful of real edits |
+| Distinct intervention count 2, type set 1 | At most 3 | The raw lists differ. Names differ in form on 6,443 more rows and match after `normalize_text`; the count is unaffected |
+
+So 1,950 rows (1.33%) differ on something today, which gives a literal 50 a 49% chance of stopping on a known cause: 40.8% on a column a feature reads, and 16.8% outside the sponsor columns. If it passed, it would prove little: the comment bug sits on 0.2% of rows, a 50-trial sample misses it 91% of the time, and the 559 trials sampled in Step 3 missed it.
+
+- **Option 7a, literal 50.** Stop on any difference. Honest, likely to stop for a known cause, weak if it passes.
+- **Option 7b, census (recommended).** The same comparison on every unchanged trial, with the seeded 50 as a subset, so the literal check is reported too. A difference is explained only by its column's rule: for dates, numbers, enums and sponsors the raw value must differ, and the same raw value with a different canonical value is a bug with no exception; for titles `title_phase` must be equal; for summary and eligibility, which no served feature reads, differences are counted by cause and do not fail the run. That last clause is the weakening, and it is why this is his decision.
+- **Rejected:** redrawing the sample until it passes.
+
+The fix for the comments belongs in `contracts/text.py` on the Markdown path only, so the dataset's stored texts stay byte-identical and the locked text-family results are untouched. Tested on every unchanged trial and all five text fields, it fixes all 288 and breaks none. A wider rule for backslashes fixed 26 fields and broke 68, so I rejected it. After the fix, 133 summary and eligibility fields would still differ in form, and at most 14 text fields show changed words.
+
+**Decision 8 in detail.** Rows before go-live do not exist in Option 3, so on day one `/v1/trials/{nct_id}/timeline` has one point per trial, and filling it later needs another dataset read. Options: leave it empty; add markers (12 MB as arrays, 23 MB as rows, recommended); or add scores at past landmarks (another 12 MB). No out-of-sample model covers recent landmarks, so such scores would be in-sample and must be labeled so, which is why I do not recommend them. Step 16's acceptance wording may need changing.
+
+**Needed from Aakrisht to start:** a Neon Free project on Postgres 16, in an AWS US East region (the region cannot be changed later), with no child branches; `NEON_DATABASE_URL` (the direct URL) in `.env` and as a GitHub secret; the three MLflow names as GitHub secrets; access to the new dataset location if he chooses Gap (b). `HF_TOKEN` stays out of GitHub. Step 15 adds one name to Section 17 for the API's pooled, read-only URL. Step 14 adds no dependency outside the locked stack.
+
+**Order of work if the recommendations stand:** ADRs; the contract changes of items 10 and 13, the comment fix and the warehouse rebuild, guarded by a comparison of old and new warehouse on every column but the hash and the new column, by the feature build's "Identical to the previous build" line (the warehouse build's own line will say no, by design) and by Step 13's risks and drivers; the refactors; the runner job of rule 3; the live path with layers 1 and 2; a seed at the cutoff with layers 3 and 4; the real API pull from the cutoff, kept on the laptop and written to no live table; the later read of Gap (b) inside the bootstrap, compared with that pull as layer 5b; the seed at the release loaded to Neon in the one bootstrap transaction; the first live run; `daily.yml`. Under Gap (a) the two steps of the later read drop out. Step 14's verify list gains a local bootstrap command before the two `--target local` runs, and `gh secret list`; both go in the ADR.
+
+### Part 8. For later steps, no decision now
+
+- **Step 17:** `retrain.yml` cannot run on a runner under rule 2, and a self-hosted runner is no escape, so its verify and acceptance change by ADR. The replay uses the origin-2023 model of item 23. Scoring alone is 62 minutes (79 dates at 47 s), 6.7 hours with drivers, and the model fit is extra, so its estimate comes back as a proposal; I would skip drivers. Under Option 3 the replay and the daily job share code from the final SELECT on, not before it, so Section 12's "same scoring and grading code" holds that far. The drift report needs the week's feature values, which exist only in the runner's memory during a full run, so it runs inside that job, against the hour, or recomputes them.
+- **Step 18:** GitHub disables scheduled workflows in a public repository after 60 days without activity, and the daily job makes none. GitHub cannot alarm on its own silence.
+- **Step 15:** `/health` and caching as in Part 3; a `.dockerignore` first; the Spaces token conflicts with the workflow scan, so deploy from the laptop or use a fine-grained token; API v2 returns no browse branches (0 of 88,504 scored trials), so area pages need a mapping from `ConditionAncestorTerm` (76.1% of scored trials have ancestors) with a periodic refresh; `/v1/model` needs a small table of headline metrics.
+
+### Part 9. Not measured
+
+- Anything on Neon: sizes are local Postgres 16. Whether `pg_database_size` matches `logical_size`, and whether freed space is reused across a suspend, is compared on bootstrap day.
+- Anything on a GitHub runner, and COPY through Neon's pooler, which its page does not mention.
+- The full path of Option 3 end to end. The prototype fed warehouse rows in DuckDB, with no API JSON, Postgres, sponsor pass or open count. 24 of 54 features were outside it: `title_phase`, 13 intervention features, 2 classes, 5 sponsor features, the open count and 2 time features. `compute_served` on a filtered view has not run: a first attempt was stopped unfinished after 12 minutes, so the 30 to 45 minutes of layer 2 is untested.
+- How often same-date replacements and late records occur live; how long a post date takes to appear in the API; one weekend observation of `dataTimestamp`.
+- What a restore costs. Neon's pages give the limit both as "1 GB of change history" and as "1 GB-month of changes". A restore creates a backup branch, which Neon says will "incur storage costs", and the cap sums `logical_size` across branches, so near 500 MB a restore could reach the cap until that branch is deleted.
+- DagsHub repository visibility, taken from the design and unverified. Line counts, the 40 MB display allowance (29.3 MB measured with area indexes, plus 2 to 7 MB of names) and the marker bytes are estimates.
+
+### The three checks
+
+1. **Acceptance:** no Step 14 criterion is met or claimed, since nothing is built. The two items of rule 1 are answered above with options and a recommendation, and the sizing covers all three schemas after 12 months, with history growth, new-model rows and the replay rows, against 1 GB with 30% headroom.
+2. **Decisions made without asking:** a census of every open or UNKNOWN interventional record: six pulls of 161 pages each, 966 requests at 30 a minute, plus 11 smaller requests. The first crashed after its column counts, one crashed on my typo, and the others traced causes and tried the text fix. Counts only, nothing stored. Assumed go-live on 2026-12-01. Named the options 1, 2, 3 so they do not clash with the closed driver options A, B, C. No ADR is written; ADRs come with the decisions. I also counted items in the Part 3 total that he did not list (lapse exits, the first run's history rows, markers), so the total is what would be built.
+3. **Blocked, skipped or deferred:** three checks stopped at the session limit before reporting: the fifth attack, then all five first-round verifiers. I recovered what they had and reran the unfinished lenses (design, completeness, numbers), which all finished: 47 findings, none that changes a recommendation, all applied here. I reviewed each and checked the main ones against the code and logs; I did not rerun every script of theirs. The code and limits lenses of round one were not rerun, so their unfinished items were not checked. Parts 8 and 9 list the rest.
 
 ## Steps 6 and 8 (merged from PR #1 on 2026-09-23)
 
