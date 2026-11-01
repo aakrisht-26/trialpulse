@@ -186,6 +186,29 @@ class SeedConfig(_Section):
     default: NonNegativeInt
 
 
+class LiveConfig(_Section):
+    """Run control of the live system (ADR 0045)."""
+
+    overlap_days: PositiveInt  # the pull starts at the watermark minus this many days
+    null_gate_share: float = Field(gt=0, lt=1)  # stop when a field turned NULL in more
+    max_missing_overlap: NonNegativeInt  # stored overlap rows the pull may miss
+    full_run_days: PositiveInt  # a full run is due after this many days
+    lease_stale_minutes: PositiveInt
+    alarm_minutes: PositiveInt
+    kill_minutes: PositiveInt
+    recent_post_days: PositiveInt  # post dates kept on the wide row
+    page_size: int = Field(gt=0, le=1000)
+    requests_per_minute: float = Field(gt=0, le=40)
+    retention_alert_mb: tuple[PositiveInt, ...] = Field(min_length=1)
+    retention_months: PositiveInt  # rows older than this are exported, then deleted
+
+    @model_validator(mode="after")
+    def _kill_after_alarm(self) -> Self:
+        if self.kill_minutes <= self.alarm_minutes:
+            raise ValueError("live.kill_minutes must be later than live.alarm_minutes")
+        return self
+
+
 class ProjectConfig(BaseSettings):
     """Locked definitions and tunable constants (CLAUDE.md Section 6).
 
@@ -209,6 +232,7 @@ class ProjectConfig(BaseSettings):
     features: FeatureConfig
     tuning: TuningConfig
     seeds: SeedConfig
+    live: LiveConfig
 
     @classmethod
     def settings_customise_sources(
@@ -286,3 +310,4 @@ class Secrets(BaseSettings):
     mlflow_tracking_username: str | None = None
     mlflow_tracking_password: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    sponsor_id_key: SecretStr | None = None  # ADR 0044: the key of the sponsor ids

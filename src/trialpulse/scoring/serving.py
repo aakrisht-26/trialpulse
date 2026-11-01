@@ -16,9 +16,19 @@ A run publishes one date, and scores without drivers are refused (CLAUDE.md Sect
 tables move forward in time: a run dated before the latest published date is refused
 (`EarlierDateError`), so the history stays in date order.
 
+**Compact rows** (ADR 0037 decision 6). The five drivers of each horizon are stored as four
+arrays: the horizon in months, the feature's number (its position in
+`registry.model_columns()`), its value as text and its contribution to 3 decimals, whose sign
+is the direction. Content hashes are stored as their 32 bytes.
+
+**A scope** (ADR 0045). A live run rescores only some trials. With `scope`, every row it
+writes and every row it removes is of a trial in the scope; an empty scope writes nothing.
+Without it, as in Step 13, the run covers every open trial.
+
 The database is DATABASE_URL (Section 17), local Postgres in Docker for Step 13.
 """
 
+import datetime as dt
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -27,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from trialpulse.config import ProjectConfig, Secrets
+from trialpulse.features.registry import model_columns
 from trialpulse.scoring.score import Scored
 
 MOVE = 0.01
@@ -37,14 +48,21 @@ FIRST, RECORD, LANDMARK, MODEL, CALENDAR = (
     "new_model",
     "calendar",
 )
+DRIVER_COLUMNS: tuple[str, ...] = (
+    "driver_months", "driver_features", "driver_values", "driver_contributions",
+)  # fmt: skip
 LATEST_COLUMNS: tuple[str, ...] = (
-    "nct_id", "as_of_date", "landmark_index", "true_landmark_index", "flagged", "model_name",
-    "model_version", "risk_12m", "risk_24m", "drivers", "content_hash",
+    "nct_id", "as_of_date", "landmark_index", "true_landmark_index", "flagged",
+    "model_version", "risk_12m", "risk_24m", *DRIVER_COLUMNS, "content_hash",
 )  # fmt: skip
 HISTORY_COLUMNS: tuple[str, ...] = (
-    "nct_id", "as_of_date", "model_name", "model_version", "risk_12m", "risk_24m", "reasons",
-    "landmark_index", "true_landmark_index", "content_hash", "flagged",
+    "nct_id", "as_of_date", "model_version", "risk_12m", "risk_24m", "reasons",
+    "landmark_index", "true_landmark_index", "content_hash", "flagged", "run_id",
 )  # fmt: skip
+NOT_SCORED_COLUMNS: tuple[str, ...] = (
+    "nct_id", "as_of_date", "true_landmark_index", "reason", "content_hash",
+)  # fmt: skip
+CONTRIBUTION_DECIMALS = 3
 
 
 class EarlierDateError(ValueError):
@@ -117,25 +135,83 @@ def _rows(frame: pd.DataFrame, columns: Sequence[str]) -> list[tuple[Any, ...]]:
     return out
 
 
+def compact_drivers(payload: str) -> tuple[list[int], list[int], list[str], list[float]]:
+    """The drivers of one score (the JSON of `score.predict`) as the four arrays of a compact
+    row, horizon by horizon in increasing months, each in its stored order."""
+    numbers = {name: i for i, name in enumerate(model_columns())}
+    months: list[int] = []
+    features: list[int] = []
+    values: list[str] = []
+    contributions: list[float] = []
+    for horizon, items in sorted(json.loads(payload).items(), key=lambda kv: int(kv[0])):
+        for item in items:
+            months.append(int(horizon))
+            features.append(numbers[item["feature"]])
+            values.append(str(item["value"]))
+            contributions.append(round(float(item["contribution"]), CONTRIBUTION_DECIMALS))
+    return months, features, values, contributions
+
+
+def expanded_drivers(
+    months: Sequence[int], features: Sequence[int], values: Sequence[str],
+    contributions: Sequence[float],
+) -> dict[str, list[dict[str, Any]]]:  # fmt: skip
+    """The compact arrays back as drivers by horizon (what the API serves, Step 15)."""
+    names = model_columns()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for m, f, v, c in zip(months, features, values, contributions, strict=True):
+        out.setdefault(str(m), []).append(
+            {"feature": names[f], "value": v, "contribution": float(c),
+             "direction": "raises" if c > 0 else "lowers"}
+        )  # fmt: skip
+    return out
+
+
+def _hash_bytes(values: pd.Series) -> pd.Series:
+    return values.map(lambda h: None if h is None or pd.isna(h) else bytes.fromhex(str(h)))
+
+
 def latest_frame(scored: Scored) -> pd.DataFrame:
     frame = scored.scores.rename(columns={"true_index": "true_landmark_index"}).copy()
     frame["as_of_date"] = pd.to_datetime(frame["as_of_date"]).dt.date
     if "drivers" not in frame or frame["drivers"].isna().any():
         raise ValueError("scores without drivers are not served (CLAUDE.md Section 13)")
+    arrays = [compact_drivers(str(payload)) for payload in frame["drivers"]]
+    for i, column in enumerate(DRIVER_COLUMNS):
+        frame[column] = [a[i] for a in arrays]
+    frame["content_hash"] = _hash_bytes(frame["content_hash"])
     return frame
 
 
-def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[str, int]:
-    """Write one scoring run to the serving schema (see the module text)."""
+def publish(
+    scored: Scored,
+    cfg: ProjectConfig,
+    url: str | None = None,
+    scope: set[str] | None = None,
+    run_id: int | None = None,
+    day: dt.date | None = None,
+) -> dict[str, int]:
+    """Write one scoring run to the serving schema (see the module text). `day` names the
+    run's date when it may hold no row (a scoped run whose trials all left)."""
     import psycopg
 
     new = latest_frame(scored)
+    new["run_id"] = run_id
     unscored = scored.unscored.rename(columns={"true_index": "true_landmark_index"}).copy()
     unscored["as_of_date"] = pd.to_datetime(unscored["as_of_date"]).dt.date
-    days = set(new["as_of_date"]) | set(unscored["as_of_date"])
+    unscored["content_hash"] = _hash_bytes(unscored["content_hash"])
+    if scope is not None:
+        outside = (set(new["nct_id"]) | set(unscored["nct_id"])) - scope
+        if outside:
+            raise ValueError(f"{len(outside)} trials of the run are outside its scope")
+        if not scope:
+            return {}
+    days = set(new["as_of_date"]) | set(unscored["as_of_date"]) | ({day} if day else set())
     if len(days) != 1:
         raise ValueError(f"a run publishes one date, not {len(days)}")
     (day,) = days
+    in_scope = "" if scope is None else " AND t.nct_id = ANY(%(scope)s)"
+    scoped = {"scope": sorted(scope or ())}
     dsn = (url or _url()).replace("postgresql+psycopg://", "postgresql://")
     counts: dict[str, int] = {}
     with psycopg.connect(dsn) as con, con.cursor() as cur:
@@ -176,10 +252,13 @@ def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[
         counts["latest_written"] = cur.rowcount
         cur.execute(
             "DELETE FROM serving.trial_scores_latest t WHERE NOT EXISTS "
-            "(SELECT 1 FROM incoming i WHERE i.nct_id = t.nct_id)"
+            f"(SELECT 1 FROM incoming i WHERE i.nct_id = t.nct_id){in_scope}",
+            scoped,
         )
         counts["latest_removed"] = cur.rowcount
         values = HISTORY_COLUMNS[2:]  # the columns after the key (nct_id, as_of_date)
+        # A rerun that changes nothing keeps the row, with the run that wrote it.
+        compared = [c for c in values if c != "run_id"]
         _staging(cur, "incoming_history", "serving.trial_score_history", HISTORY_COLUMNS)
         _copy(cur, "incoming_history", HISTORY_COLUMNS, _rows(history, HISTORY_COLUMNS))
         cur.execute(
@@ -187,22 +266,22 @@ def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[
             SELECT {", ".join(HISTORY_COLUMNS)} FROM incoming_history
             ON CONFLICT (nct_id, as_of_date, model_version) DO UPDATE SET
               {", ".join(f"{c} = EXCLUDED.{c}" for c in values)}, scored_at = now()
-            WHERE ({", ".join(f"h.{c}" for c in values)})
-              IS DISTINCT FROM ({", ".join(f"EXCLUDED.{c}" for c in values)})"""
+            WHERE ({", ".join(f"h.{c}" for c in compared)})
+              IS DISTINCT FROM ({", ".join(f"EXCLUDED.{c}" for c in compared)})"""
         )
         counts["history_written"] = cur.rowcount
         # A rerun on the same day: that day's rows of trials that no longer warrant one go.
         cur.execute(
-            """DELETE FROM serving.trial_score_history h
-            WHERE h.as_of_date = %s
-              AND h.model_version IN (SELECT model_version FROM incoming)
+            f"""DELETE FROM serving.trial_score_history t
+            WHERE t.as_of_date = %(day)s
+              AND t.model_version IN (SELECT model_version FROM incoming)
               AND NOT EXISTS (SELECT 1 FROM incoming_history i
-                              WHERE i.nct_id = h.nct_id AND i.model_version = h.model_version)""",
-            (day,),
+                              WHERE i.nct_id = t.nct_id AND i.model_version = t.model_version)
+              {in_scope}""",
+            {"day": day, **scoped},
         )
         counts["history_removed"] = cur.rowcount
-        not_scored_columns = ("nct_id", "as_of_date", "true_landmark_index", "reason",
-                              "content_hash")  # fmt: skip
+        not_scored_columns = NOT_SCORED_COLUMNS
         _staging(cur, "incoming_not_scored", "serving.trials_not_scored", not_scored_columns)
         _copy(cur, "incoming_not_scored", not_scored_columns, _rows(unscored, not_scored_columns))
         cur.execute(
@@ -220,7 +299,8 @@ def publish(scored: Scored, cfg: ProjectConfig, url: str | None = None) -> dict[
         counts["not_scored_written"] = cur.rowcount
         cur.execute(
             "DELETE FROM serving.trials_not_scored t WHERE NOT EXISTS "
-            "(SELECT 1 FROM incoming_not_scored i WHERE i.nct_id = t.nct_id)"
+            f"(SELECT 1 FROM incoming_not_scored i WHERE i.nct_id = t.nct_id){in_scope}",
+            scoped,
         )
         counts["not_scored_removed"] = cur.rowcount
         con.commit()
