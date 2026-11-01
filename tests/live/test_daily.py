@@ -1,0 +1,253 @@
+"""The daily job end to end on a real Postgres (ADR 0038, layer 1): seeded state, the recorded
+API pages, the real ingest, sponsor pass, features and publication, with a stand-in scorer
+(the champion's bundle is not in CI). Skipped when no Postgres answers at DATABASE_URL."""
+
+import datetime as dt
+import hashlib
+import json
+import uuid
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+import httpx
+import pandas as pd
+import pytest
+import respx
+from alembic import command
+from alembic.config import Config
+from tenacity import wait_none
+
+from trialpulse.config import REPO_ROOT, Secrets
+from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL, ApiClient
+from trialpulse.live import daily, store
+from trialpulse.live.seed import seed
+from trialpulse.live.sponsors import SponsorFile
+
+from .conftest import CFG, DECISIONS, KEEP, RULES, SECRET, compact_history
+
+psycopg = pytest.importorskip("psycopg")
+from psycopg import conninfo  # noqa: E402
+
+FIXTURES = Path(__file__).parent / "fixtures"
+RELEASE = dt.date(2026, 10, 20)
+DAY = dt.date(2026, 10, 30)  # the recorded dataTimestamp
+
+
+@pytest.fixture
+def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """A migrated scratch database (as in tests/scoring/test_publish.py); its libpq DSN."""
+    secret = Secrets().database_url
+    if secret is None:
+        pytest.skip("DATABASE_URL is not set")
+    base = secret.get_secret_value().replace("postgresql+psycopg://", "postgresql://", 1)
+    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
+    name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
+    try:
+        with psycopg.connect(admin, autocommit=True) as con:
+            con.execute(f"CREATE DATABASE {name}")
+    except psycopg.OperationalError as exc:
+        pytest.skip(f"no Postgres answers at DATABASE_URL ({type(exc).__name__})")
+    parts = conninfo.conninfo_to_dict(base)
+    user = quote(str(parts.get("user", "")), safe="")
+    password = quote(str(parts.get("password", "")), safe="")
+    host, port = parts.get("host", "localhost"), parts.get("port", 5432)
+    monkeypatch.setenv(
+        "DATABASE_URL", f"postgresql+psycopg://{user}:{password}@{host}:{port}/{name}"
+    )
+    try:
+        command.upgrade(Config(str(REPO_ROOT / "alembic.ini")), "head")
+        yield f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    finally:
+        with psycopg.connect(admin, autocommit=True) as con:
+            con.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+
+
+def _bootstrap(dsn: str) -> None:
+    aliases = (CFG.features.sponsor_alias_min_trials, CFG.features.sponsor_alias_wait_days)
+    seeded = seed(compact_history(120), RELEASE, RULES, KEEP, *aliases)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        store.load_bootstrap(cur, seeded.wides, seeded.sponsors, seeded.markers, RELEASE)
+        con.commit()
+
+
+def _scorer(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    """A stand-in for the champion: risks from the content hash, one driver per horizon."""
+    merged = scored.merge(features[["trial_id", "true_index", "n_versions"]],
+                          on=["trial_id", "true_index"], how="left")  # fmt: skip
+    risk = merged["content_hash"].map(lambda h: int(str(h)[:4], 16) % 997 / 2000)
+    drivers = [json.dumps({"12": [{"feature": "n_versions", "value": str(n), "contribution": 0.1,
+                                   "direction": "raises"}], "24": []})
+               for n in merged["n_versions"]]  # fmt: skip
+    return pd.DataFrame(
+        {
+            "nct_id": merged["trial_id"].astype(str), "as_of_date": pd.Timestamp(day),
+            "true_index": merged["true_index"], "landmark_index": merged["k_star"],
+            "flagged": merged["flagged"].astype(bool), "risk_12m": risk, "risk_24m": risk * 1.5,
+            "content_hash": merged["content_hash"], "model_name": "stand-in",
+            "model_version": "stand-in/1", "drivers": drivers,
+        }
+    )  # fmt: skip
+
+
+MODEL = daily.Model("stand-in/1", _scorer, DECISIONS)
+
+
+def _load(name: str) -> Any:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _api() -> ApiClient:
+    respx.get(VERSION_URL).mock(return_value=httpx.Response(200, json=_load("version.json")))
+    respx.get(STUDIES_URL).mock(
+        side_effect=lambda request: httpx.Response(
+            200,
+            json=_load("delta_page_2.json" if "pageToken" in request.url.params
+                       else "delta_page_1.json"),
+        )
+    )  # fmt: skip
+    return ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+
+
+TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "live.trial_state": ("nct_id", ("updated_at", "run_id")),
+    "live.study_versions": ("nct_id, effective_date", ("ingested_at", "run_id")),
+    "live.outcome_events": ("nct_id, effective_date, to_status", ("event_id", "detected_at",
+                                                                  "run_id")),
+    "live.quarantine": ("payload_hash", ("quarantine_id", "quarantined_at", "run_id")),
+    "serving.trial_scores_latest": ("nct_id", ("scored_at",)),
+    "serving.trial_score_history": ("nct_id, as_of_date", ("history_id", "scored_at", "run_id")),
+    "serving.trials_not_scored": ("nct_id", ("recorded_at",)),
+    "serving.amendment_markers": ("nct_id", ("updated_at",)),
+    "monitoring.score_files": ("month", ("written_at", "run_id")),
+}  # fmt: skip
+
+
+def _digest(dsn: str) -> dict[str, str]:
+    """Every live and serving table's content, without timestamps and run ids, and the
+    sponsor file without the id of the run that wrote it."""
+    out = {}
+    with psycopg.connect(dsn) as con:
+        for table, (order, dropped) in TABLES.items():
+            minus = "".join(f" - '{c}'" for c in dropped)
+            rows = con.execute(f"SELECT to_jsonb(t){minus} FROM {table} t ORDER BY {order}")
+            digest = hashlib.sha256()
+            n = 0
+            for (row,) in rows.fetchall():
+                digest.update(json.dumps(row, sort_keys=True).encode())
+                n += 1
+            out[table] = f"{n}:{digest.hexdigest()[:16]}"
+        row = con.execute("SELECT content FROM live.sponsor_file").fetchone()
+        sponsors = SponsorFile.from_bytes(bytes(row[0]))
+        sponsors.last_run_id = None
+        out["live.sponsor_file"] = hashlib.sha256(sponsors.to_bytes()).hexdigest()[:16]
+    return out
+
+
+@respx.mock
+def test_a_daily_run_publishes_and_a_second_run_changes_nothing(scratch: str) -> None:
+    _bootstrap(scratch)
+    report = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    assert (report.status, report.day, report.exit_code) == ("succeeded", DAY, 0)
+    assert report.counts["records_fetched"] == 8
+    assert report.counts["details"]["actions"] == {"new_trial": 8}
+    with psycopg.connect(scratch) as con:
+        latest = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
+        kinds = con.execute(
+            "SELECT run_kind, status, data_timestamp FROM monitoring.pipeline_runs "
+            "WHERE job = 'daily'"
+        ).fetchall()
+        through = con.execute("SELECT through_day FROM live.sponsor_file").fetchone()[0]
+        files = con.execute("SELECT count(*) FROM monitoring.score_files").fetchone()[0]
+    assert latest > 0
+    assert kinds == [("full", "succeeded", DAY)]
+    assert through == DAY - dt.timedelta(days=1)
+    assert files == 1
+    before = _digest(scratch)
+    # The second cron: the day already succeeded, so nothing runs.
+    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "noop"
+    # Forced (the idempotence check of Step 14): it runs, and changes nothing.
+    again = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL, force=True)
+    assert again.status == "succeeded"
+    assert again.counts["details"]["actions"] == {"overlap": 8}
+    assert again.counts["trials_rescored"] == 0
+    assert _digest(scratch) == before
+
+
+@respx.mock
+@pytest.mark.parametrize("stage", [daily.INGEST, daily.SPONSORS])
+def test_a_run_that_fails_after_a_stage_heals_on_the_rerun(scratch: str, stage: str) -> None:
+    """The crash matrix: fail after each committed stage, rerun, and the tables equal those
+    of an uninterrupted run on another database."""
+    _bootstrap(scratch)
+    with pytest.raises(daily.InjectedFailureError):
+        daily.run_daily(CFG, scratch, SECRET, _api(), MODEL, fail_after=stage)
+    with psycopg.connect(scratch) as con:
+        status, error = con.execute(
+            "SELECT status, error FROM monitoring.pipeline_runs WHERE job = 'daily'"
+        ).fetchone()
+    assert status == "failed"
+    assert error == f"{stage}: InjectedFailureError"
+    healed = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    assert healed.status == "succeeded"
+    crashed = _digest(scratch)
+    with psycopg.connect(scratch) as con, con.cursor() as cur:  # an uninterrupted run, afresh
+        for table in (*TABLES, "live.sponsor_file", "monitoring.pipeline_runs"):
+            cur.execute(f"DELETE FROM {table}")
+        con.commit()
+    _bootstrap(scratch)
+    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
+    assert _digest(scratch) == crashed
+
+
+@respx.mock
+def test_quarantined_records_end_the_run_in_failure_after_publishing(scratch: str) -> None:
+    _bootstrap(scratch)
+    page = _load("delta_page_1.json")
+    page["studies"][0]["protocolSection"]["statusModule"]["overallStatus"] = "NOT_A_STATUS"
+    api = _api()
+    respx.get(STUDIES_URL).mock(
+        side_effect=lambda request: httpx.Response(
+            200, json=_load("delta_page_2.json") if "pageToken" in request.url.params else page
+        )
+    )
+    report = daily.run_daily(CFG, scratch, SECRET, api, MODEL)
+    assert (report.status, report.exit_code) == ("failed", daily.QUARANTINED_EXIT)
+    with psycopg.connect(scratch) as con:
+        reasons = con.execute("SELECT reasons FROM live.quarantine").fetchall()
+        published = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
+        error = con.execute("SELECT error FROM monitoring.pipeline_runs WHERE job = 'daily'")
+        (message,) = error.fetchone()
+    assert len(reasons) == 1
+    assert "overall_status" in reasons[0][0]
+    assert "NOT_A_STATUS" not in reasons[0][0]
+    assert published > 0
+    assert message == "QuarantinedRecords: 1"
+
+
+@respx.mock
+def test_the_job_refuses_without_a_bootstrap_and_does_nothing_on_a_weekend(scratch: str) -> None:
+    from trialpulse.cli import RefusedError
+
+    with pytest.raises(RefusedError, match="bootstrap"):
+        daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    respx.get(VERSION_URL).mock(
+        return_value=httpx.Response(200, json={"dataTimestamp": "2026-10-31T09:00:04"})
+    )
+    api = ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+    assert daily.run_daily(CFG, scratch, SECRET, api, MODEL).status == "weekend"
+
+
+@respx.mock
+def test_one_running_job_at_a_time(scratch: str) -> None:
+    _bootstrap(scratch)
+    with psycopg.connect(scratch) as con, con.cursor() as cur:
+        store.start_run(cur, "daily", "daily", DAY, 120)
+        con.commit()
+    with pytest.raises(store.LeaseError):
+        daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    with psycopg.connect(scratch) as con, con.cursor() as cur:  # a stale lease is released
+        cur.execute("UPDATE monitoring.pipeline_runs SET started_at = now() - interval '3 hours'")
+        con.commit()
+    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
