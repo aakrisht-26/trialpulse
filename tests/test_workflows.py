@@ -124,3 +124,69 @@ def test_a_missing_postgres_skips_locally_and_fails_where_it_is_required(
         no_postgres("no Postgres answers")
     assert ci.type is pytest.fail.Exception
     assert "TRIALPULSE_REQUIRE_POSTGRES is set" in str(ci.value)
+
+
+# The dataset client stays off the runners (item 2 of the last cloud task) ---------------------
+
+LIVE_WORKFLOWS = ("daily.yml", "timing.yml")
+DATASET_PACKAGES = ("huggingface-hub", "datasets")
+
+
+def _pyproject() -> dict[str, Any]:
+    import tomllib
+
+    data: dict[str, Any] = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text("utf-8"))
+    return data
+
+
+def _name(requirement: str) -> str:
+    return re.split(r"[<>=!~\[; ]", requirement, maxsplit=1)[0].lower()
+
+
+def test_the_dataset_client_is_a_default_group_not_a_dependency() -> None:
+    """A plain `uv sync` (the laptop, CI) installs the dataset group; the package itself
+    does not depend on it, so an install without the group has no dataset client."""
+    project = _pyproject()
+    names = {_name(r) for r in project["project"]["dependencies"]}
+    assert not names & set(DATASET_PACKAGES)
+    assert {_name(r) for r in project["dependency-groups"]["dataset"]} == {"huggingface-hub"}
+    assert set(project["tool"]["uv"]["default-groups"]) == {"dataset", "dev"}
+
+
+@pytest.mark.parametrize("name", LIVE_WORKFLOWS)
+def test_the_live_workflows_install_without_the_dataset_group(name: str) -> None:
+    text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    syncs = re.findall(r"uv sync[^\n]*", text)
+    assert syncs, name
+    for command in syncs:
+        assert "--no-group dataset" in command, command
+        assert "--no-dev" in command, command
+        assert "--locked" in command, command
+    assert "uv pip" not in text
+    commands = re.findall(r"^\s*run: (.*)$", text, flags=re.MULTILINE)
+    for command in commands:  # nothing but the sync and the project's own modules
+        assert command.startswith(("uv sync", "uv run python -m trialpulse.", "|")), command
+
+
+def test_the_lockfile_gives_the_runners_no_dataset_client() -> None:
+    """What `uv sync --no-dev --no-group dataset` installs, read from uv.lock, holds no
+    dataset package, while a plain sync's set does."""
+    import shutil
+
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not on PATH")
+
+    def packages(*flags: str) -> set[str]:
+        out = subprocess.run(
+            [uv, "export", "--frozen", "--no-hashes", "--no-header", "--no-emit-project",
+             "--format", "requirements-txt", *flags],
+            capture_output=True, text=True, check=True, cwd=REPO_ROOT,
+        )  # fmt: skip
+        return {_name(line) for line in out.stdout.splitlines() if line and line[0].isalnum()}
+
+    runner = packages("--no-dev", "--no-group", "dataset")
+    laptop = packages()
+    assert not runner & set(DATASET_PACKAGES)
+    assert "huggingface-hub" in laptop
+    assert {"psycopg", "lightgbm", "httpx", "mlflow-skinny"} <= runner

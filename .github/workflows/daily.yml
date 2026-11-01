@@ -40,7 +40,7 @@ jobs:
           enable-cache: true  # dependencies only
 
       - name: Install dependencies from the lockfile
-        run: uv sync --locked --no-dev
+        run: uv sync --locked --no-dev --no-group dataset  # no dataset client (ADR 0040)
 
       - name: Fetch the champion from the registry
         env:

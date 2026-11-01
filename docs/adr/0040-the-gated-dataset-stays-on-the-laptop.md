@@ -21,6 +21,7 @@ The version-history dataset is gated and licensed CC-BY-NC-4.0, and Section 3 sa
    - failure paths of the daily job log the stage, the exception type and the SQLSTATE only, never a message, because a failed COPY's message holds the row; the failure issue carries the run id and the error class only;
    - Actions caches hold dependencies and the model bundle only.
 5. Moving `huggingface-hub` to its own dependency group is left until the daily job's imports are split from the offline modules (Step 14 laptop work), because `mypy src` needs it today.
+   Done on 2026-11-01 (approved by Aakrisht): `huggingface-hub` is the dependency group `dataset`, a default group, so a plain `uv sync` on the laptop and in CI installs it and `mypy src` still sees it; the daily and timing workflows install with `--no-group dataset`. `datasets` was never a dependency of the project. `tests/test_workflows.py` holds both.
 
 ## Alternatives
 
