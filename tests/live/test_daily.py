@@ -269,3 +269,38 @@ def test_retention_alerts_at_600_and_700_mb(
     assert report.status == "succeeded"
     assert report.counts["details"]["retention_alerts"] == alerts
     assert report.exit_code == code
+
+
+@respx.mock
+def test_a_change_no_feature_reads_makes_no_version_history_row_or_record_change(
+    scratch: str,
+) -> None:
+    """ADR 0042, condition 4: the same records again with another summary, other
+    eligibility text, a title in other case and the sponsor's name in other case leave
+    every live and serving table as it was."""
+    _bootstrap(scratch)
+    assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
+    before = _digest(scratch)
+
+    def edited(name: str) -> Any:
+        page = _load(name)
+        for study in page["studies"]:
+            section = study["protocolSection"]
+            section.setdefault("descriptionModule", {})["briefSummary"] = "Rewritten summary."
+            section.setdefault("eligibilityModule", {})["eligibilityCriteria"] = "* New text"
+            ident = section["identificationModule"]
+            ident["briefTitle"] = str(ident.get("briefTitle", "")).upper()
+            lead = section["sponsorCollaboratorsModule"]["leadSponsor"]
+            lead["name"] = str(lead["name"]).upper()
+        return page
+
+    respx.get(STUDIES_URL).mock(
+        side_effect=lambda request: httpx.Response(
+            200, json=edited("delta_page_2.json" if "pageToken" in request.url.params
+                             else "delta_page_1.json"),
+        )
+    )  # fmt: skip
+    api = ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+    again = daily.run_daily(CFG, scratch, SECRET, api, MODEL, force=True)
+    assert again.counts["details"]["actions"] == {"overlap": 8}
+    assert _digest(scratch) == before
