@@ -209,6 +209,19 @@ class LiveConfig(_Section):
         return self
 
 
+class ApiConfig(_Section):
+    """The read-only API of Step 15 (ADR 0049)."""
+
+    data_status_refresh_minutes: PositiveInt  # the data-as-of date is read at most this often
+    connect_timeout_seconds: PositiveInt
+    retry_wait_seconds: float = Field(ge=0)  # before the one retry of a waking database
+    unavailable_retry_after_seconds: PositiveInt
+    rate_limit_per_minute: PositiveInt
+    trusted_proxies: NonNegativeInt  # proxies that append to X-Forwarded-For (Spaces: 1)
+    cache_entries: PositiveInt
+    page_size_max: PositiveInt
+
+
 class ProjectConfig(BaseSettings):
     """Locked definitions and tunable constants (CLAUDE.md Section 6).
 
@@ -233,6 +246,7 @@ class ProjectConfig(BaseSettings):
     tuning: TuningConfig
     seeds: SeedConfig
     live: LiveConfig
+    api: ApiConfig
 
     @classmethod
     def settings_customise_sources(
@@ -311,3 +325,4 @@ class Secrets(BaseSettings):
     mlflow_tracking_password: SecretStr | None = None
     groq_api_key: SecretStr | None = None
     sponsor_id_key: SecretStr | None = None  # ADR 0044: the key of the sponsor ids
+    api_database_url: SecretStr | None = None  # ADR 0049: the API's read-only pooled URL

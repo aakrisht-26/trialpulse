@@ -99,6 +99,16 @@ source = ["trialpulse"]
 branch = true
 
 [dependency-groups]
+# The API's runtime (Step 15): the Docker image installs this group only, so it carries no
+# modeling or dataset package. A plain `uv sync` installs it too (default-groups).
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "psycopg[binary]>=3",
+    "pydantic>=2.13.5",
+    "pydantic-settings[yaml]>=2.15.0",
+    "sqlalchemy>=2",
+]
 # The gated dataset's client (ADR 0040). A plain `uv sync` installs it, as it installs `dev`
 # (see default-groups below), so nothing changes on the laptop or in CI; the live workflows
 # install with --no-group dataset, so no runner that holds Neon's or MLflow's secrets can
@@ -116,4 +126,4 @@ dev = [
 ]
 
 [tool.uv]
-default-groups = ["dataset", "dev"]
+default-groups = ["api", "dataset", "dev"]

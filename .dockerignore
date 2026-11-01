@@ -1,0 +1,8 @@
+# Only what the API image needs; above all never data/ (the gated dataset and its
+# products, ADR 0040) or .env (secrets).
+*
+!pyproject.toml
+!uv.lock
+!config/
+!src/
+src/**/__pycache__
