@@ -8,15 +8,15 @@ TrialPulse is operational risk analytics for clinical trial portfolios. For ever
 
 ## Results
 
-The champion is a discrete-time LightGBM model (M4) of 54 point-in-time features. Its results come from a locked test: two walk-forward origins that no model saw until the hypotheses were registered in [docs/preregistration.md](docs/preregistration.md) (tag `prereg-v1`). Intervals are 95% cluster-bootstrap intervals over trials. Full tables, every model and the calibration figures: [docs/results.md](docs/results.md).
+The champion is a discrete-time LightGBM model (M4) of 54 point-in-time features. Its results come from a locked test on the 2018 and 2019 walk-forward origins. No model scored a landmark of those origins before the hypotheses were registered in [docs/preregistration.md](docs/preregistration.md) (tag `prereg-v1`), but outcomes from those years did inform development: the development rows are scored against outcomes through the data cutoff, and the registration lists every such exposure. Intervals are 95% cluster-bootstrap intervals over trials. Full tables, every model and the calibration figures: [docs/results.md](docs/results.md).
 
 | Champion (M4), test origin | 2018 | 2019 |
 | --- | --- | --- |
-| AUC, 12 months (primary) | 0.7303 (0.7191 to 0.7414) | 0.7231 (0.7122 to 0.7340) |
-| AUC, 24 months | 0.7099 (0.7016 to 0.7180) | 0.6956 (0.6872 to 0.7041) |
+| AUC, 12 months (primary) | 0.730 (0.719 to 0.741) | 0.723 (0.712 to 0.734) |
+| AUC, 24 months | 0.710 (0.702 to 0.718) | 0.696 (0.687 to 0.704) |
 | Brier score, 12 months | 0.0300 (0.0289 to 0.0313) | 0.0297 (0.0285 to 0.0309) |
-| Lift at 10%, 12 months | 3.2335 (3.0643 to 3.4466) | 3.0637 (2.8888 to 3.2537) |
-| Calibration slope, 12 and 24 months | 0.8554 and 0.7818 | 0.8030 and 0.7325 |
+| Lift at 10%, 12 months | 3.23 (3.06 to 3.45) | 3.06 (2.89 to 3.25) |
+| Calibration slope, 12 and 24 months | 0.855 and 0.782 | 0.803 and 0.732 |
 
 What held:
 - Both primary AUC predictions landed in their registered range of 0.7 to 0.75.
@@ -24,7 +24,7 @@ What held:
 - H5 held: in the COVID stress test, the 12-month AUC at the 2020 origin minus the mean of 2018 and 2019 was -0.0334 (-0.0464 to -0.0198).
 
 What was falsified, and is published as such:
-- **H1, falsified.** At registration, M4 did not beat the static classifier M1: -0.0027 (-0.0166 to +0.0114) at 12 months.
+- **H1, falsified.** H1 predicted that at registration M4 and the static classifier M1 would tie at 12 months (less than 0.02 apart in AUC) and that M4 would lead at 24 months. The 12-month tie held: M4 minus M1 was -0.0027 (-0.0166 to +0.0114). The 24-month lead did not: -0.0013 (-0.0098 to +0.0075). A failed condition falsifies both predictions of the hypothesis.
 - **H3, falsified.** Operational stops were not ranked better than scientific ones: +0.0229 (-0.0025 to +0.0494). TrialPulse makes no claim that it predicts the reason a trial stops.
 - **H4, falsified.** The calibration slopes 0.855, 0.803, 0.782 and 0.732 did not all land in 0.8 to 1.2. At 24 months the predicted risks are spread too widely, so the scores are best used to rank trials ([docs/model_card.md](docs/model_card.md), calibration).
 
@@ -66,6 +66,8 @@ flowchart LR
 ```
 
 The gated dataset never leaves the laptop except through the one-time bootstrap; after that only aggregates, models and named summaries do ([ADR 0040](docs/adr/0040-the-gated-dataset-stays-on-the-laptop.md)). Decisions are recorded as ADRs in [docs/adr/](docs/adr/).
+
+Stack: Python, uv, DuckDB, LightGBM, scikit-learn, lifelines, Optuna, MLflow, PostgreSQL on Neon, FastAPI, Streamlit, Plotly, Docker and GitHub Actions.
 
 ## Status
 
@@ -126,7 +128,7 @@ On an empty local database the pages show what exists and say what does not.
 
 - **Registry metadata only.** Safety and efficacy stops are scientific outcomes that registry metadata cannot anticipate. The claims are about operational early-stop risk, and H3 was falsified.
 - **Calibration.** The 24-month calibration is below the registered range, and the slope fell at each later locked origin for a reason not established. Scores rank trials better than they state absolute risk.
-- **At registration** M4 ranks trials no better than a static classifier (H1). Its advantage comes from amendment signals as a trial ages (H2).
+- **At registration** M4 and the static classifier M1 rank trials about equally (H1). The amendment signals add more the longer a trial has been registered (H2); the static classifier scores registration only, so there is no comparison with it after registration.
 - **Self-reported, US-centric data**, with estimated post dates before 2018 and records that go stale ([docs/data_card.md](docs/data_card.md)).
 - **Older trials.** Trials 42 to 119 months after registration are scored outside the validated range and flagged; in development their scores ran above the observed risk ([docs/model_card.md](docs/model_card.md), served scope).
 - **Not live yet.** The live loop has run only in tests, not in production.

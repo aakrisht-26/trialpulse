@@ -2505,7 +2505,7 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 Date: 2026-11-01. Status: **written in the cloud session on branch `readme-cloud`; waiting for review.** Aakrisht approved only the README part of Step 18; the live links, the demo GIF, the CHANGELOG and the fresh-clone quickstart check on Windows wait for the deployments.
 
 **What was built.**
-- `README.md` (under 160 lines), with:
+- `README.md` (under 160 lines; corrected in review on `readme-fixes`: H1 at both horizons, H2 in the limitations, the registration's disclosure of exposures, a rounded headline table, a stack line), with:
   - the purpose, users and research-demo notice;
   - the champion's registered results with their 95% intervals, copied from `docs/results.md`, and H1, H3 and H4 stated as falsified;
   - one paragraph each on point-in-time reconstruction, landmarks and competing risks, the locked test and the live loop;
