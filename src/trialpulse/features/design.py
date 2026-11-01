@@ -86,3 +86,19 @@ def title_phase(title: str | None) -> str:
     if not found:
         return NO_PHASE
     return _LABELS.get(frozenset(found), OTHER_PHASES)
+
+
+def resolved_title_phase(official: str | None, brief: str | None) -> str:
+    """The phase a version's titles state: the official title's, else the brief title's
+    (the live path applies this at ingest, ADR 0037)."""
+    phase = title_phase(official)
+    return phase if phase != NO_PHASE else title_phase(brief)
+
+
+def resolved_title_phase_sql(official_phase: str, brief_phase: str) -> str:
+    """SQL twin of `resolved_title_phase` over the phases of the two titles (NULL for a
+    title the version does not have)."""
+    return (
+        f"CASE WHEN {official_phase} IS NOT NULL AND {official_phase} <> '{NO_PHASE}' "
+        f"THEN {official_phase} ELSE coalesce({brief_phase}, '{NO_PHASE}') END"
+    )

@@ -92,6 +92,7 @@ DOC_PATH = REPO_ROOT / "docs" / "features.md"
 CURRENT_FIELDS_PATH = REPO_ROOT / "data" / "spike" / "current_fields.parquet"
 FINAL_SOURCE = "final"
 FEATURE_TABLE = "feature_table"
+FEATURE_INPUTS = "feature_inputs"
 TEXT_KEYS_TABLE = "feature_text_keys"
 KEY_SOURCES_TABLE = "feature_key_sources"
 ORDER = "trial_id, landmark_index"
@@ -214,6 +215,37 @@ def _title_phases(con: duckdb.DuckDBPyConnection) -> None:
     con.unregister("title_phase_frame")
 
 
+def feature_select_sql(inputs: str) -> str:
+    """The final SELECT of the features, shared by the offline build and the live path
+    (ADR 0037): from a relation of feature inputs to the key columns, the design and
+    amendment expressions, the sponsor, competition and text columns, in one fixed order.
+
+    The inputs are one row per key with the key columns (`trial_id`, `landmark_index`,
+    `landmark_date`), the columns of the state in effect that the expressions read
+    (`states.AT_LANDMARK_TABLE` offline), and `title_phase` (already resolved),
+    `intervention_types` (a list, NULL when the version lists none), the sponsor record
+    (`sponsor_has_identity` and the three counts), `open_interventional_trials` and the four
+    eligibility statistics."""
+    row_level = {**design.EXPRESSIONS, **amendments.EXPRESSIONS}
+    own = ", ".join(f"{sql} AS {name}" for name, sql in row_level.items())
+    interventions = ", ".join(
+        f"{sql} AS {name}"
+        for name, sql in design.intervention_expressions("intervention_types").items()
+    )
+    months = f"{month_index('landmark_date')} - {month_index('study_first_post_date')}"
+    return f"""SELECT trial_id, landmark_index, landmark_date, {own},
+          coalesce(lead_sponsor_class, '{MISSING_CLASS}') AS sponsor_class, organization_class,
+          maximum_age_years - minimum_age_years AS eligibility_age_span_years,
+          {months} AS months_since_t0,
+          title_phase,
+          {interventions},
+          sponsor_has_identity, sponsor_prior_registrations, sponsor_prior_ended,
+          sponsor_prior_stopped, open_interventional_trials,
+          eligibility_n_inclusion, eligibility_n_exclusion, eligibility_length,
+          eligibility_n_thresholds
+        FROM {inputs}"""
+
+
 def compute_features(
     con: duckdb.DuckDBPyConnection,
     rules: CohortRules,
@@ -245,33 +277,16 @@ def compute_features(
                            FROM {AT_LANDMARK_TABLE}) d ON d.h = t.text_hash
         {"" if text else "WHERE false"}"""
     )
-    row_level = {**design.EXPRESSIONS, **amendments.EXPRESSIONS}
-    own = ", ".join(f"{sql} AS {name}" for name, sql in row_level.items())
-    interventions = ", ".join(
-        f"{sql} AS {name}"
-        for name, sql in design.intervention_expressions("i.intervention_types").items()
-    )
-    months = f"{month_index('landmark_date')} - {month_index('study_first_post_date')}"
     con.execute(
-        f"""CREATE OR REPLACE TEMP TABLE {FEATURE_TABLE} AS
-        WITH a AS (
-          SELECT trial_id, landmark_index, landmark_date, nct_id, nct_version, {own},
-            coalesce(lead_sponsor_class, '{MISSING_CLASS}') AS sponsor_class, organization_class,
-            maximum_age_years - minimum_age_years AS eligibility_age_span_years,
-            {months} AS months_since_t0,
-            official_title_hash, brief_title_hash, eligibility_criteria_hash
-          FROM {AT_LANDMARK_TABLE}
-        )
-        SELECT a.* EXCLUDE (nct_id, nct_version, official_title_hash, brief_title_hash,
-            eligibility_criteria_hash),
-          CASE WHEN op.phase IS NOT NULL AND op.phase <> '{design.NO_PHASE}' THEN op.phase
-               ELSE coalesce(bp.phase, '{design.NO_PHASE}') END AS title_phase,
-          {interventions},
+        f"""CREATE OR REPLACE TEMP VIEW {FEATURE_INPUTS} AS
+        SELECT a.*,
+          {design.resolved_title_phase_sql("op.phase", "bp.phase")} AS title_phase,
+          i.intervention_types,
           r.sponsor_has_identity, r.sponsor_prior_registrations, r.sponsor_prior_ended,
           r.sponsor_prior_stopped, c.open_interventional_trials,
           e.eligibility_n_inclusion, e.eligibility_n_exclusion, e.eligibility_length,
           e.eligibility_n_thresholds
-        FROM a
+        FROM {AT_LANDMARK_TABLE} a
         LEFT JOIN {TRACK_RECORD_TABLE} r USING (trial_id, landmark_index)
         LEFT JOIN {COMPETITION_TABLE} c USING (landmark_date)
         LEFT JOIN feature_eligibility e ON e.text_hash = a.eligibility_criteria_hash
@@ -279,6 +294,9 @@ def compute_features(
         LEFT JOIN feature_title_phase bp ON bp.text_hash = a.brief_title_hash
         LEFT JOIN intervention_versions i
           ON i.nct_id = a.nct_id AND i.nct_version = a.nct_version"""
+    )
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE {FEATURE_TABLE} AS {feature_select_sql(FEATURE_INPUTS)}"
     )
     hashes = ", ".join(f"{column} AS {field}_hash" for field, column in TEXT_FIELDS.items())
     con.execute(
