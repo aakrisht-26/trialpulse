@@ -57,7 +57,8 @@ def test_retry_after_reads_seconds_and_dates_within_bounds() -> None:
 
 def test_an_answer_that_is_not_a_wake_is_returned_as_it_came(clock: Clock) -> None:
     for status in (200, 404, 422, 500):
-        answer, messages = run(clock, httpx.Response(status, json={"data_as_of": "2026-09-25"}))
+        body = {**ENVELOPE, "data_as_of": "2026-09-25"}
+        answer, messages = run(clock, httpx.Response(status, json=body))
         assert answer.status == status
         assert answer.data_as_of == dt.date(2026, 9, 25)
         assert messages == []
@@ -68,7 +69,7 @@ def test_the_service_starting_is_retried_with_a_growing_wait(clock: Clock) -> No
     answer, messages = run(
         clock, httpx.ConnectError("refused"), httpx.ReadTimeout("slow"),
         httpx.Response(502, text="Bad gateway"), httpx.Response(504),
-        httpx.Response(503, text="<html>starting</html>"), httpx.Response(200, json={}),
+        httpx.Response(503, text="<html>starting</html>"), httpx.Response(200, json=ENVELOPE),
     )  # fmt: skip
     assert answer.ok
     assert clock.slept == [5, 10, 20, 30, 30]
@@ -78,7 +79,7 @@ def test_the_service_starting_is_retried_with_a_growing_wait(clock: Clock) -> No
 def test_the_apis_own_503_is_the_database_waking_for_its_retry_after(clock: Clock) -> None:
     answer, messages = run(
         clock, httpx.Response(503, json=ENVELOPE, headers={"Retry-After": "30"}),
-        httpx.Response(200, json={}),
+        httpx.Response(200, json=ENVELOPE),
     )  # fmt: skip
     assert answer.ok
     assert clock.slept == [30]
@@ -88,7 +89,7 @@ def test_the_apis_own_503_is_the_database_waking_for_its_retry_after(clock: Cloc
 def test_a_429_waits_for_its_retry_after(clock: Clock) -> None:
     answer, messages = run(
         clock, httpx.Response(429, json=ENVELOPE, headers={"Retry-After": "7"}),
-        httpx.Response(200, json={}),
+        httpx.Response(200, json=ENVELOPE),
     )  # fmt: skip
     assert answer.ok
     assert clock.slept == [7]
@@ -119,3 +120,26 @@ def test_each_attempt_has_a_30_second_timeout() -> None:
     c = Client(URL)
     assert c._http.timeout.read == client.ATTEMPT_TIMEOUT_SECONDS
     assert c._http.timeout.connect == client.ATTEMPT_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "page",
+    [httpx.Response(200, text="<html>This Space is starting</html>"),
+     httpx.Response(200, json={"status": "ok"}),  # JSON, but not the API's
+     httpx.Response(200, json=["a", "list"]),
+     httpx.Response(404, text="<html>Space not found</html>")],
+)  # fmt: skip
+def test_an_answer_that_is_not_the_apis_is_never_returned(clock: Clock, page: httpx.Response) -> None:
+    """Review finding 9: a 200 that was not the API's JSON reached the page (a KeyError) and
+    was cached for 15 minutes. It is now waited out like the service starting."""
+    answer, messages = run(clock, page, httpx.Response(200, json=ENVELOPE))
+    assert answer.ok
+    assert answer.body == ENVELOPE
+    assert messages == [client.NOT_API.format(n=5)]
+
+
+def test_an_address_that_never_answers_as_the_api_gives_up_saying_so(clock: Clock) -> None:
+    with pytest.raises(ApiUnavailableError, match="not the TrialPulse API") as caught:
+        run(clock, *[httpx.Response(200, text="<html>another site</html>")] * 50)
+    assert sum(clock.slept) <= client.BUDGET_SECONDS
+    assert URL not in str(caught.value)

@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 import pytest
-from dashboard import ui
+from dashboard import client, ui
 from streamlit.testing.v1 import AppTest
 from stubbed_api import APP, BASE, NAMED, STUBS, StubApi
 
@@ -184,6 +184,34 @@ def test_every_page_gives_up_in_plain_words_and_keeps_its_frame(
     at.button(key="try_again").click().run()
     assert not at.error
     assert f"Data as of {DAY}" in texts(at)
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_a_page_that_is_not_the_apis_is_waited_out_never_shown_or_kept(
+    stub_api: StubApi, page: str
+) -> None:
+    """Review finding 9: a 200 page of the platform reached the page (a KeyError) and was kept
+    for 15 minutes. It is now waited out like the service starting, and never kept."""
+    stub_api.fail("platform", "platform", on="/v1/")
+    at = app(page, **ready(page))
+    assert not at.exception
+    assert not at.error
+    assert stub_api.waits == [client.NOT_API.format(n=n) for n in (5, 10)]
+    assert f"Data as of {DAY}" in texts(at)
+
+
+def test_an_address_that_only_answers_pages_gives_up_and_keeps_nothing(stub_api: StubApi) -> None:
+    stub_api.always = "platform"
+    at = app("trial", nct="NCT00000001")
+    assert not at.exception  # no KeyError from a page that is not the API's
+    assert at.error[0].value == client.GAVE_UP_NOT_API
+    assert at.warning[0].value == ui.NOTICE
+    stub_api.always = None  # the API answers now: nothing of the platform's page was kept
+    before = len(stub_api.data_calls())
+    again = app("trial", nct="NCT00000001")
+    assert not again.exception
+    assert len(stub_api.data_calls()) > before
+    assert "Early-stop risk within 12 months" in texts(again)
 
 
 def test_the_database_that_never_wakes_gives_up_within_the_budget(stub_api: StubApi) -> None:
