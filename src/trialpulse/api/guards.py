@@ -11,7 +11,6 @@
   many places from the end. Entries before it can be written by anyone and are ignored.
 """
 
-import contextlib
 import datetime as dt
 import threading
 import time
@@ -29,6 +28,7 @@ class DataClock:
         self._value: dt.date | None = None
         self._read_at: float | None = None
         self.last_read_failed = False
+        self.last_error: BaseException | None = None  # what the last failed read raised
         self._lock = threading.Lock()
 
     def peek(self) -> dt.date | None:
@@ -40,10 +40,12 @@ class DataClock:
             now = self._now()
             if self._read_at is None or now - self._read_at >= self._refresh:
                 self._read_at = now  # one read per period, even when it fails
-                self.last_read_failed = True
-                with contextlib.suppress(Exception):  # a failed read keeps the last date
+                try:  # a failed read keeps the last date
                     self._value = self._read()
-                    self.last_read_failed = False
+                except Exception as exc:
+                    self.last_read_failed, self.last_error = True, exc
+                else:
+                    self.last_read_failed, self.last_error = False, None
             return self._value
 
 
