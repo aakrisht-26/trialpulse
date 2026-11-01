@@ -1,0 +1,29 @@
+# The read-only API of Step 15 (CLAUDE.md Section 13). It installs the `api` dependency group
+# only: no model, no dataset client, no offline code. It holds no data and no secret; the
+# database URL comes from the platform's secret store (API_DATABASE_URL, ADR 0049).
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app/src PORT=7860
+
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+# A build behind a TLS-intercepting proxy may pass its certificate authority as the optional
+# build secret `ca` (docker build --secret id=ca,src=...); it is never written into a layer.
+RUN --mount=type=secret,id=ca,required=false \
+    if [ -f /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca; fi \
+    && pip install --no-cache-dir "uv==0.11.26" \
+    && uv export --frozen --no-hashes --no-emit-project --only-group api \
+       --format requirements-txt > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip uninstall -y uv && rm /tmp/requirements.txt
+
+# The code and the project configuration (src/trialpulse/config.py reads config/ beside src/).
+COPY config/ config/
+COPY src/ src/
+
+RUN useradd --create-home --uid 1000 api
+USER api
+
+EXPOSE 7860
+CMD ["sh", "-c", "exec uvicorn trialpulse.api.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]

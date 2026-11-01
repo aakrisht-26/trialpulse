@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 14 (live ingestion and daily workflow)**: Aakrisht decided the options on 2026-11-01 (ADRs 0037 to 0045). A cloud session built every part that needs neither `data/` nor Neon, on branch `step-14-cloud` (see "Step 14", "The cloud build"); the laptop and Neon parts remain. Step 13 was approved on 2026-10-31.
+Current step: **Step 15 (API service)**, started on 2026-11-01 with Aakrisht's approval before the laptop half of Step 14: built and tested in the cloud (see "Step 15"); the deployment and the Neon parts are left for the laptop. **Step 14**'s cloud parts are merged; its laptop and Neon parts remain (see "Step 14", "Left for the laptop"). Step 13 was approved on 2026-10-31.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Current step: **Step 14 (live ingestion and daily workflow)**: Aakrisht decided 
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045); the cloud part built on `step-14-cloud`, waiting for review; the laptop and Neon parts not started |
-| 15 | API service | Not started |
+| 15 | API service | Decided 2026-11-01 (ADRs 0046 to 0051); built and tested in the cloud on `step-15-cloud`, waiting for review; the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Not started |
 | 17 | Monitoring, retraining and replay | Not started |
 | 18 | Documentation and polish | Not started |
@@ -2499,6 +2499,152 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 15: API service
+
+Date: 2026-11-01. Status: **built and tested in the cloud session, on branch `step-15-cloud`; waiting for review.** Aakrisht approved starting Step 15 before the laptop half of Step 14. The session had no `data/`, no laptop and no Neon, so the deployment and every Neon step are left for the laptop. Evidence below is from the session's shell on Linux with Postgres 16 and Docker; it is not a claim about the laptop.
+
+### The decisions (ADRs 0046 to 0051, the branch's first commit `502c24a`)
+
+| # | Decision | ADR |
+| --- | --- | --- |
+| 1 | An area is a top-level MeSH disease category (tree C) or Mental Disorders (F03) among the current record's ancestor terms, for display only; a trial counts in every area it belongs to, and responses say area totals can exceed the trial count | 0046 |
+| 2 | A sponsor is found by its display name only; a sponsor without one answers exactly like a name that does not exist; the API holds no `SPONSOR_ID_KEY` | 0047 |
+| 3 | `/v1/model` serves a statement held to `docs/results.md` and the model card, plus today's shares from the serving tables | 0048 |
+| 4 | Neon's pooled URL for a role that reads `serving` only (`API_DATABASE_URL`, new in Section 17); one retry, then 503; prepared statements off; answers cached by the data-as-of date, which is read at most once every 15 minutes; a rate limit per client address from the proxy's `X-Forwarded-For` entry | 0049 |
+| 5 | Reason counts by month, reason and sponsor class through the cutoff, aggregates only; later early stops counted, not labeled | 0050 |
+| 6 | Brief titles, keyed sponsor ids, classes and areas of the live trials, and the display names that may be shown, from API v2 only; size measured | 0051 |
+
+### What was built
+
+| Part | Where | Held by |
+| --- | --- | --- |
+| Alembic 0005: `serving.data_status`, `trial_display`, `sponsors`, `reason_counts`, `model_statement` | `alembic/versions/0005_api_tables.py` | Upgrade, downgrade, upgrade on Postgres 16; the migration test |
+| The area list: 23 tree C categories (C22, animal diseases, left out) and F03 | `src/trialpulse/api/areas.py` | Checked against the real bulk pull: every descriptor occurs except C21's, whose id in the first list was wrong; a direct query found the right one (D007280, 17 records registry-wide) |
+| Display rows from API v2: titles, keyed sponsor ids, classes, areas; a display name only where ADR 0044 allows, removed when a record shows the id without one; a bulk command, and the daily job keeps them current | `src/trialpulse/live/display.py`, `live/daily.py` | Unit tests, and daily-job tests: rows for live trials only, no name for a three-plain-word OTHER sponsor, the row of a trial that ends removed |
+| `serving.data_status` written by the daily job, with the early stops recorded after the labels' date | `live/store.py` | A daily-job test and a unit test |
+| Laptop commands: the reason counts (aggregates from the warehouse's `stop_reasons`, the cohort's outcomes and the versions), the model statement, the API's read-only role | `live/reasons.py`, `live/statement.py`, `live/api_role.py` | Synthetic warehouse tables; the role reads `serving` and nothing else, and cannot write |
+| The model statement | `docs/model_statement.json` | Every number in it occurs in `docs/results.md` or the model card |
+| The API: risk with flag, drivers and dates or the reason code; the timeline with markers; sponsor search and portfolio; areas and landscapes; the reason summary; the model; `/health` | `src/trialpulse/api/` | 15 endpoint tests on a seeded scratch database (below) |
+| The image: the `api` dependency group only | `Dockerfile.api`, `.dockerignore` | Built and run on this VM: 274 MB; no lightgbm, duckdb, pandas, numpy or huggingface_hub in it; no `data/`, no secret, no proxy certificate; runs as a non-root user; `/docs` answers 200 |
+| The load test | `scripts/api_load_test.py`, `tests/api/seed.py` | Below |
+
+**The endpoint tests** (`tests/api/test_api.py`, with `TRIALPULSE_REQUIRE_POSTGRES=1`):
+- **Notice and attribution:** every answer and every error, and the OpenAPI page, carry the notice, the attribution and the data-as-of date.
+- **Scores and reasons:** a flagged score carries the flag and its note, and an unscored trial its reason code.
+- **Hidden sponsors:** a sponsor without a display name shows a null name, and looking it up gives exactly the body of a missing name.
+- **Portfolios:** ranked by risk, then the unscored trials, and found by the normalized name.
+- **Areas:** a trial counts in every area, and the totals exceed the trial count.
+- **Timeline, reasons and model:** the timeline markers, the reason summary, and the model statement with today's shares.
+- **Cache and clock:** a repeated request sends no query, and the data date is read once per 15 minutes.
+- **Health and rate limit:** `/health` sends no query; the rate limit is per forwarded client, and a spoofed first entry does not help.
+- **Database access:** prepared statements are off; a database that does not wake answers 503 with `Retry-After`, after exactly one retry.
+- **Personal data:** no investigator, contact or individual name appears in any answer.
+
+The image's dependency group holds no model or dataset package, and importing the API loads no offline module (`tests/api/test_imports.py`).
+
+### Measurements
+
+- **The display tables, from a real bulk pull** of every API v2 record with a status a live trial can have (222,417 records in 5.8 minutes, into this VM's Postgres): `serving.trial_display` 70.8 MB (table 52.9, indexes 17.8) and `serving.sponsors` 8.0 MB, **78.7 MB in all**. 21,828 sponsors have a display name and 7,993 do not; 74.0% of records have at least one area.
+- **The Neon estimate, updated:** Step 14 assumed 40 MB for display rows (not measured). With the measured 78.7 MB and about 1 MB for the other new tables (estimated), the 12-month total moves from 511.8 to 533.5 MB to about **551 to 573 MB**. That is a headroom of about 43% to 45% against 1 GB, still under the 700 MB line of 30% headroom.
+- **The load test:** the image ran against a database seeded at the cutoff's size (88,895 scored and 2,704 unscored trials, 91,599 display rows), with 3,000 distinct trials, 8 concurrent clients and one uvicorn worker on 4 cores. Each request came as another client behind one proxy, so the per-client limit did not stop a test of many callers.
+  - **Cold** (every answer from Postgres): p50 10.6 ms, **p95 49.7 ms**, p99 71.0 ms.
+  - **Warm** (every answer from the cache): p50 7.4 ms, **p95 42.8 ms**, p99 62.3 ms.
+  - All 6,000 answers were 200. The warm pass gains little because each request opened a new connection and the load generator shared the 4 cores. Postgres was local: on Neon, the network time to its region adds to every cold answer.
+
+### Faults against the new tests
+
+17 deliberate faults were put into a scratch copy of the branch outside the repository. 16 were caught at once. A12 got through: nothing tested that a trial which ends loses its display row. A daily-job test was added, and it then caught A12.
+
+| Fault | Result |
+| --- | --- |
+| A01 errors lose the notice and attribution | Caught |
+| A02 a flagged score loses its flag | Caught |
+| A03 an unscored trial loses its reason code | Caught |
+| A04 a sponsor that may be a person gets a display name | Caught |
+| A05 the portfolio matches the raw name, not the normalized one | Caught |
+| A06 a trial counts in one area only | Caught |
+| A07 the data date is read on every request | Caught |
+| A08 the rate limit trusts the client-written first entry | Caught |
+| A09 prepared statements left on | Caught |
+| A10 `/health` touches the database | Caught |
+| A11 no retry for a waking database | Caught |
+| A12 display rows of trials that left stay | Got through; caught after the new test |
+| A13 reason counts include reversals | Caught |
+| A14 the API role may read the live schema | Caught |
+| A15 the daily job no longer writes the data status | Caught |
+| A16 display rows for trials without a live row | Caught |
+| A17 a statement number drifts from the results | Caught |
+
+### Acceptance criteria, with evidence
+
+| Criterion (Step 15) | Met? | Evidence |
+| --- | --- | --- |
+| All endpoint tests pass, and the OpenAPI docs render | Yes, here | The endpoint tests above; `/docs` answers 200 from the image |
+| The image builds and runs locally | Yes, on this VM | Built and run with Docker on this VM; not on the laptop |
+| p95 under 200 ms for `/v1/trials/{nct_id}/risk` in a local load test | Yes, here | 49.7 ms cold and 42.8 ms warm at the cutoff's size |
+| The public URL is in the README | No | The deployment is left for the laptop |
+
+**Checks** (run the CI way with `TRIALPULSE_REQUIRE_POSTGRES=1`): `ruff check .` clean, `ruff format --check .` clean (307 files), `mypy src` clean (122 files), `pytest -q -m "slow or not slow"`: **1,205 passed, 11 skipped** (10 need `data/`, one needs Windows).
+
+### Decisions made without asking (flagged)
+
+1. **What a test change exposed:** when the data date's read failed and no earlier date was known, a request waited out a second retry for its own query. It now answers 503 at once (found by the 503 test).
+2. **Display text follows the record,** while versions, history rows and record changes do not (ADR 0042, condition 4). The condition-4 test now compares the scored tables only, and checks that a changed title shows.
+3. **The API's settings** are a new `api:` section of `config/project.yaml`:
+   - the data-as-of date read every 15 minutes;
+   - a 15-second connect timeout and one retry after 2 seconds;
+   - a `Retry-After` of 30 seconds;
+   - 60 requests a minute per client, with one trusted proxy;
+   - 20,000 cached answers, and pages of up to 200.
+4. **Dependencies:** FastAPI and uvicorn (locked stack) are in a new default dependency group `api`, which also lists the API's runtime packages, so the image installs that group only.
+5. **The image build** takes an optional BuildKit secret `ca`. This session's proxy re-signs TLS, so the local build passed its certificate authority that way; it is never written into a layer, and a normal build needs nothing. Docker Hub was rate-limited here, so the base image came from Google's mirror of Docker Hub and was tagged `python:3.12-slim`.
+6. **The load test** sends each request as another client behind one proxy, and opens a new connection per request.
+7. **The answers' contents:**
+   - the areas left out: C22 (animal diseases);
+   - the reason texts of the three not-scored codes;
+   - the flag note's wording;
+   - sponsor search needs at least 3 characters and returns up to 50 names;
+   - the landscape's top 20 trials.
+8. **Neon's handling of prepared statements could not be checked.** neon.com is outside this session's allowed network domains, so prepared statements are off whatever the pooler does.
+
+### Left for the laptop, and why
+
+| Item | Why not here |
+| --- | --- |
+| The deployment to Hugging Face Spaces, and the README's public URL | Needs Aakrisht's Hugging Face account; the Spaces token conflicts with the workflow scan (Step 14, Part 8), so deploy from the laptop |
+| The read-only role on Neon (`uv run python -m trialpulse.live.api_role --target neon`) | Needs Neon |
+| The `API_DATABASE_URL` secret (`.env` and the Space's secrets): Neon's pooled URL for that role | Needs Neon and the Space |
+| Loading the reason counts (`uv run python -m trialpulse.live.reasons --target neon`) | Needs `data/` (the warehouse and the cohort) and Neon |
+| Loading the model statement (`uv run python -m trialpulse.live.statement --target neon`) and the display rows (`uv run python -m trialpulse.live.display --target neon`, after the bootstrap) | Need Neon |
+| Checking Neon's pooler with prepared statements | neon.com was not reachable from the session |
+
+### Files touched
+
+- `CLAUDE.md`, `docs/adr/0046` to `0051`, `docs/model_statement.json`, `docs/progress.md`, `docs/interview_notes.md`
+- `alembic/versions/0005_api_tables.py`, `config/project.yaml`, `.env.example`, `pyproject.toml`, `uv.lock`, `Dockerfile.api`, `.dockerignore`, `scripts/api_load_test.py`
+- `src/trialpulse/config.py`, `src/trialpulse/api/` (new: `__init__`, `areas`, `db`, `guards`, `main`, `schemas`), `src/trialpulse/live/` (`display`, `reasons`, `statement`, `api_role` new; `daily`, `store` changed)
+- `tests/api/` (new), `tests/live/test_display.py`, `test_reasons.py`, `test_api_role.py` (new), `tests/live/test_daily.py`, `tests/test_workflows.py`, `tests/warehouse/test_migrations.py`
+
+### Verify (PowerShell, on main after the merge)
+
+```powershell
+git fetch origin
+git checkout main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+docker compose up -d
+uv run alembic upgrade head
+uv run pytest tests/api -q
+uv run pytest -q -m "slow or not slow"
+docker build -f Dockerfile.api -t trialpulse-api .
+docker run --rm -p 8000:7860 -e PORT=7860 -e API_DATABASE_URL=postgresql://trialpulse:trialpulse@host.docker.internal:15432/trialpulse trialpulse-api
+```
+
+Then open http://localhost:8000/docs. The container reaches the local Postgres of Docker Compose through `host.docker.internal` (Docker Desktop), at revision 0005 after `alembic upgrade head`; it serves the Step 13 rows there, with empty display rows and no data-as-of date until the daily job or the bulk commands fill them.
 
 ## Step 14: Live ingestion and daily workflow
 

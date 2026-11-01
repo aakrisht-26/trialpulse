@@ -16,7 +16,7 @@ from trialpulse.live.engine import Ingested
 from trialpulse.live.sponsors import FORMAT, SponsorFile
 from trialpulse.live.state import FIRST_FIELDS, Event, Wide
 
-HEAD = "0004"
+HEAD = "0005"
 WIDE_COLUMNS: tuple[str, ...] = (
     "nct_id", *LIVE_FIELDS, "feature_hash", *FIRST_FIELDS, "n_versions", "ever_suspended",
     "recent_post_dates", "lapse_from", "reversal", "run_id",
@@ -415,3 +415,27 @@ def load_bootstrap(
     finish_run(cur, run_id, "succeeded", {"watermark_to": release,
                                           "details": {"trials": len(wides)}})  # fmt: skip
     return run_id
+
+
+def set_data_status(cur: Any, day: dt.date, model_version: str, early_stop: Sequence[str]) -> None:
+    """The API's data-as-of date and model (ADR 0049), and the early stops recorded after the
+    reason labels' date (ADR 0050); written only when a value changes."""
+    cur.execute(
+        """INSERT INTO serving.data_status (status_id, data_as_of, model_version)
+        VALUES (1, %(d)s, %(m)s)
+        ON CONFLICT (status_id) DO UPDATE SET data_as_of = EXCLUDED.data_as_of,
+          model_version = EXCLUDED.model_version, updated_at = now()
+        WHERE (serving.data_status.data_as_of, serving.data_status.model_version)
+          IS DISTINCT FROM (EXCLUDED.data_as_of, EXCLUDED.model_version)""",
+        {"d": day, "m": model_version},
+    )
+    cur.execute(
+        """UPDATE serving.data_status s SET early_stops_after_labels = c.n, updated_at = now()
+        FROM (SELECT CASE WHEN s2.labeled_through IS NULL THEN NULL ELSE (
+                SELECT count(*) FROM live.outcome_events e
+                WHERE e.kind = 'status' AND e.to_status = ANY(%(stops)s)
+                  AND e.effective_date > s2.labeled_through AND e.effective_date <= %(d)s)
+              END AS n FROM serving.data_status s2 WHERE s2.status_id = 1) c
+        WHERE s.status_id = 1 AND s.early_stops_after_labels IS DISTINCT FROM c.n""",
+        {"stops": list(early_stop), "d": day},
+    )

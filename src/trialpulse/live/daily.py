@@ -43,7 +43,7 @@ from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import ProjectConfig, Secrets, load_project_config
 from trialpulse.ingest.ctgov_api import ApiClient
-from trialpulse.live import engine, pull, runs, store
+from trialpulse.live import display, engine, pull, runs, store
 from trialpulse.live import features as live_features
 from trialpulse.live.state import lapse_events
 from trialpulse.scoring import serving
@@ -220,6 +220,12 @@ def run_daily(
             exits = lapse_events(store.lapsed_between(cur, previous["data_timestamp"], day),
                                  previous["data_timestamp"], day)  # fmt: skip
             store.save_ingest(cur, done, report.run_id)
+            # Display rows (ADR 0051) of the live trials whose record was applied today.
+            applied = {str(r["nct_id"]) for r in records}
+            shown = [r for r in display.display_rows(pulled.studies, secret)
+                     if r.nct_id in applied and r.nct_id in memory.wides]  # fmt: skip
+            display.save(cur, shown)
+            display.remove(cur, done.dropped)
             store.save_events(cur, exits, report.run_id)
             store.quarantine(cur, converted.quarantined, report.run_id)
             con.commit()
@@ -253,6 +259,7 @@ def run_daily(
                 raise RefusedError(f"the sponsor pass is behind: through {sponsors.through_day}")
             rescored = publish_day(cur, cfg, rules, day, sponsors, model, full, dsn,
                                    report.run_id)  # fmt: skip
+            store.set_data_status(cur, day, model.version, rules.early_stop)
             con.commit()
             timings[PUBLISH] = clock.perf_counter() - tick
             report.counts["trials_rescored"] = rescored

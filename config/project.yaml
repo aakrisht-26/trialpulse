@@ -100,3 +100,14 @@ live:
   requests_per_minute: 40        # CLAUDE.md Section 7
   retention_alert_mb: [600, 700]
   retention_months: 12
+
+# The read-only API (ADR 0049).
+api:
+  data_status_refresh_minutes: 15   # the data-as-of date is read from Neon at most this often
+  connect_timeout_seconds: 15
+  retry_wait_seconds: 2             # one retry for a compute that is waking up
+  unavailable_retry_after_seconds: 30
+  rate_limit_per_minute: 60         # per client address
+  trusted_proxies: 1                # Hugging Face Spaces appends the client's address
+  cache_entries: 20000
+  page_size_max: 200
