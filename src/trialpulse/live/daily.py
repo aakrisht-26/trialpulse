@@ -182,6 +182,7 @@ def run_daily(
         raise JobFailedError(failure_line("connect", exc), type(exc).__name__) from None
     report = Report("running", day)
     stage = "start"
+    lease_lost = False
     timings: dict[str, float] = {}
     try:
         with con.cursor() as cur:
@@ -201,11 +202,13 @@ def run_daily(
 
             # 1. Ingest: the pull and the conversion run outside any transaction -------------
             stage, tick = INGEST, clock.perf_counter()
+            store.renew(cur, report.run_id)  # every stage renews the lease (ADR 0060)
             latest = store.latest_post_date(cur) or boot["watermark_to"]
             mark = runs.watermark(latest, day)
             since = runs.pull_since(mark, live.overlap_days)
             pulled = pull.pull_delta(api, since, day, live.page_size)
             converted = pull.convert(pulled.studies, rules, secret)
+            store.renew(cur, report.run_id)
             records = [r for r in converted.rows if r["effective_date"] <= day]
             # Quarantined records' trials too: the gate compares them with their stored rows.
             trials = {str(r["nct_id"]) for r in converted.rows}
@@ -238,6 +241,7 @@ def run_daily(
             shown = [r for r in display.display_rows(pulled.studies, secret)
                      if r.nct_id in applied and r.nct_id in memory.wides]  # fmt: skip
             with con.transaction():
+                store.renew(cur, report.run_id)  # first in every write (ADR 0060)
                 store.save_ingest(cur, done, report.run_id)
                 display.save(cur, shown)
                 display.remove(cur, done.dropped)
@@ -256,12 +260,14 @@ def run_daily(
 
             # 2. The sponsor pass: computed outside any transaction, written in one ---------
             stage, tick = SPONSORS, clock.perf_counter()
+            store.renew(cur, report.run_id)
             sponsors = store.load_file(cur)
             pending = [v for v in store.versions_after(cur, sponsors.last_run_id)
                        if v["run_id"] <= report.run_id]  # fmt: skip
             if pending or sponsors.through_day < day - dt.timedelta(days=1):
                 engine.advance(engine.Memory({}, sponsors), pending, day, rules, report.run_id)
                 with con.transaction():
+                    store.renew(cur, report.run_id)
                     store.save_file(cur, sponsors)  # the pass's one commit point
             timings[SPONSORS] = clock.perf_counter() - tick
             if fail_after == SPONSORS:
@@ -269,11 +275,13 @@ def run_daily(
 
             # 3. Publication: features, scores and drivers outside any transaction ----------
             stage, tick = PUBLISH, clock.perf_counter()
+            store.renew(cur, report.run_id)
             if sponsors.through_day < day - dt.timedelta(days=1):
                 raise RefusedError(f"the sponsor pass is behind: through {sponsors.through_day}")
             rescored, file = publish_day(cur, cfg, rules, day, sponsors, model, full, dsn,
                                          report.run_id)  # fmt: skip
             with con.transaction():
+                store.renew(cur, report.run_id)
                 if file is not None:
                     store.save_score_file(cur, day, model.version, file[0], file[1],
                                           report.run_id)  # fmt: skip
@@ -288,6 +296,7 @@ def run_daily(
             error = (f"QuarantinedRecords: {len(converted.quarantined)}"
                      if converted.quarantined else None)  # fmt: skip
             with con.transaction():
+                store.renew(cur, report.run_id)
                 store.finish_run(cur, report.run_id, status, report.counts, error)
             report.status = status
             if converted.quarantined:
@@ -298,7 +307,9 @@ def run_daily(
     except BaseException as exc:
         if isinstance(exc, KeyboardInterrupt | SystemExit):
             raise
-        if report.run_id is not None:
+        lease_lost = lost_lease(exc)
+        if report.run_id is not None and not lease_lost:  # a job that lost its lease writes
+            # nothing, not even its failure: the job that took over owns the row now
             error = f"{stage}: {type(exc).__name__} {_sqlstate(exc)}".strip()
             record_failure(dsn, report.run_id, report.counts, error)
         if isinstance(exc, RefusedError):  # the job's own refusals, written without values
@@ -307,13 +318,20 @@ def run_daily(
     finally:
         with contextlib.suppress(Exception):
             con.close()
-        _vacuum(dsn)
+        if not lease_lost:
+            _vacuum(dsn)
+
+
+def lost_lease(exc: BaseException | None) -> bool:
+    """Whether a job stops because its lease was taken over (it then writes nothing)."""
+    return isinstance(exc, store.LeaseLostError)
 
 
 def record_failure(dsn: str, run_id: int, counts: Mapping[str, Any], error: str) -> bool:
     """Mark the run failed on a fresh connection: the run's own connection may be the thing
-    that failed (a session Neon ended, a dropped network). Returns whether it was written;
-    a failure here is ignored, and the stale lease then releases the run."""
+    that failed (a session Neon ended, a dropped network). Only a run that still holds its
+    lease is marked (`store.finish_run`). Returns whether it was written; a failure here is
+    ignored, and the stale lease then releases the run."""
     import psycopg
 
     try:
@@ -363,7 +381,8 @@ def publish_day(
     )
     unscored.insert(1, "as_of_date", np.datetime64(day, "D"))
     serving.publish(Scored(scores, unscored.reset_index(drop=True), {}), cfg, dsn,
-                    scope=chosen.trials, run_id=run_id, day=day)  # fmt: skip
+                    scope=chosen.trials, run_id=run_id, day=day,
+                    lease=lambda c: store.renew(c, run_id))  # fmt: skip
     file = None
     if full and len(scores):
         classes = dict(zip(people["trial_id"], people["sponsor_class"], strict=True))

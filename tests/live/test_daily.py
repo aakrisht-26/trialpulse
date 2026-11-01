@@ -239,8 +239,13 @@ def test_one_running_job_at_a_time(dsn: str) -> None:
         con.commit()
     with pytest.raises(daily.JobFailedError, match="start: LeaseError: another live job"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
-    with psycopg.connect(dsn) as con, con.cursor() as cur:  # a stale lease is released
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # long running, but renewed
         cur.execute("UPDATE monitoring.pipeline_runs SET started_at = now() - interval '3 hours'")
+        con.commit()
+    with pytest.raises(daily.JobFailedError, match="start: LeaseError: another live job"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # not renewed: a stale lease
+        cur.execute("UPDATE monitoring.pipeline_runs SET renewed_at = now() - interval '3 hours'")
         con.commit()
     assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
 
@@ -521,7 +526,7 @@ def test_a_database_not_at_the_migration_head_is_refused(dsn: str) -> None:
     with psycopg.connect(dsn) as con:
         con.execute("UPDATE alembic_version SET version_num = '0003'")
         con.commit()
-    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0005"):
+    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0006"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
 
 
@@ -665,3 +670,90 @@ def test_a_failure_is_recorded_when_the_jobs_connection_is_gone(dsn: str) -> Non
     assert status == "failed"
     assert error.startswith("publish: ")
     assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+
+
+# The renewable lease (ADR 0060) --------------------------------------------------------------
+
+
+def _take_over(dsn: str) -> None:
+    """Another job finds this run's lease stale and starts: the review's experiment E2."""
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        cur.execute("UPDATE monitoring.pipeline_runs SET renewed_at = now() - interval '3 hours'"
+                    " WHERE status = 'running'")  # fmt: skip
+        store.start_run(cur, "retention", "retention", DAY, 120)
+        con.commit()
+
+
+@respx.mock
+def test_a_job_whose_lease_was_taken_over_stops_without_writing(dsn: str) -> None:
+    """Finding 5: while the job scores, its lease goes stale and another job takes over. The
+    job finds out at its next renewal (first in publication's transaction) and stops: it
+    publishes nothing, writes no data date or score file, and leaves both run rows as the
+    other job left them."""
+
+    def taken_over(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+        _take_over(dsn)
+        return _scorer(scored, features, day)
+
+    _bootstrap(dsn)
+    with pytest.raises(daily.JobFailedError, match="publish: LeaseLostError: run"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), daily.Model("stand-in/1", taken_over,
+                                                               DECISIONS))  # fmt: skip
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT job, status, error FROM monitoring.pipeline_runs "
+                           "WHERE job <> 'bootstrap' ORDER BY run_id").fetchall()  # fmt: skip
+        published = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()
+        status = con.execute("SELECT count(*) FROM serving.data_status").fetchone()
+        files = con.execute("SELECT count(*) FROM monitoring.score_files").fetchone()
+    assert runs == [("daily", "failed", "stale lease"), ("retention", "running", None)]
+    assert (published, status, files) == ((0,), (0,), (0,))
+
+
+@respx.mock
+@pytest.mark.parametrize("stage", ["ingest", "sponsors"])
+def test_a_lost_lease_is_found_at_every_stage(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    """The takeover happens during the pull (ingest) or the sponsor pass: the stage's write
+    transaction renews first and finds the lease gone, so the stage writes nothing."""
+    _bootstrap(dsn)
+    if stage == "ingest":
+        convert = daily.pull.convert
+
+        def taken(*args: Any, **kwargs: Any) -> Any:
+            _take_over(dsn)
+            return convert(*args, **kwargs)
+
+        monkeypatch.setattr(daily.pull, "convert", taken)
+    else:
+        advance = daily.engine.advance
+
+        def taken(*args: Any, **kwargs: Any) -> Any:
+            _take_over(dsn)
+            return advance(*args, **kwargs)
+
+        monkeypatch.setattr(daily.engine, "advance", taken)
+    with pytest.raises(daily.JobFailedError, match=f"{stage}: LeaseLostError"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con:
+        versions = con.execute("SELECT count(*) FROM live.study_versions").fetchone()
+        written = con.execute("SELECT last_run_id FROM live.sponsor_file").fetchone()[0]
+        boot = con.execute("SELECT run_id FROM monitoring.pipeline_runs "
+                           "WHERE job = 'bootstrap'").fetchone()[0]  # fmt: skip
+    if stage == "ingest":
+        assert versions == (0,)
+    assert written == boot  # the sponsor file is the bootstrap's
+
+
+def test_a_run_that_lost_its_lease_cannot_renew_or_finish(dsn: str) -> None:
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        run = store.start_run(cur, "daily", "daily", DAY, 120)
+        store.renew(cur, run)
+        cur.execute("UPDATE monitoring.pipeline_runs SET status = 'failed', "
+                    "error = 'stale lease' WHERE run_id = %s", (run,))  # fmt: skip
+        with pytest.raises(store.LeaseLostError):
+            store.renew(cur, run)
+        with pytest.raises(store.LeaseLostError):
+            store.finish_run(cur, run, "succeeded", {})
+        con.rollback()
+    assert not daily.record_failure(dsn, 10_000, {}, "no such run")

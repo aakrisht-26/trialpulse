@@ -12,7 +12,8 @@ the rows older than `live.retention_months` before `--as-of` (default today):
 - `live.study_versions`, except each trial's newest row, which ingest compares a record
   with, and except rows the sponsor pass has not consumed (a run after the file's last run).
 
-Each table, under the job lease (so no daily run overlaps it): the rows are selected,
+Each table, under the job lease, renewed at every table and first in the delete (ADR 0060),
+so no daily run overlaps it: the rows are selected,
 written to `data/live_exports/` as Parquet with a manifest, and read back from disk and
 compared with the database rows by count and by a digest of every value, all with no
 transaction open (ADR 0058: Neon ends a session idle inside a transaction after 5 minutes).
@@ -161,6 +162,7 @@ def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
     """One table (see the module text). `con` is in autocommit: the export and its check run
     with no transaction open, and the delete is one short transaction."""
     with con.cursor() as cur:
+        store.renew(cur, run_id)  # every table renews the lease (ADR 0060)
         row = cur.execute("SELECT last_run_id FROM live.sponsor_file WHERE file_id = 1").fetchone()
         params = {"cutoff": cutoff, "consumed": row[0] if row and row[0] is not None else -1}
         a = table.alias
@@ -191,6 +193,7 @@ def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
         if not export_only:
             order = table.order.replace(f"{a}.", "")
             with con.transaction():
+                store.renew(cur, run_id)  # a job that lost its lease deletes nothing
                 cur.execute(
                     f"WITH gone AS (DELETE FROM {table.name} {a} WHERE {table.condition} "
                     f"RETURNING {a}.*) SELECT * FROM gone ORDER BY {order}",

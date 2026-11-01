@@ -16,7 +16,7 @@ from trialpulse.live.engine import Ingested
 from trialpulse.live.sponsors import FORMAT, SponsorFile
 from trialpulse.live.state import FIRST_FIELDS, Event, Wide
 
-HEAD = "0005"
+HEAD = "0006"
 WIDE_COLUMNS: tuple[str, ...] = (
     "nct_id", *LIVE_FIELDS, "feature_hash", *FIRST_FIELDS, "n_versions", "ever_suspended",
     "recent_post_dates", "lapse_from", "reversal", "run_id",
@@ -26,6 +26,10 @@ VERSION_COLUMNS: tuple[str, ...] = ("nct_id", *LIVE_FIELDS, "feature_hash", "run
 
 class LeaseError(RuntimeError):
     """Another job holds the lease."""
+
+
+class LeaseLostError(LeaseError):
+    """This job's lease was taken over (it went stale): the job stops without writing."""
 
 
 class SchemaError(RuntimeError):
@@ -43,13 +47,14 @@ def check_head(cur: Any) -> None:
 
 def start_run(cur: Any, job: str, kind: str, data_day: dt.date | None, stale_minutes: int) -> int:
     """A running row for this job, or LeaseError when another job is running. A running row
-    older than `stale_minutes` is stale and marked failed first."""
+    whose last renewal is older than `stale_minutes` is stale and marked failed first
+    (ADR 0060: renewal, not the start, keeps a lease)."""
     import psycopg
 
     cur.execute(
         """UPDATE monitoring.pipeline_runs SET status = 'failed', finished_at = now(),
           error = 'stale lease' WHERE status = 'running'
-          AND started_at < now() - make_interval(mins => %s)""",
+          AND renewed_at < now() - make_interval(mins => %s)""",
         (stale_minutes,),
     )
     try:
@@ -63,14 +68,28 @@ def start_run(cur: Any, job: str, kind: str, data_day: dt.date | None, stale_min
     return int(row[0])
 
 
+def renew(cur: Any, run_id: int) -> None:
+    """Renew this job's lease, or raise LeaseLostError when it was taken over (ADR 0060).
+    Called at every stage and first in every write transaction: the row lock it takes holds
+    off a takeover until the transaction ends, so a write never lands after one."""
+    row = cur.execute(
+        """UPDATE monitoring.pipeline_runs SET renewed_at = now()
+        WHERE run_id = %s AND status = 'running' RETURNING run_id""",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise LeaseLostError(f"run {run_id} lost its lease (taken over as stale)")
+
+
 def finish_run(
     cur: Any, run_id: int, status: str, counts: Mapping[str, Any], error: str | None = None
 ) -> None:
+    """End a run that still holds its lease; LeaseLostError otherwise (ADR 0060)."""
     cur.execute(
         """UPDATE monitoring.pipeline_runs SET status = %s, finished_at = now(),
           watermark_from = %s, watermark_to = %s, records_fetched = %s, versions_added = %s,
           records_quarantined = %s, trials_rescored = %s, details = %s, error = %s
-        WHERE run_id = %s""",
+        WHERE run_id = %s AND status = 'running'""",
         (
             status, counts.get("watermark_from"), counts.get("watermark_to"),
             counts.get("records_fetched"), counts.get("versions_added"),
@@ -78,6 +97,8 @@ def finish_run(
             json.dumps(counts.get("details", {}), default=str), error, run_id,
         ),
     )  # fmt: skip
+    if cur.rowcount != 1:
+        raise LeaseLostError(f"run {run_id} lost its lease (taken over as stale)")
 
 
 def last_run(cur: Any, job: str, kind: str | None = None) -> dict[str, Any] | None:

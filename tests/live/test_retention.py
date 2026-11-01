@@ -202,3 +202,33 @@ def test_a_slow_export_does_not_idle_in_a_transaction(
     results = retention.retain(limited, AS_OF, 12, tmp_path)
     assert all(r.deleted == r.rows for r in results)
     assert sum(r.deleted for r in results) > 0
+
+
+def test_retention_that_lost_its_lease_deletes_nothing(
+    scratch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0060: while the file is written, retention's lease goes stale and a daily run takes
+    over. The delete renews first, finds the lease gone, and deletes nothing; the run rows
+    stay as the daily run left them."""
+    dsn = _dsn(scratch)
+    _rows(dsn)
+    before = _left(dsn)
+    real = retention._write
+
+    def taken_over(path: Path, rows: Any) -> None:
+        real(path, rows)
+        with psycopg.connect(dsn) as con, con.cursor() as cur:
+            cur.execute("UPDATE monitoring.pipeline_runs SET renewed_at = now() - "
+                        "interval '3 hours' WHERE status = 'running'")  # fmt: skip
+            store.start_run(cur, "daily", "daily", AS_OF, 120)
+            con.commit()
+
+    monkeypatch.setattr(retention, "_write", taken_over)
+    with pytest.raises(store.LeaseLostError):
+        retention.retain(dsn, AS_OF, 12, tmp_path)
+    assert _left(dsn) == before
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT job, status, error FROM monitoring.pipeline_runs "
+                           "WHERE job IN ('retention', 'daily') AND status <> 'succeeded' "
+                           "ORDER BY run_id").fetchall()  # fmt: skip
+    assert runs == [("retention", "failed", "stale lease"), ("daily", "running", None)]
