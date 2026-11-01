@@ -251,3 +251,21 @@ def test_one_running_job_at_a_time(scratch: str) -> None:
         cur.execute("UPDATE monitoring.pipeline_runs SET started_at = now() - interval '3 hours'")
         con.commit()
     assert daily.run_daily(CFG, scratch, SECRET, _api(), MODEL).status == "succeeded"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("size", "alerts", "code"),
+    [(120.0, [], 0), (650.0, [600], 0), (720.0, [600, 700], daily.RETENTION_EXIT)],
+)
+def test_retention_alerts_at_600_and_700_mb(
+    scratch: str, monkeypatch: pytest.MonkeyPatch, size: float, alerts: list[int], code: int
+) -> None:
+    """ADR 0045: the run records the alerts; at the last one it ends non-zero so the
+    failure issue opens. It never deletes anything itself."""
+    _bootstrap(scratch)
+    monkeypatch.setattr(store, "database_mb", lambda cur: size)
+    report = daily.run_daily(CFG, scratch, SECRET, _api(), MODEL)
+    assert report.status == "succeeded"
+    assert report.counts["details"]["retention_alerts"] == alerts
+    assert report.exit_code == code

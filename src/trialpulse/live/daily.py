@@ -335,6 +335,16 @@ def champion_model(cfg: ProjectConfig, folder: Path) -> Model:
     return Model(bundle.version, score, decisions)
 
 
+def _job_output(name: str, value: str) -> None:
+    """A step output of the workflow (GitHub's GITHUB_OUTPUT file), when there is one."""
+    import os
+
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with Path(path).open("a", encoding="utf-8") as fh:
+            fh.write(f"{name}={value}\n")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="The daily job of the live system (Step 14).")
     parser.add_argument("--target", choices=("local", "neon"), required=True)
@@ -347,10 +357,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RefusedError("SPONSOR_ID_KEY is not set (environment, .env or a secret)")
     from trialpulse.scoring.bundle import CHAMPION_DIR
 
-    model = champion_model(cfg, args.bundle or CHAMPION_DIR)
-    api = ApiClient(httpx.Client(timeout=60), per_minute=cfg.live.requests_per_minute)
-    report = run_daily(cfg, _dsn(args.target), key.get_secret_value().encode("utf-8"), api,
-                       model, force=args.force)  # fmt: skip
+    started = clock.perf_counter()
+    try:
+        model = champion_model(cfg, args.bundle or CHAMPION_DIR)
+        api = ApiClient(httpx.Client(timeout=60), per_minute=cfg.live.requests_per_minute)
+        report = run_daily(cfg, _dsn(args.target), key.get_secret_value().encode("utf-8"), api,
+                           model, force=args.force)  # fmt: skip
+    except BaseException as exc:
+        _job_output("error_class", type(exc).__name__)  # for the failure issue, nothing else
+        raise
+    minutes = (clock.perf_counter() - started) / 60
+    if minutes > cfg.live.alarm_minutes:  # the alarm of ADR 0045; the workflow kills at 90
+        print(f"::warning::the daily run took {minutes:.0f} minutes")
+    if report.exit_code:
+        _job_output("error_class", "QuarantinedRecords" if report.exit_code == QUARANTINED_EXIT
+                    else "RetentionAlert")  # fmt: skip
     print(f"daily run: {report.status} for {report.day} (run {report.run_id})")
     for name, value in report.counts.items():
         print(f"  {name}: {value}")

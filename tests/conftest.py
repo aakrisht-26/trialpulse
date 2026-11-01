@@ -85,3 +85,11 @@ def tracked_runs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 @pytest.fixture
 def real_tracking() -> None:
     """Asking for this fixture leaves `tracking.log_run` as it is (see `tracked_runs`)."""
+
+
+@pytest.fixture(autouse=True)
+def not_on_a_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI runs the tests under GitHub Actions, where the dataset modules refuse (ADR 0040).
+    The tests use synthetic data only, so they run as on the laptop; a test of the refusal
+    sets the variable itself."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)

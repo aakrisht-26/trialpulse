@@ -1,0 +1,89 @@
+name: Daily live run
+
+# CLAUDE.md Section 12 and ADR 0045. The job reads API v2 and Neon only: no Hugging Face
+# token, no dataset and no dataset module ever reach this runner (ADR 0040, held by
+# tests/test_workflows.py).
+on:
+  schedule:
+    - cron: "30 21 * * *"  # Section 12
+    - cron: "30 0 * * *"   # the second cron: does nothing if the day already succeeded
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time; a queued run waits, it never cancels a running one.
+concurrency:
+  group: live-daily
+  cancel-in-progress: false
+
+env:
+  HF_HUB_OFFLINE: "1"  # no Hugging Face request, even by accident
+  UV_NO_SYNC: "1"      # uv run never installs a dependency group the job left out
+
+jobs:
+  daily:
+    name: Ingest, sponsor pass and publication
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90  # killed at 90; the job warns at 60 (ADR 0045)
+    outputs:
+      error_class: ${{ steps.run.outputs.error_class }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.11.26"
+          enable-cache: true  # dependencies only
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked --no-dev
+
+      - name: Fetch the champion from the registry
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: uv run python -m trialpulse.live.registry --alias champion --to "$RUNNER_TEMP/bundle"
+
+      - name: Daily run
+        id: run
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          SPONSOR_ID_KEY: ${{ secrets.SPONSOR_ID_KEY }}
+        run: uv run python -m trialpulse.live.daily --target neon --bundle "$RUNNER_TEMP/bundle"
+
+  # A separate job, so it runs when the daily job failed or hit its timeout (GitHub reports
+  # a timed-out job as cancelled). It reuses one open issue and says only which run failed
+  # and the error class: run logs of a public repository are readable by anyone signed in.
+  notify:
+    name: Open or update the failure issue
+    needs: daily
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.daily.result == 'failure' || needs.daily.result == 'cancelled')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.daily.result }}
+          ERROR_CLASS: ${{ needs.daily.outputs.error_class }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Daily live run failed"
+          body="Run ${RUN_URL}: ${RESULT}, error class ${ERROR_CLASS:-unknown}."
+          number=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
