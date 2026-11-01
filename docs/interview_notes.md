@@ -293,3 +293,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "How do you know your tests would catch a real bug?"
 
 **Short answer.** I put the bug in and see. For each guard I write the smallest fault that defeats it (the gate returns nothing, the scrub is skipped, a rerun rewrites the history) and run the suite against a copy of the code. A fault that survives means a missing test, not a safe system. The same check applies to the fix: undo it and the new test must fail. One of mine did not at first: undoing the CI rule turned its own test into a skip, which pytest reports as harmless.
+
+## Step 15 (cloud part): the read-only API
+
+**What was built.** A FastAPI service over the serving tables only: a trial's risk with its drivers, flag and dates, its timeline, sponsor portfolios, therapeutic-area landscapes, the reasons trials stop, and what the model rests on. Every answer, errors included, carries the research-demo notice, the ClinicalTrials.gov attribution and the data-as-of date. It ships as a 274 MB image with no model or dataset package, and answered at a p95 of 50 ms cold and 43 ms warm at the cutoff's size.
+
+**Key decision and why.** Protect the free database's compute budget rather than the latency. Neon scales to zero and has 100 CU-hours a month, so the API reads the data-as-of date at most once every 15 minutes and caches every answer under that date: a cached answer never wakes the database, `/health` never touches it, and a burst from one client is cut by a rate limit on the address the proxy forwards, not the proxy's own.
+
+**Rejected alternative and why not.** Letting the API hold the sponsor-id key so that any sponsor name could be looked up. It would find every sponsor, aliases included, but anyone could then type a person's name and learn whether that person sponsors trials. The API matches display names only, and a sponsor that may be a person answers exactly like a name that does not exist.
+
+**Likely interview question.** "How do you keep a public read-only API from leaking more than you mean to?"
+
+**Short answer.** By deciding what each answer may contain, not just what each table holds, and testing the negative. The API reads only the serving schema, through a role that cannot read anything else, and a test proves the role is refused elsewhere. It never holds the key that would turn a guessed name into an id. A missing sponsor and a hidden one give byte-identical answers. Error answers never pass on a database message, because a Postgres error repeats the failing row. Then I tried 17 deliberate faults against the tests; one got through, and that became a new test.
