@@ -1,0 +1,6 @@
+# The dashboard's packages for Streamlit Community Cloud (Step 16), which reads the file next
+# to the entry point (app/Home.py). The versions are uv.lock's; tests/app/test_imports.py
+# fails when they differ.
+httpx==0.28.1
+plotly==7.1.0
+streamlit==1.64.0

@@ -34,3 +34,6 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Streamlit secrets (the API address of the dashboard, Step 16)
+.streamlit/secrets.toml
