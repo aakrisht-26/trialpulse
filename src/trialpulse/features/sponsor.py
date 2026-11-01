@@ -216,10 +216,13 @@ class SponsorPass:
 
     def answer(self, day: int, key: int, trial: int) -> tuple[int, int, int]:
         """(registrations, ended, stopped) of the other trials of `key` and its aliases, as
-        of `day`, from the events of earlier days."""
+        of `day`, from the events of earlier days. `trial` -1 is a trial the pass never saw,
+        so nothing of it is left out."""
         self.start_day(day)
         r = self.root(key)
         n_reg, n_ended, n_stopped = self.regs[r], self.ended[r], self.stopped[r]
+        if trial < 0:
+            return n_reg, n_ended, n_stopped
         own = self.reg_key[trial]
         if own != -1 and self.root(own) == r:  # the row's own trial is not "another trial"
             n_reg -= 1
