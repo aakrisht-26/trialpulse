@@ -21,8 +21,8 @@ repos:
         language: unsupported
         types_or: [python, pyi]
       - id: mypy
-        name: mypy (strict, src)
-        entry: uv run mypy src
+        name: mypy (strict, src and app)
+        entry: uv run mypy src app
         language: unsupported
         types_or: [python, pyi]
         pass_filenames: false

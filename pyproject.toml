@@ -68,7 +68,7 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = [
     "sklearn", "sklearn.*", "joblib", "threadpoolctl", "pandas", "pandas.*", "pyarrow", "pyarrow.*",
-    "lifelines", "lifelines.*",
+    "lifelines", "lifelines.*", "plotly", "plotly.*",
 ]
 ignore_missing_imports = true
 
@@ -109,6 +109,14 @@ api = [
     "pydantic-settings[yaml]>=2.15.0",
     "sqlalchemy>=2",
 ]
+# The dashboard's runtime (Step 16): it calls the API only, so it needs no database driver,
+# model or dataset package. app/requirements.txt pins the same versions for Streamlit
+# Community Cloud; tests/app/test_imports.py holds the pins to uv.lock.
+dashboard = [
+    "httpx>=0.28.1",
+    "plotly>=7.1.0",
+    "streamlit>=1.64.0",
+]
 # The gated dataset's client (ADR 0040). A plain `uv sync` installs it, as it installs `dev`
 # (see default-groups below), so nothing changes on the laptop or in CI; the live workflows
 # install with --no-group dataset, so no runner that holds Neon's or MLflow's secrets can
@@ -126,4 +134,4 @@ dev = [
 ]
 
 [tool.uv]
-default-groups = ["api", "dataset", "dev"]
+default-groups = ["api", "dashboard", "dataset", "dev"]

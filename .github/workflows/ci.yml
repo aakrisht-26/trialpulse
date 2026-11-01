@@ -55,7 +55,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Types
-        run: uv run mypy src
+        run: uv run mypy src app
 
       # CI runs every test, including the ones marked slow that a default local run skips.
       # The serving tests make, migrate and drop a scratch database on the Postgres service.

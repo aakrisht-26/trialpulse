@@ -1,0 +1,11 @@
+# The dashboard's Streamlit settings (Step 16). Secrets never go here: the API's address is
+# `API_URL` in Streamlit's secrets (.streamlit/secrets.toml locally, gitignored; the
+# platform's secret store on Streamlit Community Cloud).
+
+[client]
+# A viewer never sees a traceback (ADR 0054); errors are logged on the server.
+showErrorDetails = "none"
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

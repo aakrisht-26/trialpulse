@@ -150,7 +150,7 @@ def test_the_dataset_client_is_a_default_group_not_a_dependency() -> None:
     names = {_name(r) for r in project["project"]["dependencies"]}
     assert not names & set(DATASET_PACKAGES)
     assert {_name(r) for r in project["dependency-groups"]["dataset"]} == {"huggingface-hub"}
-    assert set(project["tool"]["uv"]["default-groups"]) == {"api", "dataset", "dev"}
+    assert set(project["tool"]["uv"]["default-groups"]) == {"api", "dashboard", "dataset", "dev"}
 
 
 @pytest.mark.parametrize("name", LIVE_WORKFLOWS)

@@ -7,6 +7,13 @@ from typing import Any
 import pytest
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--record-stubs", action="store_true", default=False,
+        help="write tests/app/stubs.json from the API's answers on the seeded database",
+    )  # fmt: skip
+
+
 @pytest.fixture(scope="session", autouse=True)
 def one_ssl_context_for_the_session() -> Iterator[None]:
     """Creating an httpx client loads the CA bundle, about 0.15 seconds each time. The tests
