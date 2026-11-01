@@ -13,6 +13,7 @@ from typing import Any
 import duckdb
 
 from trialpulse.config import ProjectConfig
+from trialpulse.ingest.history import refuse_on_a_runner
 
 
 class BlockedError(Exception):
@@ -123,7 +124,10 @@ def parquet_glob(raw_dir: Path, revision: str, config_name: str) -> str:
 def download_core(
     cfg: ProjectConfig, raw_dir: Path, token: str | None, pin_latest: bool
 ) -> dict[str, Any]:
-    """Part a: download the pinned revision of the core config (resumable)."""
+    """Part a: download the pinned revision of the core config (resumable). Refused under
+    GitHub Actions, as the main download path is: the gated dataset never reaches a runner
+    (ADR 0040)."""
+    refuse_on_a_runner()
     from huggingface_hub import HfApi, snapshot_download
     from huggingface_hub.errors import GatedRepoError
 

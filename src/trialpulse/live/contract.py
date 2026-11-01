@@ -62,6 +62,16 @@ LIVE_FIELDS: dict[str, str] = {
 COPIED: tuple[str, ...] = tuple(
     c for c in LIVE_FIELDS if c not in ("status", "sponsor_id", "title_phase", "intervention_types")
 )
+# The canonical fields each compact field is made from: the copied ones from themselves, the
+# derived ones from their sources. A test holds every source to the feature whitelist of
+# `features.registry` (CLAUDE.md Section 8, rule 2), as for the offline `versions` view.
+SOURCES: dict[str, tuple[str, ...]] = {
+    **{name: (name,) for name in COPIED},
+    "status": ("overall_status", "last_known_status"),
+    "sponsor_id": ("sponsor_key", "sponsor_is_individual"),
+    "title_phase": ("official_title_hash", "brief_title_hash"),
+    "intervention_types": ("intervention_type",),
+}
 # Change codes of an amendment marker (ADR 0043): which group of fields a version changed.
 MARKER_GROUPS: dict[int, tuple[str, ...]] = {
     1: ("status",),

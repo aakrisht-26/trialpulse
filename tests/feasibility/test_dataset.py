@@ -222,3 +222,20 @@ def test_profile_reports_type_drift_and_personal_data_counts(tmp_path: Path) -> 
     write_data_dictionary(result, "v1", path)
     text = path.read_text(encoding="utf-8")
     assert "(differs by file: BOOLEAN in 1; INTEGER in 1)" in text
+
+
+def test_the_spike_never_downloads_the_dataset_on_a_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding 10 (ADR 0040): part a refuses under GitHub Actions before it imports
+    or calls anything of Hugging Face."""
+    import sys
+
+    from trialpulse.cli import RefusedError
+    from trialpulse.config import load_project_config
+    from trialpulse.feasibility.dataset import download_core
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)  # an import would fail loudly
+    with pytest.raises(RefusedError, match="never read on a GitHub runner"):
+        download_core(load_project_config(), tmp_path, None, pin_latest=False)

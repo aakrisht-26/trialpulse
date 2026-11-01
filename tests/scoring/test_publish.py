@@ -243,3 +243,24 @@ def test_the_migration_converts_served_drivers_down_and_up(scratch: str) -> None
     assert row is not None
     assert row[0] == [12, 12, 24]
     assert row[2] == ["3", "OTHER", "RECRUITING"]
+
+
+def test_a_rerun_that_changes_nothing_keeps_the_run_that_wrote_the_history(scratch: str) -> None:
+    """Review finding 9 (ADR 0045, decision 11): history rows carry the run that wrote them,
+    and a same-day rerun with the same scores neither rewrites them nor takes them over."""
+    with psycopg.connect(_libpq(scratch)) as con:
+        first, second = (
+            con.execute(
+                "INSERT INTO monitoring.pipeline_runs (job, status) VALUES ('daily', 'succeeded') "
+                "RETURNING run_id"
+            ).fetchone()[0]
+            for _ in range(2)
+        )
+        con.commit()
+    cfg = load_project_config()
+    serving.publish(_one(DAY1, 0.10), cfg, scratch, run_id=first)
+    again = serving.publish(_one(DAY1, 0.10), cfg, scratch, run_id=second)
+    assert again["history_written"] == 0
+    with psycopg.connect(_libpq(scratch)) as con:
+        runs = con.execute("SELECT run_id FROM serving.trial_score_history").fetchall()
+    assert runs == [(first,)]
