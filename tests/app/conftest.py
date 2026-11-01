@@ -20,6 +20,18 @@ for folder in (HERE.parents[1] / "app", HERE):  # app/ as `streamlit run app/Hom
 from stubbed_api import StubApi  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def the_main_module_comes_back() -> Iterator[None]:
+    """AppTest leaves the page it ran as `sys.modules["__main__"]`. A process that a later
+    test starts with "spawn" runs the parent's main module first, so it would run that page,
+    which then waits out its 3-minute budget for an API that is not there (this hung
+    tests/features/test_sponsor.py::test_a_loop_of_names_ends in CI). The real main module
+    is put back after every dashboard test."""
+    main = sys.modules["__main__"]
+    yield
+    sys.modules["__main__"] = main
+
+
 @pytest.fixture
 def stub_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[StubApi]:
     from dashboard import client, ui

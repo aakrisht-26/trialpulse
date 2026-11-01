@@ -2561,6 +2561,10 @@ The API ran under uvicorn on a seeded database (403 scored and 22 unscored trial
 
 The first browser run found a fault that AppTest cannot see. **After `st.stop()`, the live runtime drops everything the frame draws later**, so the page of a trial without a score lost its attribution and data-as-of date. AppTest still drew them, so every test passed. The pages now end early with `return` inside a function that the frame wraps (`ui.run`), and a source test forbids `st.stop` under `app/`. The browser run also showed "None" as the rank of a trial without a score; it is now blank, and a test holds that.
 
+### CI's first run on the pull request
+
+CI failed on both runs of the first push of the pull request, in an older slow test: `tests/features/test_sponsor.py::test_a_loop_of_names_ends` timed out after 120 seconds (1,277 passed). The cause was in the new tests. **AppTest leaves the page it ran as `sys.modules["__main__"]`**, and a process started with "spawn" runs the parent's main module first. The sponsor test's worker therefore ran a dashboard page, which waited out its 3-minute budget for an API that was not there. I reproduced it here: one AppTest followed by the sponsor test fails, with or without coverage. An autouse fixture in `tests/app/conftest.py` now puts the real main module back after every dashboard test. The pair then passes, and so does the full suite with coverage, as CI runs it (1,278 passed, 11 skipped). The sponsor test itself is unchanged.
+
 ### Faults against the new tests
 
 23 deliberate faults went into a scratch copy of the branch outside the repository; each was run against `tests/app`, F22 with Postgres required. 22 were caught at once. F23 got through: the test of earlier points checked the trace names, but not that the points were drawn. The test now compares the plotted dates and values with the recorded timeline, and it then caught F23.
