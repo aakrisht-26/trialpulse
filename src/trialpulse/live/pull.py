@@ -26,9 +26,11 @@ import pandas as pd
 
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.contracts.versions import (
+    FieldTypeError,
     api_v2_fields,
     canonical_enum,
     canonical_from_api_v2,
+    parse_partial_date,
     split_valid,
     typed_frame,
 )
@@ -119,38 +121,75 @@ class Converted:
 
 
 def interventions_of(study: Mapping[str, Any]) -> list[str]:
+    """The intervention types of a record (distinct name and type pairs). A name or type that
+    is not a JSON string fails the record's contract."""
     items = get_path(study, INTERVENTIONS_PATH) or []
-    pairs = [(i.get("name"), canonical_enum(i.get("type"))) for i in items if isinstance(i, dict)]
+    if not isinstance(items, list):
+        raise FieldTypeError("interventions")
+    pairs = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise FieldTypeError("interventions")
+        name, kind = item.get("name"), item.get("type")
+        if name is not None and not isinstance(name, str):
+            raise FieldTypeError("intervention_name")
+        if kind is not None and not isinstance(kind, str):
+            raise FieldTypeError("intervention_type")
+        pairs.append((name, canonical_enum(kind)))
     return distinct_intervention_types(pairs)
 
 
+def _identity(study: Mapping[str, Any]) -> tuple[str | None, dt.date | None]:
+    """The trial id and post date of a record that could not be converted, where readable."""
+    nct = get_path(study, "protocolSection.identificationModule.nctId")
+    posted = get_path(study, "protocolSection.statusModule.lastUpdatePostDateStruct.date")
+    return (nct if isinstance(nct, str) else None,
+            parse_partial_date(posted).value if isinstance(posted, str) else None)  # fmt: skip
+
+
 def convert(studies: Sequence[Mapping[str, Any]], rules: CohortRules, secret: bytes) -> Converted:
-    """Compact rows of the valid records; the others quarantined (see the module text)."""
+    """Compact rows of the valid records; the others quarantined (see the module text). One
+    record that cannot be converted at all (a field of the wrong JSON type, or any other
+    failure) is quarantined with the field's name, or the exception's type, and the others
+    go on: one bad record never stops a run (review finding 2)."""
     out = Converted()
-    canonical, texts, kept = [], [], []
+    converted: list[tuple[Mapping[str, Any], dict[str, Any], dict[str, str], list[str]]] = []
     for study in studies:
-        row, text = canonical_from_api_v2(study)
-        canonical.append(row)
-        texts.append(text)
-        kept.append(study)
-    if not canonical:
+        try:
+            row, text = canonical_from_api_v2(study)
+            types = interventions_of(study)
+        except FieldTypeError as exc:
+            reason = f"{exc.field}: wrong JSON type"
+        except Exception as exc:
+            reason = f"record: conversion failed ({type(exc).__name__})"
+        else:
+            converted.append((study, row, text, types))
+            continue
+        nct, posted = _identity(study)
+        out.quarantined.append(
+            {"nct_id": nct, "effective_date": posted, "payload_hash": payload_hash(study),
+             "reasons": reason}
+        )  # fmt: skip
+    if not converted:
         return out
-    frame = typed_frame(pd.DataFrame(canonical))
+    frame = typed_frame(pd.DataFrame([row for _, row, _, _ in converted]))
     _, failing = split_valid(frame)
     reasons = dict(zip(failing.index, failing["reasons"], strict=True))
-    for i, (row, text, study) in enumerate(zip(canonical, texts, kept, strict=True)):
+    for i, (study, row, text, types) in enumerate(converted):
         problems = [reasons[i]] if i in reasons else []
-        types = interventions_of(study)
         unknown = unknown_intervention_types(types)
         if unknown:
             problems.append(f"intervention_type: {len(unknown)} value(s) outside the contract")
-        if problems:
-            out.quarantined.append(
-                {"nct_id": row.get("nct_id"), "effective_date": row.get("effective_date"),
-                 "payload_hash": payload_hash(study), "reasons": "; ".join(problems)}
-            )  # fmt: skip
-            continue
-        official = text.get(row["official_title_hash"] or "")
-        brief = text.get(row["brief_title_hash"] or "")
-        out.rows.append(compact_row(row, official, brief, types, rules, secret))
+        if not problems:
+            try:
+                official = text.get(row["official_title_hash"] or "")
+                brief = text.get(row["brief_title_hash"] or "")
+                out.rows.append(compact_row(row, official, brief, types, rules, secret))
+                continue
+            except Exception as exc:
+                problems.append(f"record: conversion failed ({type(exc).__name__})")
+        out.quarantined.append(
+            {"nct_id": row.get("nct_id"), "effective_date": row.get("effective_date"),
+             "payload_hash": payload_hash(study), "reasons": "; ".join(problems)}
+        )  # fmt: skip
     return out

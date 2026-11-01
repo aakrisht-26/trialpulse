@@ -193,7 +193,9 @@ def run_daily(
             pulled = pull.pull_delta(api, since, day, live.page_size)
             converted = pull.convert(pulled.studies, rules, secret)
             records = [r for r in converted.rows if r["effective_date"] <= day]
+            # Quarantined records' trials too: the gate compares them with their stored rows.
             trials = {str(r["nct_id"]) for r in converted.rows}
+            trials |= {str(q["nct_id"]) for q in converted.quarantined if q["nct_id"]}
             sponsors = store.load_file(cur)
             memory = engine.Memory(
                 store.load_wides(cur, trials), sponsors, store.latest_live(cur, trials),
@@ -201,14 +203,16 @@ def run_daily(
             )  # fmt: skip
             stored = {(w.nct_id, w.effective_date): w.row for w in memory.wides.values()}
             stored.update({(n, r["effective_date"]): r for n, r in memory.last_live.items()})
-            lost = runs.null_gate(records, stored, live.null_gate_share)
+            held = [(q["nct_id"], q["effective_date"]) for q in converted.quarantined]
+            lost = runs.null_gate(records, stored, live.null_gate_share, held)
             if lost:
                 raise runs.GateError(f"fields turned NULL: {sorted(lost)}")
             if previous is not boot:
                 newest: dict[str, dt.date] = {}
-                for r in converted.rows:
-                    newest[r["nct_id"]] = max(newest.get(r["nct_id"], r["effective_date"]),
-                                              r["effective_date"])  # fmt: skip
+                returned = [(r["nct_id"], r["effective_date"]) for r in converted.rows]
+                returned += [k for k in held if k[0] and k[1]]  # quarantined, but returned
+                for nct, posted in returned:
+                    newest[nct] = max(newest.get(nct, posted), posted)
                 missing = runs.missing_overlap(store.overlap_rows(cur, since), newest, since)
                 if len(missing) > live.max_missing_overlap:
                     raise pull.PullError(f"{len(missing)} stored overlap rows were not returned")
@@ -314,6 +318,8 @@ def publish_day(
     count = store.open_count(cur, day, rules.open_statuses, rules.study_type)
     features = live_features.compute_live(wides, keys, sponsors, count, rules)
     scores = model.score(scored, features, day) if len(scored) else _empty_scores()
+    if set(scores["model_version"]) - {model.version}:
+        raise RefusedError(f"the scores are not of the model {model.version} that was scoped")
     unscored = people[people["reason"].notna() & people["trial_id"].isin(chosen.trials)]
     unscored = unscored[["trial_id", "true_index", "reason", "content_hash"]].rename(
         columns={"trial_id": "nct_id"}

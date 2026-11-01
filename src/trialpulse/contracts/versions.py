@@ -300,6 +300,36 @@ _PLAIN_ENUMS = (
 )
 
 
+# The JSON type each API v2 field must have; every field not listed is a string. A value of
+# another type fails the record's contract (`FieldTypeError`): the text "false" is not the
+# boolean false, and "about 40" is not a count.
+API_V2_JSON_TYPES: dict[str, type | tuple[type, ...]] = {
+    "healthy_volunteers": bool,
+    "enrollment_count": int,
+}
+
+
+class FieldTypeError(ValueError):
+    """An API v2 field whose JSON type is not the contract's. The message names the field and
+    the expected type, never the value."""
+
+    def __init__(self, field: str) -> None:
+        kind = API_V2_JSON_TYPES.get(field, str)
+        name = getattr(kind, "__name__", "string")
+        super().__init__(f"{field}: not a JSON {_JSON_NAMES.get(name, name)}")
+        self.field = field
+
+
+_JSON_NAMES = {"bool": "boolean", "int": "integer", "str": "string"}
+
+
+def _json_type_ok(name: str, value: Any) -> bool:
+    kind = API_V2_JSON_TYPES.get(name, str)
+    if kind is int:  # JSON true is not a count
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, kind)
+
+
 def api_v2_fields() -> str:
     """The `fields` parameter that requests exactly what canonical_from_api_v2 reads."""
     return ",".join(f"protocolSection.{path}" for path in API_V2_PATHS.values())
@@ -307,7 +337,8 @@ def api_v2_fields() -> str:
 
 def canonical_from_api_v2(study: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """One API v2 study record as a canonical row (source api_v2, no version number), plus
-    its normalized texts keyed by hash."""
+    its normalized texts keyed by hash. A field of the wrong JSON type raises
+    `FieldTypeError` (strict booleans and counts)."""
 
     def get(name: str) -> Any:
         node: Any = study.get("protocolSection", {})
@@ -315,6 +346,8 @@ def canonical_from_api_v2(study: Mapping[str, Any]) -> tuple[dict[str, Any], dic
             if not isinstance(node, Mapping):
                 return None
             node = node.get(key)
+        if node is not None and not _json_type_ok(name, node):
+            raise FieldTypeError(name)
         return node
 
     row: dict[str, Any] = {"nct_id": get("nct_id"), "nct_version": None, "source": "api_v2"}
@@ -326,12 +359,10 @@ def canonical_from_api_v2(study: Mapping[str, Any]) -> tuple[dict[str, Any], dic
         parsed = parse_partial_date(get(name))
         row[name], row[f"{name}_precision"] = parsed.value, parsed.precision
         row[f"{name}_type"] = canonical_enum(get(f"{name}_type")) if parsed.value else None
-    healthy = get("healthy_volunteers")
-    row["healthy_volunteers"] = None if healthy is None else bool(healthy)
+    row["healthy_volunteers"] = get("healthy_volunteers")
     row["minimum_age_years"] = age_in_years(get("minimum_age"))
     row["maximum_age_years"] = age_in_years(get("maximum_age"))
-    count = get("enrollment_count")
-    row["enrollment_count"] = None if count is None else int(count)
+    row["enrollment_count"] = get("enrollment_count")
     lead = sponsor(get("lead_sponsor_name"), row["lead_sponsor_class"])
     row["lead_sponsor_name"], row["sponsor_key"] = lead.name, lead.key
     row["sponsor_is_individual"] = lead.is_individual
