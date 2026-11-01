@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started.
+Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. The review of Steps 14 to 16 and its fixes were merged on 2026-11-01 (see "Review of Steps 14 to 16, and its fixes"); where the API runs (finding 2) is Aakrisht's decision. **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's ap
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045); the cloud part built on `step-14-cloud`, waiting for review; the laptop and Neon parts not started |
-| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; the deployment and Neon parts are left for the laptop |
+| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
 | 18 | Documentation and polish | README written in the cloud on `readme-cloud` (2026-11-01), waiting for review; the live links, the demo GIF, the CHANGELOG and the fresh-clone check on Windows wait for the deployments |
@@ -2499,6 +2499,142 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Review of Steps 14 to 16, and its fixes (2026-11-01, branch `step-14-16-fixes`)
+
+Status: **the fixes Aakrisht ordered are built, tested and merged; finding 2 (where the API runs) is his decision, researched below with no code; finding 6 (the daily workflow firing before go-live) he handles himself.** Evidence is from the cloud session's shell on Linux with Postgres 16; it is not a claim about the laptop.
+
+### The review
+
+An independent review of PRs aakrisht-26/trialpulse#3 to aakrisht-26/trialpulse#7, made in a cloud session with no `data/`, no laptop and no Neon. Its baseline reproduced the recorded count (1,291 passed, 11 skipped). Every claim below was checked against the code, by experiments on a local Postgres 16 and by 14 deliberate faults in a scratch copy outside the repository. Platform facts were read on each platform's own pages on 2026-11-01.
+
+| # | Severity | Finding | Evidence |
+| --- | --- | --- | --- |
+| 1 | Critical | On Neon, every full daily run and the first catch-up run would fail | Neon ends a session idle inside a transaction after 5 minutes (`idle_in_transaction_session_timeout = 300000` on its compatibility page). The job held a transaction open through the pull, the conversion and the drivers (14 to 23 minutes on a runner, Part 5 below). With the limit scaled to 2 seconds, two runs in a row failed at publication, stayed `running`, wrote no data date or score file, and stayed full runs |
+| 2 | Critical | The API cannot run on Hugging Face Spaces as planned | Spaces allow outbound requests on ports 80, 443 and 8080 only ("any requests going to other ports will be blocked"); Neon listens on 5432. Docker Spaces now need a paid plan (PRO) to create |
+| 3 | High | ADR 0044's rule showed some people's names | Initials, surname first, other degrees, four or more words and person names under public or industry classes were all shown; 31 distinct person-like names in 20,000 live records (masked shapes only) |
+| 4 | High | The bootstrap command does not exist, and its core is unmeasured | `seed` holds every version as a Python dict (about 6 GB for 4.44M versions, estimated from synthetic rows); `load_bootstrap(rebuild=True)` cleared 4 tables of 13 |
+| 5 | Medium | A long laptop job's lease could be taken over while it ran | A row older than 120 minutes by its start was marked stale and a second job started; the first job's finish then wrote `succeeded` over `stale lease` |
+| 6 | Medium | `daily.yml` fires on main from 2026-11-01 21:30 UTC with no secrets | The fetch of the champion falls back to a local MLflow store and fails; the notify job opens a public issue and comments twice a day |
+| 7 | Medium | A wrong password or a missing grant answered "the database is waking up" forever | Experiments: both gave 503 with `Retry-After`; nothing was logged; fault R05 (every database error retried) got through |
+| 8 | Medium-low | An unhandled API error answered plain text without the notice | A missing grant on a score table gave `text/plain` "Internal Server Error" |
+| 9 | Medium-low | The dashboard cached a 200 that was not the API's | A platform's HTML 200 made the trial page fail with `KeyError` and kept it failing for 15 minutes |
+| 10 | Low-medium | Migrating Neon had no command, and tests could act on Neon | Alembic read only DATABASE_URL; the test fixtures create and drop databases on DATABASE_URL's server |
+| 11 | Low-medium | Removing a hidden sponsor's earlier name was untested | Fault R02 got through: the test built the hiding record and never saved it |
+| 12 | Low | Untested population bound and data-date order; a weak password check; a wrong file name; a caption | Faults R08 and R09 got through; Neon refuses SQL-made roles below 60 bits of password entropy; ADR 0049 named `scripts/api_role.sql`; the bootstrap's cutoff score is each trial's first point, before go-live |
+
+Faults that the tests already caught: R03 (a failed run not recorded), R06 (a short pull accepted), R07 (a scoped run deleting every other score), R10 (failures cached), R12 (no retry for a waking database), R13 (a stale lease never released), R14 (`/health` not called first). R01, R04 and R11 got through but were harmless (another layer already blocks them).
+
+### The fixes, in the order Aakrisht set
+
+| Item | Finding | What changed | ADR | Commit |
+| --- | --- | --- | --- | --- |
+| 1 | 1 | The daily job's connection runs in autocommit, every write in a short explicit transaction; the pull, conversion, sponsor pass, features, scores and drivers run with no transaction open; a failure is recorded on a fresh connection. Retention exports and verifies with no transaction open and deletes in one short transaction that must return exactly the exported rows | 0058 | `5c88fb9` |
+| 2 | 3, 11 | Display names by an allowlist: shown only with a word of the committed list (`live/organization_words.py`, twelve languages, legal forms, dotted forms), or as a single word, or for INDUSTRY, NIH, FED, OTHER_GOV and NETWORK sponsors leading at least 5 live trials; decided when rows are saved and again when a sponsor's trial leaves | 0059 (amends 0044) | `774eb70` |
+| 3 | 5 | Migration 0006 (`renewed_at`): a job renews its lease at every stage and first in every write, including inside `serving.publish`; staleness counts from the last renewal; `finish_run` ends only a running row; a job that lost its lease writes nothing and skips VACUUM | 0060 | `c380f17` |
+| 4 | 7, 8 | Only connection failures and timeouts answer 503 "waking up"; any other database error answers a JSON 500 with the notice and is logged by its SQLSTATE (connect-time refusals read from the server's `FATAL:` text); an unreadable data date follows the same rule; every unhandled error is a JSON 500 with the notice | 0061 | `f9fad35` |
+| 5 | 10 | Test fixtures fail for any host but `localhost` and `127.0.0.1` (CI's service, held by a test); Alembic refuses a non-local DATABASE_URL; `trialpulse.live.migrate` migrates Neon from a URL asked at a prompt, refuses a pooled host, never reads DATABASE_URL; `.env.example` says NEON_DATABASE_URL is the direct URL | 0062 | `3ed0a95` |
+| 6 | 9 | The dashboard never returns or caches a 200 or 404 that is not the API's JSON; it waits it out like a start, with its own message | 0063 | `fd2b09b`, `bb16622` |
+| 7 | 4 (no data needed) | `load_bootstrap(rebuild=True)` takes the lease, then clears every table the daily job writes (held by a test to the daily path's SQL), every other run's row and the daily columns of `serving.data_status` | none | `fb8c745` |
+| 8 | 12 | Tests for R08 and R09; `api_role` makes its own 256-bit password and prints `API_DATABASE_URL` once; ADR 0049's command name; the timeline note says the first point is the cutoff score | 0064 | `6dbbd4d` |
+
+**The faults again, after the fixes.** Each fault that got through before was put back into the fixed code and run against the new tests: R02 (2 tests fail), R05 (4 fail), R08 (1 fails), R09 (1 fails), and the dashboard without its envelope check (12 fail). The new idle-limit tests fail on the previous `daily.py` and `retention.py` and pass on the new ones; the review's two-run reproduction is now a test that passes.
+
+### Item 2: the display names on real records
+
+The 20 pages of the review (20,000 of the 222,417 live API v2 records) and then every live record, pulled at no more than 40 requests a minute, sponsor fields only. Nothing was stored, and only counts and masked shapes were printed (every letter group masked as "Aaaa", initials and punctuation kept). "Leads at least 5 trials" is counted over the live-status records, close to but not exactly the live trials of `serving.trial_display`.
+
+| Distinct sponsors (by key and class) | First 20 pages | Every live record |
+| --- | --- | --- |
+| Sponsors | 6,483 | 29,831 |
+| Shown under ADR 0044 | 5,412 | 21,827 |
+| Shown under ADR 0059 | 5,299 | 20,001 |
+| Hidden under ADR 0059 | 1,184 | 9,830 |
+| Shown by an organization word / a single word / class and 5 trials | 5,059 / 189 / 51 | 18,859 / 1,050 / 92 |
+| Person-like names the review found shown | 31 | 336 |
+| of those, now hidden | 25 | 298 |
+| of those, still shown | 6 | 38 |
+
+- **Shapes now hidden** (first 20 pages): "Aaaa A. Aaaa" under OTHER (12), "Aaaa A. Aaaa-Aaaa" (2), "Aaaa, Aaaa" (2), "Aaaa Aaaa, Aaaa" (2), and one each of "Aaaa A. Aaaa, Aa.A." (FED), "Aaaa A. Aaaa" (INDUSTRY), "A Aaaa Aaaa, A.A" (INDUSTRY), "A. Aaaa", "Aaa A. Aaaa Aa.", "Aaaa A. A. Aaaa" and "Aaaa Aaaa Aaaa, Aaaa" (OTHER).
+- **Why 38 person-like shapes are still shown** (every live record): each passes by a listed word, in shapes such as "Aaaa Aaaa A. Aaaa" with *azienda*, "Aaaa A. Aaaa" with *ospedal* or IRCCS, "Aaaa Aaaa A. Aaa Aaaa" with *istitut*, "Aaaa Aaaa Aaaa Aaaa A. a A. Aaaa" with *centro*, and company forms (*Ltd*, *plc*, *Oy*, *JSC*, *A/S*, *Co.*, *S.p.A.*), or by the single-word or 5-trial rule. These are the shapes of hospitals, institutes and companies named after a person; the names themselves were not looked at, so this is a reading of shapes, not a check of each name.
+- **Shown without an organization word** (first 20 pages, 499 records in 43 masked shapes): mostly single words under INDUSTRY ("Aaaa", 274 records) and OTHER (48), and two- or three-word names of INDUSTRY or OTHER_GOV sponsors that lead at least 5 trials ("Aaaa Aaaa", 42).
+- **The cost:** 1,826 more sponsors hidden registry-wide (21,827 shown before, 20,001 now): organizations of class OTHER, UNKNOWN or AMBIG whose names hold no listed word, and small sponsors of the listed classes. Their trials keep their scores and show the sponsor's class only.
+
+### Item 7: the rule for the bootstrap command (finding 4)
+
+The bootstrap command is still to be written on the laptop. It must:
+
+- **stream the warehouse's versions in chunks**, never holding all 4.44M as Python dicts (about 6 GB estimated from synthetic rows, before sorting), for example trial by trial in `nct_id` order, since `seed` works trial by trial;
+- **keep every transaction short**: compute with no transaction open, and write in transactions that never wait on computation, so none is idle for Neon's 5 minutes (ADR 0058). `store.load_bootstrap` writes the seeded state in the caller's one transaction, so the caller must have everything computed before it opens it, and must check that the write itself stays well under the limit at the cutoff's size (measured first, under the one-hour rule);
+- **take the lease** before writing (it does, through `load_bootstrap`), and use `rebuild=True` only to start the live state again; a rebuild now clears every table the daily job writes.
+
+### Finding 2: where the API can run (research only, no code)
+
+What the API needs: a container (`Dockerfile.api`) or a Python ASGI app; outbound TCP to Neon on port 5432; no payment card; a wake that the dashboard's 3-minute budget covers; terms that allow a non-commercial research demo. Read on each host's own pages on 2026-11-01.
+
+| | Render (Free web service) | Vercel (Hobby, Python functions) | Koyeb (free instance) | Hugging Face Spaces (as planned) |
+| --- | --- | --- | --- | --- |
+| Outbound to Neon on 5432 | Yes: free services are blocked only on ports 25, 465 and 587 | Yes: functions open TCP connections; Neon documents connecting from Vercel | Not checked (fails on the card) | **No**: only 80, 443 and 8080 |
+| Docker or Python | Docker from a Dockerfile at any path (`Dockerfile.api` as is), or a native Python runtime | Python (ASGI, FastAPI detected) as serverless functions; no Docker; bundle limit 500 MB, 300 s per request | Docker | Docker Spaces need a paid plan to create |
+| Payment card | Not required: without a payment method, free services are suspended for the month when the bandwidth is used up | Not required | **Required** (a $29 authorization hold) | PRO for a Docker Space |
+| Sleep and wake | Spins down after 15 minutes without inbound traffic; spinning up takes about a minute, and browsers see a loading page meanwhile (the dashboard's client now waits out such a page, ADR 0063); 750 free instance hours a month | Serverless: an instance starts on demand (its start time not measured here); in-process state (the answer cache, the data clock, the rate limit) lives per instance and may vanish between requests | Scales to zero after 1 hour, wakes in 1 to 5 seconds (Koyeb's scale-to-zero page, as quoted by a search; not read directly) | Sleeps after a period without use |
+| Terms | Free instances are for hobby and test projects ("do not use them for production"); the terms grant use "for own use only" and forbid reselling the service | Hobby is restricted to "non-commercial, personal use only", which matches CLAUDE.md Section 2 | Not checked | Not checked |
+
+**Recommendation: Render's free web service, built from `Dockerfile.api`.** It is the only option checked that meets every condition with the image as built: outbound 5432 is open, no card is needed, and its one-minute wake fits inside the dashboard's 3-minute budget. Vercel is the alternative if Render's terms or limits change. It needs no card and its terms match the project's non-commercial rule, but its serverless model defeats ADR 0049's in-process cache and rate limit (each instance keeps its own), and every cold instance reaches Neon. It also needs a deployment that installs only the `api` group, since the project's default dependencies would exceed the 500 MB bundle. Koyeb is out because it needs a card. Spaces are out because of the port rule, and a Docker Space now needs PRO.
+
+**To check at deployment, if Render is chosen:** Render's proxy and its client-IP header are not documented. Render's staff say the first `X-Forwarded-For` entry is the client, Render sits behind Cloudflare, and the header can be spoofed, so `api.trusted_proxies` must be measured on the deployed service before the per-client rate limit is relied on. The README's deployment links, ADR 0049's "pooled URL" and Section 13 change with the decision, through an ADR.
+
+### Decisions made without asking (flagged)
+
+1. **Retention (item 1)** gets the same rule as the daily job: it held a locked transaction open while it wrote its file. Its delete now returns the deleted rows and compares them with the export, value for value.
+2. **A connect-time refusal (item 4)** is recognized from the server's `FATAL:` text, since psycopg gives no SQLSTATE before a connection exists; known texts map to their SQLSTATE in the log, transient ones (too many clients, starting up, shutting down) stay 503, and other database errors without a SQLSTATE are treated as refusals only when the server answered.
+3. **The organization-word list (item 2)** is mine: twelve languages, legal forms, dotted forms and a few public abbreviations. It leaves out short forms that are also names ("Ab", "Co", "Sa", "Se", "Va") and stems that open common names ("care", "charit", "medic"). When several records of one sponsor arrive together, a name is shown only if every one allows it.
+4. **The dashboard (item 6)** also refuses a 404 that is not the API's (the other status it caches), and waits such pages out like a start instead of failing at once, with its own message when the budget runs out.
+5. **A rebuild (item 7)** keeps `serving.data_status.labeled_through`: it comes from the laptop's reason-count load, which a rebuild does not redo.
+6. **The Neon migration command (item 5)** asks for the URL at a prompt instead of taking it as an argument, so the password never lands in the shell's history.
+7. **`api_role` (item 8)** prints the finished `API_DATABASE_URL` once, with Neon's pooled host, since the generated password is never typed.
+8. **Migration 0006** was needed for the renewable lease (item 3); the daily job refuses a database not at 0006, so Neon is migrated with the new command before the first run.
+9. **One style commit** (`bb16622`) followed item 6, whose commit went out with a line too long; the checks are now run before every commit.
+
+### Left for the laptop, and why
+
+| Item | Why not here |
+| --- | --- |
+| Finding 2: choosing the API's host, its ADR and the deployment | Aakrisht's decision; research above |
+| Finding 6: disabling `daily.yml` until go-live (`gh workflow disable daily.yml`) | Aakrisht handles it |
+| Writing the bootstrap command under the rule above, and measuring it at the cutoff's size | Needs `data/` |
+| Migrating Neon to 0006 (`uv run python -m trialpulse.live.migrate`), then the API role (`uv run python -m trialpulse.live.api_role --target neon`) | Needs Neon |
+
+### Checks
+
+Run the CI way, with `TRIALPULSE_REQUIRE_POSTGRES=1` on this VM's Postgres 16: `ruff check .` clean, `ruff format --check .` clean (343 files), `mypy src app` clean (135 files), `pytest -q -m "slow or not slow"`: **1,406 passed, 11 skipped** (the 11 of before: 10 need `data/`, one needs Windows). The review's baseline was 1,291 passed: 115 tests were added.
+
+### Verify (PowerShell, on main after the merge)
+
+```powershell
+git fetch origin
+git checkout main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src app
+docker compose up -d
+uv run alembic upgrade head
+uv run pytest -q -m "slow or not slow"
+```
+
+`alembic upgrade head` takes the local database to 0006. To migrate Neon later (it asks for the direct URL and never prints it):
+
+```powershell
+uv run python -m trialpulse.live.migrate
+```
+
+### The three checks
+
+1. **Acceptance:** each of the eight items is built with a test that fails without it (the checks above); the review's two-run reproduction passes. Finding 2 is researched with a recommendation and no code, as asked.
+2. **Decisions made without asking:** the nine above.
+3. **Blocked, skipped or deferred:** finding 2 (Aakrisht's decision), finding 6 (Aakrisht), the bootstrap command (needs `data/`); no test, threshold or definition was weakened. Two tests changed their expectation with a decision Aakrisht made: the daily test now expects "Example Sponsor Organization" to be shown (it holds an organization word, ADR 0059), and the lease test ages `renewed_at` instead of `started_at` (ADR 0060).
 
 ## Step 18 (README only)
 

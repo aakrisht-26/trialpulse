@@ -329,3 +329,15 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "Why lead with what failed?"
 
 **Short answer.** Because the claims I can defend are the registered ones, and the falsified predictions are part of that record. Showing them tells a reviewer that the test was real: the predictions were committed before the locked origins were opened, and some of them missed.
+
+## Review of Steps 14 to 16, and its fixes
+
+**What was built.** An independent review of the live system, API and dashboard before their first real runs, then eight fixes. The daily job no longer holds a transaction open while it waits or computes. Display names come from an allowlist. The lease renews and is checked before every write. The API tells a wrong password from a sleeping database. Tests can no longer touch Neon, and Neon has a migration command. The dashboard ignores answers that are not the API's. A bootstrap rebuild clears everything the daily job wrote. Each fix has a test that fails without it, and the faults that got through the review's tests are caught now.
+
+**Key decision and why.** End every transaction before any long computation, by running the job's connection in autocommit and wrapping only the writes in explicit transactions. Neon ends a session that sits idle inside a transaction for 5 minutes, and a full run's drivers take 14 to 23 minutes; the review reproduced every run failing, forever, with the limit scaled down. Autocommit makes the rule hold by construction: a read can no longer open a transaction that a later long step leaves idle.
+
+**Rejected alternative and why not.** Raising the idle limit for the job's database role. One statement would have fixed the symptom, but long idle transactions would stay open on a small shared compute, and a new role without the setting would bring the failure back.
+
+**Likely interview question.** "Your tests all passed. How did you find that the job could never succeed in production?"
+
+**Short answer.** By reading the platform's documented defaults instead of assuming Postgres's, and turning them into a test. Postgres disables the idle-in-transaction limit by default; Neon sets it to 5 minutes. The regression test lowers the limit to 1 second on every connection the job opens and slows the pull, the sponsor pass and the scorer past it. On the old code both runs fail exactly as on Neon; on the new code both succeed. The same review found the API's planned host blocks the database's port, which no local test could show.
