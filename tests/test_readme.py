@@ -40,23 +40,49 @@ def test_every_number_in_the_readme_is_in_the_results_or_the_model_card() -> Non
 
 def test_a_changed_or_shortened_number_is_caught() -> None:
     text = _text()
-    assert "0.7303 (0.7191 to 0.7414)" in text
-    assert _missing(text.replace("0.7303 (0.7191", "0.7313 (0.7191")) == ["0.7313"]
-    assert _missing(text.replace("(3.0643 to", "(3.064 to")) == ["3.064"]
+    assert "0.0300 (0.0289 to 0.0313)" in text
+    assert _missing(text.replace("0.0300 (0.0289", "0.0316 (0.0289")) == ["0.0316"]
+    assert "(-0.0098 to +0.0075)" in text
+    assert _missing(text.replace("(-0.0098 to", "(-0.0099 to")) == ["0.0099"]
 
 
-def test_the_headline_results_are_the_registered_ones() -> None:
+def _rows(name: str) -> list[list[str]]:
+    text = (REPO_ROOT / "docs" / name).read_text(encoding="utf-8")
+    return [[c.strip(" *") for c in line.strip().strip("|").split("|")]
+            for line in text.splitlines() if line.startswith("| ")]  # fmt: skip
+
+
+def test_the_headline_table_is_the_champions_row_of_the_results() -> None:
+    """The README's table, rounded for reading, against the M4 rows of the model table of
+    docs/results.md, which prints AUC to three decimals and lift to two."""
+    readme = {r[0]: r[1:] for r in _rows("../README.md") if len(r) == 3}
+    m4 = {r[1]: r for r in _rows("results.md") if len(r) == 9 and r[0] == "M4"}
+    for column, origin in ((0, "2018"), (1, "2019")):
+        _, _, _, auc_12, auc_24, brier_12, lift_12, slope_12, slope_24 = m4[origin]
+        assert readme["AUC, 12 months (primary)"][column] == auc_12
+        assert readme["AUC, 24 months"][column] == auc_24
+        assert readme["Brier score, 12 months"][column] == brier_12
+        assert readme["Lift at 10%, 12 months"][column] == lift_12
+        assert readme["Calibration slope, 12 and 24 months"][column] == (
+            f"{slope_12} and {slope_24}"
+        )
+
+
+def test_the_stated_hypothesis_results_are_the_registered_ones() -> None:
     text = _text()
-    results = (REPO_ROOT / "docs" / "results.md").read_text(encoding="utf-8")
-    rows = {line.split("|")[1].strip(" *"): line for line in results.splitlines()
-            if line.startswith("| ")}  # fmt: skip
-    for name in ("auc_12_2018", "auc_12_2019", "auc_24_2018", "auc_24_2019", "brier_12_2018",
-                 "brier_12_2019", "lift_12_2018", "lift_12_2019", "h2_slope_12", "h5_difference",
-                 "h1_delta_auc_12", "h3_difference_12"):  # fmt: skip
-        observed = rows[name].split("|")[5].strip()
-        assert observed in text, (name, observed)
-    for name in ("h4_slope_12_2018", "h4_slope_24_2018", "h4_slope_12_2019", "h4_slope_24_2019"):
-        assert rows[name].split("|")[5].strip() in text, name
+    observed = {r[0]: r[4] for r in _rows("results.md") if len(r) == 6}
+    for name in ("h2_slope_12", "h5_difference", "h1_delta_auc_12", "h3_difference_12"):
+        assert observed[name] in text, (name, observed[name])
+
+
+def test_h1_states_both_horizons_with_their_registered_numbers() -> None:
+    text = _text()
+    h1 = text.split("**H1, falsified.**")[1].split("\n")[0]
+    rows = {r[0]: r[4] for r in _rows("results.md") if len(r) == 6}
+    assert rows["h1_delta_auc_12"] == "-0.0027 (-0.0166 to +0.0114)"
+    assert rows["h1_delta_auc_24"] == "-0.0013 (-0.0098 to +0.0075)"
+    assert f"The 12-month tie held: M4 minus M1 was {rows['h1_delta_auc_12']}" in h1
+    assert f"The 24-month lead did not: {rows['h1_delta_auc_24']}" in h1
 
 
 def test_the_falsified_hypotheses_are_stated_as_falsified() -> None:
