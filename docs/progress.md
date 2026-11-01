@@ -2522,9 +2522,9 @@ Status: **the parts that need neither `data/` nor Neon are built and tested in a
 | The seed: live state from a full version history as of a date (the core of the bootstrap) | `live/seed.py` | Parity C below |
 | Live features: the population, the open count and the inputs as of d, through the shared SELECT | `live/features.py` | **Parity C, layer 1:** live equals offline on the same feed, on every served feature and row, at every day after a posting day of a 300-trial synthetic registry (runs on each posting day and the day after), at spread dates with most runs missed, and around a rename's link day. A mutation that applies sponsor events one day late fails the last test; one that counts two versions for one fails the first |
 | The export adapter: compact rows back into what the offline code reads | `live/export.py` | The offline feature code on exported rows equals it on the original canonical rows, at every landmark of a 150-trial registry |
-| The API v2 delta client: the date from `dataTimestamp`, the `RANGE[since,d]` filter, the live `fields`, paging to the last token, failure on zero records or a short count, quarantine by payload hash with the failed checks only | `live/pull.py` | Two recorded pages and `/version` (scrubbed, in `tests/live/fixtures/`); seven changed API shapes quarantine with the check and never the value; a renamed optional field reads as NULL, which the gate catches |
-| Run control: the weekend rule, the watermark, the NULL gate, the overlap check, the full-run rule, the scope | `live/runs.py` | Through the daily tests |
-| The store and the daily job: three transactions (ingest, the sponsor pass, publication), the lease, failures recorded as stage, type and SQLSTATE only, the month's score file, VACUUM at the end | `live/store.py`, `live/daily.py`, `scoring/serving.py` (a scope, `run_id` and a date for `publish`) | On Postgres: a run publishes; the second cron is a no-op; a forced rerun changes no table; the crash matrix (fail after each committed stage, rerun) equals an uninterrupted run; quarantine ends the run in failure after publishing; the lease and a stale lease; no bootstrap refuses; a weekend does nothing; records that differ only in fields no feature reads change no table (ADR 0042, condition 4) |
+| The API v2 delta client: the date from `dataTimestamp`, the `RANGE[since,d]` filter, the live `fields`, paging to the last token, failure on zero records or a short count, quarantine by payload hash with the failed checks only | `live/pull.py` | Two recorded pages and `/version` (scrubbed, in `tests/live/fixtures/`); seven changed API shapes quarantine with the check and never the value; a renamed optional field reads as NULL. As first written this cell also said the gate catches it, which no test showed (review finding 3); tests of the gate were added after the review |
+| Run control: the weekend rule, the watermark, the NULL gate, the overlap check, the full-run rule, the scope | `live/runs.py` | As first written: "through the daily tests", which was not true of the gate, the overlap check or a model change in the scope (review findings 3 and 5). Unit and daily-job tests of each were added after the review |
+| The store and the daily job: three transactions (ingest, the sponsor pass, publication), the lease, failures recorded as stage, type and SQLSTATE only, the month's score file, VACUUM at the end | `live/store.py`, `live/daily.py`, `scoring/serving.py` (a scope, `run_id` and a date for `publish`) | On Postgres: a run publishes; the second cron is a no-op; a forced rerun changes no live or serving table (it adds its own row to `monitoring.pipeline_runs` and moves the sponsor file's `last_run_id`, which the comparison leaves out; corrected after the review, finding 11); the crash matrix (fail after each committed stage, rerun) equals an uninterrupted run; quarantine ends the run in failure after publishing; the lease and a stale lease; no bootstrap refuses; a weekend does nothing; records that differ only in fields no feature reads change no table (ADR 0042, condition 4) |
 | The retention alerts: recorded at 600 MB, the run ends non-zero at 700 so the issue opens; nothing is deleted by the job | `live/daily.py` | One test per threshold |
 | `daily.yml`: the Section 12 cron and a second one 3 hours later, one run at a time, killed at 90 minutes, a warning past 60, and a separate notify job (on failure or cancel, main only, `issues: write` only) that reuses one open issue and carries the run link and the error class only | `.github/workflows/daily.yml` | `tests/test_workflows.py` |
 | The dispatch timing job of rule 3: the champion's predictions and drivers on rows generated from the feature types, `lscpu`, `/version` and one page from the runner | `.github/workflows/timing.yml`, `live/timing.py`, `live/registry.py` | Generated rows go through the real prediction and driver pass on a small fitted M4; the API check reports counts only |
@@ -2578,7 +2578,7 @@ About 5,850 lines of code and tests were added (366 removed) in 9 commits after 
 8. **What a daily run reads:** the population through SQL, wide rows only for the scope, the sponsor file whole. Not measured against Part 3's transfer estimate.
 9. **The alarm at 60 minutes** is a warning annotation at the end of the job; the 90-minute kill is the workflow's timeout.
 10. **The retention alert at 700 MB** ends the run with exit code 3 after it succeeded, so the issue opens; 600 MB is recorded only.
-11. **Recording the fixtures** took six requests to API v2 from the VM (two checks, `/version`, two pages, all under the rate limit). The pages were trimmed and scrubbed before they were written (organization names only, no email, no personal-data key).
+11. **Recording the fixtures** took five requests to API v2 from the VM (two checks, then `/version` and two pages, all under the rate limit; the report first said six, corrected after the review, finding 11). The pages were trimmed and scrubbed before they were written (organization names only, no email, no personal-data key).
 12. **The scoring split** for ADR 0040 moved Step 13 code into four new modules; every old name is re-exported, the tests pass unchanged.
 13. **The stop-reason table** of Part 3's sizing is not in migration 0004: decision 10 defers new labels to Step 15, so its table comes with them.
 
@@ -2603,6 +2603,66 @@ uv run pytest -q -m "slow or not slow"
 ```
 
 `alembic upgrade head` converts the Step 13 rows in local Postgres to the compact form; `alembic downgrade 0003` converts them back.
+
+### The review of the cloud build and its fixes (2026-11-01)
+
+After PR aakrisht-26/trialpulse#3 was merged (merge commit `e542a52`, CI on main green), Aakrisht asked for an independent review of it: every claim checked against the code and the test output, and deliberate faults put into a scratch copy outside the repository to see whether the tests catch them. The review changed nothing. Aakrisht then approved fixing all 11 findings on branch `step-14-fixes`.
+
+**The faults.** 27 faults went into the scratch copy. 19 were caught and 8 got through. The review's report said 18 and 9, a miscount found when the fixes began. The 8 were rerun against the new tests, again in a scratch copy of the branch outside the repository:
+
+| Fault | Before the fixes | After |
+| --- | --- | --- |
+| M07: the pull stops removing personal-data keys | Got through | Caught |
+| M08: the NULL gate never fires | Got through | Caught |
+| M09: the overlap check never fails | Got through | Caught |
+| M10: the scope ignores a new model | Got through | Caught |
+| M11: a quarantine reason carries the sponsor's name | Got through | Caught |
+| M17: records posted after the run's date are not deferred | Got through | Caught |
+| M18: the migration head is never checked | Got through | Caught |
+| M22: a same-day rerun rewrites history rows for the new run id | Got through | Caught |
+
+Each fix was also undone on its own to check that its test fails: the database error re-raised with its message (finding 1), conversion without the per-record guard (2), quarantined trials not loaded for the gate (the bug below), booleans not strict (7) and the spike's download unguarded (10) were all caught. Undoing the CI rule of finding 4 at first made its test skip instead of fail; the test was changed to check the outcome's type, and it then failed as it should.
+
+**The findings and what was done**
+
+| # | Severity | Finding | Evidence | Fix |
+| --- | --- | --- | --- | --- |
+| 1 | Medium-high | A database error printed the failing row to the log | A CheckViolation in publication left `cli.run` with `DETAIL: Failing row contains (NCT…, …)` in its message | Every exception leaving the daily job becomes a `JobFailedError`: the stage, the type, the SQLSTATE, the message only of the job's own exceptions (fields and counts) and file:line locations; `cli.run` prints it as one line. The failure issue gets the original class. A test sends the same CheckViolation through `daily.main` and `cli.run` and checks that no trial id, hash, date or model reaches stdout, stderr, the run ledger or the workflow output |
+| 2 | Medium | One malformed record stopped the whole run | An enrollment count of "about 40" raised `ValueError` for the batch | A record whose conversion fails is quarantined with the field's name (or the exception's type) and the run goes on; quarantined records count toward the 1% gate as having lost every field their stored row had (ADR 0045, refined). Tested in `pull.convert` and through the daily job |
+| 3 | Medium | The gate and the overlap check were never exercised, though the report said so | Faults M08 and M09 got through | Unit tests (the 1% share, the boundary, quarantined records) and daily-job tests: a field turned NULL, quarantined refetches and a short overlap each stop the run before any write. **The new tests found a bug:** stored rows were loaded only for converted records, so refetches that were all quarantined never reached the gate, and the overlap check counted them as not returned. Both now see them |
+| 4 | Medium-low | The database tests skipped silently without Postgres | 19 skips and exit code 0 with the server down | The scratch-database fixture moves into `tests/conftest.py`; where `TRIALPULSE_REQUIRE_POSTGRES` is set, which only `ci.yml` does, an unreachable server fails the test. Tested, and held in `ci.yml` by a test |
+| 5 | Medium-low | A model change was untested in the daily scope | Fault M10 got through | A daily (not full) run with a new model rescores every served trial with the history reason `new_model`. The job also refuses scores whose model version is not the scoped model's |
+| 6 | Low-medium | The pull's personal-data scrub and the reasons' "no value" rule were barely tested | Faults M07 and M11 got through | A page with contacts, officials and an investigator loses them all in the pull; no free-text string of a quarantined record appears in its reason, and a reason is only `field: check` items |
+| 7 | Low | The text "false" became `True` | `healthyVolunteers: "false"` was stored as true | API v2 booleans accept only JSON true or false and counts only JSON integers; any other type fails the record's contract (`FieldTypeError`) |
+| 8 | Low | Two ADR 0038 layer 1 checks were missing | No whitelist test of the live state; no population invariant | Every live column declares its source fields and a test holds them to the feature whitelist; after every daily run in the tests, the served rows plus the not-scored rows are the population, each trial once |
+| 9 | Low | Three paths were untested | Faults M17, M18 and M22 got through | Tests: a record posted after the run's date waits and the next run applies it; a database at another revision is refused; a same-day rerun with the same scores keeps the history rows and their run |
+| 10 | Low | The spike's download had no runner guard | `feasibility/dataset.py` called `snapshot_download` unguarded | It refuses under GitHub Actions before importing Hugging Face, tested |
+| 11 | Low | Two statements of this section were wrong | Five requests, not six; a forced rerun adds a ledger row | Both corrected above, with the two overclaims of finding 3 |
+
+**Checks** (this VM, Python 3.12, Postgres 16, run the CI way with `TRIALPULSE_REQUIRE_POSTGRES=1`): `ruff check .` clean, `ruff format --check .` clean (278 files), `mypy src` clean (111 files), `pytest -q -m "slow or not slow"`: **1,169 passed, 11 skipped**. The 11 are those of the cloud build less the tag test, which runs once the tags are fetched: 10 need `data/` and one needs Windows.
+
+**Decisions made without asking (flagged)**
+
+1. **Every exception, not only database errors,** leaves the daily job as a one-line `JobFailedError` without its message, unless it is one of the job's own (gate, pull, lease, schema, refusals), whose messages name fields and counts only. A bug's message could hold a value too; the file:line locations keep it debuggable.
+2. **How quarantined records count toward the gate:** a quarantined record that matches a stored row (same trial and post date) counts as having lost every field that row had set; records of new trials do not count. This is how "quarantined records count toward the 1% gate" was read.
+3. **The job refuses scores of another model version** than the scope was computed for (found while writing the model-change test, whose stand-in scorer named a fixed version).
+4. **A quarantined refetch counts as returned** in the overlap check, so one bad record is not counted twice.
+
+**Files touched:** `src/trialpulse/live/daily.py`, `live/pull.py`, `live/runs.py`, `live/contract.py`, `contracts/versions.py`, `feasibility/dataset.py`, `.github/workflows/ci.yml`, `tests/conftest.py`, `tests/test_workflows.py`, `tests/live/test_daily.py`, `tests/live/test_pull.py`, `tests/live/test_runs.py` (new), `tests/live/test_contract.py`, `tests/scoring/test_publish.py`, `tests/feasibility/test_dataset.py`, `docs/adr/0045-run-control-backups-and-retention.md`, `docs/progress.md`, `docs/interview_notes.md`.
+
+**Verify (PowerShell, on main after the merge)**
+
+```powershell
+git fetch origin
+git checkout main
+git pull
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+docker compose up -d
+uv run pytest -q -m "slow or not slow"
+```
 
 ### The options (2026-11-01, before the decisions)
 

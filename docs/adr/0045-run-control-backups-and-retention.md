@@ -13,7 +13,9 @@
    - **The date d** is the date of API v2's `dataTimestamp`, read once. Records posted after d wait. A Saturday or Sunday run does nothing.
    - **The pull** starts at the last stored watermark minus 3 days. The watermark is the earlier of the latest stored post date and d. A pull fails on zero records, on a count that differs from `totalCount`, and when more than 5 stored overlap rows come back neither with their date nor a later one (skipped on the first run).
    - **The gate before any write:** among overlap records with the same trial and post date as a stored row, the run stops if any one field turned NULL in more than 1% of them.
+     Refined after the review of 2026-11-01 (finding 2, approved by Aakrisht): a record that cannot be converted is quarantined and the run goes on, and a quarantined record that matches a stored row counts toward the gate as having lost every field that row had.
    - **A record** that fails the contract is quarantined by its payload hash (unique), and the trial keeps its old state and score; the run then ends in failure after publishing. A NULL status, trial id or post date is refused the same way.
+     A field of the wrong JSON type fails the contract: booleans accept only JSON true or false and counts only JSON integers (review finding 7).
    - **Scope** is computed, not remembered: the trials with no row in `serving.trial_scores_latest` or `serving.trials_not_scored`, or with another hash, uncapped landmark index or model, plus rows outside the population.
    - **Three stages, each its own transaction:** ingest, the sponsor pass, publication. Publication refuses when the pass is behind d minus 1.
    - **A full run** is due when the last succeeded full run is 7 or more days old.
