@@ -278,9 +278,9 @@ def test_a_flagged_trial_shows_its_score_badge_note_drivers_and_timeline(
     assert spec["data"][3]["x"] == ["2025-01-10", "2026-03-02"]
     assert spec["data"][3]["text"] == ["Changed: status", "Changed: dates, enrollment"]
     shade = spec["layout"]["shapes"][0]
-    assert shade["x1"] == min(spec["data"][0]["x"])  # the shaded span ends at go-live
+    assert shade["x1"] == min(spec["data"][0]["x"])  # the shaded span ends at the first point
     assert shade["x0"] < "2025-01-10"
-    assert "The risk line starts at go-live" in shown
+    assert "The first point is the trial's score at the data cutoff" in shown
 
 
 def test_an_unflagged_trial_has_no_badge(stub_api: StubApi) -> None:

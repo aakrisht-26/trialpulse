@@ -819,3 +819,49 @@ def test_a_rebuild_waits_for_the_lease(dsn: str) -> None:
     with pytest.raises(store.LeaseError):
         _rebuild(dsn)
     assert _digest(dsn) == before
+
+
+# Review faults R08 and R09 ------------------------------------------------------------------
+
+
+@respx.mock
+def test_a_trial_first_posted_before_2008_is_never_served(dsn: str) -> None:
+    """Review fault R08: the population's first-post bound (Section 6) was never tested on
+    the live path. The live state keeps an open trial first posted in 2007 (it counts among
+    the open trials), but no serving table may hold it."""
+    _bootstrap(dsn)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        rows = store.population_rows(cur, DAY, RULES.open_statuses, RULES.study_type,
+                                     RULES.min_first_post_date)  # fmt: skip
+        old = rows[0][0]
+        before = store.open_count(cur, DAY, RULES.open_statuses, RULES.study_type)
+        cur.execute("UPDATE live.trial_state SET study_first_post_date = '2007-06-01' "
+                    "WHERE nct_id = %s", (old,))  # fmt: skip
+        assert store.open_count(cur, DAY, RULES.open_statuses, RULES.study_type) == before
+        con.commit()
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        for table in ("serving.trial_scores_latest", "serving.trial_score_history",
+                      "serving.trials_not_scored"):  # fmt: skip
+            held = con.execute(f"SELECT count(*) FROM {table} WHERE nct_id = %s", (old,))
+            assert held.fetchone() == (0,), table
+        served = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
+    assert served > 0
+
+
+@respx.mock
+def test_the_data_date_moves_only_after_publication(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fault R09: the API's data-as-of date must never name a day whose scores were
+    not published. Publication fails here, and the date stays where it was."""
+    _bootstrap(dsn)
+
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(daily.serving, "publish", broken)
+    with pytest.raises(daily.JobFailedError, match="publish: RuntimeError"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con:
+        assert con.execute("SELECT count(*) FROM serving.data_status").fetchone() == (0,)

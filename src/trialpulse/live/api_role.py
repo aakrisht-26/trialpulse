@@ -4,21 +4,45 @@
 
 Creates (or updates the password of) a role that may connect and read the `serving` schema,
 and nothing else: no other schema, no write, and every transaction read-only. Roles made in
-Neon's console can read and write all data, which is why this one is made by SQL. The
-password is asked for at the prompt and never printed; `API_DATABASE_URL` is then Neon's
-pooled URL for this role.
+Neon's console can read and write all data, which is why this one is made by SQL.
+
+The command makes the password itself: 32 random bytes from `secrets` (256 bits, far above
+Neon's minimum of 60 bits for a role made by SQL), never typed and never stored by the
+command. It prints `API_DATABASE_URL` once, with Neon's pooled host for `--target neon`, to
+paste into `.env` and the Hugging Face Space's secrets; every run makes a new password, so
+running it again rotates the password and the old URL stops working.
 """
 
 import argparse
-import getpass
+import secrets
 from collections.abc import Sequence
 from typing import Any
 
-from psycopg import sql
+from psycopg import conninfo, sql
 
-from trialpulse.cli import RefusedError, run
+from trialpulse.cli import run
 
 ROLE = "trialpulse_api"
+PASSWORD_BYTES = 32  # 256 bits of entropy (at least 128 asked, ADR 0064)
+
+
+def new_password() -> str:
+    """A password of PASSWORD_BYTES random bytes, URL-safe, so it needs no quoting."""
+    return secrets.token_urlsafe(PASSWORD_BYTES)
+
+
+def api_url(direct: str, password: str, role: str = ROLE) -> str:
+    """The API's URL for `role`: the database of `direct`, through Neon's pooled host (the
+    first label of a Neon host gains `-pooler`) and with TLS required; any other host is
+    kept as it is (the local Postgres)."""
+    parts = conninfo.conninfo_to_dict(direct)
+    host = str(parts.get("host") or "localhost")
+    if host.endswith(".neon.tech") and "-pooler" not in host:
+        first, rest = host.split(".", 1)
+        host = f"{first}-pooler.{rest}"
+    port = f":{parts['port']}" if parts.get("port") else ""
+    query = "?sslmode=require" if host.endswith(".neon.tech") else ""
+    return f"postgresql://{role}:{password}@{host}{port}/{parts.get('dbname', '')}{query}"
 
 
 def grant_read_only(cur: Any, password: str, role: str = ROLE) -> None:
@@ -51,13 +75,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from trialpulse.live.daily import _dsn
 
-    password = getpass.getpass(f"password for {ROLE}: ")
-    if len(password) < 16:
-        raise RefusedError("choose a password of at least 16 characters")
-    with psycopg.connect(_dsn(args.target), connect_timeout=10) as con, con.cursor() as cur:
+    direct = _dsn(args.target)
+    password = new_password()
+    with psycopg.connect(direct, connect_timeout=10) as con, con.cursor() as cur:
         grant_read_only(cur, password)
         con.commit()
-    print(f"{ROLE} may read the serving schema only; set API_DATABASE_URL to its pooled URL")
+    print(f"{ROLE} may read the serving schema only. Its new password is in this URL, shown "
+          "once: set it as API_DATABASE_URL in .env and in the Space's secrets, and never "
+          "commit it. Running this again makes a new password.")  # fmt: skip
+    print(api_url(direct, password))
     return 0
 
 

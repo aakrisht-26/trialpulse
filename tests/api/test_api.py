@@ -133,7 +133,7 @@ def test_the_timeline_holds_points_and_amendment_markers(make_client: Make) -> N
         {"post_date": "2025-01-10", "changed": ["status"]},
         {"post_date": "2026-03-02", "changed": ["dates", "enrollment"]},
     ]
-    assert "go-live" in body["note"]
+    assert "the first point is the trial's score at the data cutoff" in body["note"].lower()
 
 
 def test_the_reason_summary_holds_counts_and_the_stops_after_the_labels(make_client: Make) -> None:

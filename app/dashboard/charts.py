@@ -29,7 +29,8 @@ def _date(value: str) -> dt.date:
 def timeline(points: list[dict[str, Any]], markers: list[dict[str, Any]],
              scored_now: bool) -> go.Figure:  # fmt: skip
     """Every served point at 12 and 24 months, the amendment markers on the same date axis,
-    and the span before the first point shaded: the risk line starts at go-live (ADR 0043).
+    and the span before the first point shaded: the first point is the trial's score at the
+    data cutoff, or its first live score for a trial registered later (ADR 0043).
     Flagged points have their own marker (ADR 0055)."""
     fig = go.Figure()
     days = [_date(p["as_of_date"]) for p in points]

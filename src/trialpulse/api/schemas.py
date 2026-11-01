@@ -92,9 +92,11 @@ class Timeline(Envelope):
     points: list[TimelinePoint]
     markers: list[Marker]
     note: str = (
-        "The risk line starts at go-live: points are written when a score moves by 0.01 or more, "
-        "the record changes, a landmark passes or the model changes. Markers before go-live "
-        "show amendments only (ADR 0043)."
+        "The first point is the trial's score at the data cutoff, regenerated when the live "
+        "system started (or its first live score, for a trial registered later); there are no "
+        "scores before it. After it, a point is written when a score moves by 0.01 or more, "
+        "the record changes, a landmark passes or the model changes. Markers before the first "
+        "point show amendments only (ADR 0043)."
     )
 
 
