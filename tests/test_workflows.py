@@ -113,9 +113,14 @@ def test_a_missing_postgres_skips_locally_and_fails_where_it_is_required(
     spec.loader.exec_module(root)
     REQUIRE_POSTGRES, no_postgres = root.REQUIRE_POSTGRES, root.no_postgres  # noqa: N806
 
+    # Any outcome is caught and its type checked, so a helper that skipped where it must
+    # fail could not turn this test itself into a skip.
     monkeypatch.delenv(REQUIRE_POSTGRES, raising=False)
-    with pytest.raises(pytest.skip.Exception):
+    with pytest.raises(BaseException) as local:  # noqa: PT011 (the type is checked below)
         no_postgres("no Postgres answers")
+    assert local.type is pytest.skip.Exception
     monkeypatch.setenv(REQUIRE_POSTGRES, "1")
-    with pytest.raises(pytest.fail.Exception, match="TRIALPULSE_REQUIRE_POSTGRES is set"):
+    with pytest.raises(BaseException) as ci:  # noqa: PT011
         no_postgres("no Postgres answers")
+    assert ci.type is pytest.fail.Exception
+    assert "TRIALPULSE_REQUIRE_POSTGRES is set" in str(ci.value)
