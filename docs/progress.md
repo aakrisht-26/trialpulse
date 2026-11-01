@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 16 (Dashboard)**, started on 2026-11-01 with Aakrisht's approval: built and tested in the cloud against the API and a seeded database (see "Step 16"); the deployment to Streamlit Community Cloud and the screenshots against the deployed API are left for the laptop. **Step 15** was approved on 2026-11-01; its deployment and Neon parts remain for the laptop. **Step 14**'s cloud parts are merged; its laptop and Neon parts remain (see "Step 14", "Left for the laptop"). Step 13 was approved on 2026-10-31.
+Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -92,9 +92,9 @@ Current step: **Step 16 (Dashboard)**, started on 2026-11-01 with Aakrisht's app
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045); the cloud part built on `step-14-cloud`, waiting for review; the laptop and Neon parts not started |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; the deployment and Neon parts are left for the laptop |
-| 16 | Dashboard | Decided 2026-11-01 (ADRs 0052 to 0057); built and tested in the cloud on `step-16-cloud`, waiting for review; the deployment and the screenshots against the deployed API are left for the laptop |
+| 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
-| 18 | Documentation and polish | Not started |
+| 18 | Documentation and polish | README written in the cloud on `readme-cloud` (2026-11-01), waiting for review; the live links, the demo GIF, the CHANGELOG and the fresh-clone check on Windows wait for the deployments |
 
 ## Guidance for later steps (recorded 2026-09-30)
 
@@ -2499,6 +2499,40 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 18 (README only)
+
+Date: 2026-11-01. Status: **written in the cloud session on branch `readme-cloud`; waiting for review.** Aakrisht approved only the README part of Step 18; the live links, the demo GIF, the CHANGELOG and the fresh-clone quickstart check on Windows wait for the deployments.
+
+**What was built.**
+- `README.md` (under 160 lines), with:
+  - the purpose, users and research-demo notice;
+  - the champion's registered results with their 95% intervals, copied from `docs/results.md`, and H1, H3 and H4 stated as falsified;
+  - one paragraph each on point-in-time reconstruction, landmarks and competing risks, the locked test and the live loop;
+  - a Mermaid architecture diagram;
+  - a plain status table with no live link;
+  - a Windows PowerShell quickstart that says which commands need the gated dataset and how to get access;
+  - limitations, license, the ADR 0008 attribution and the dataset citation.
+- `tests/test_readme.py` (13 tests):
+  - every decimal and every number with a thousands separator outside code blocks is a number of `docs/results.md` or the model card, matched whole, as `tests/test_cards.py` checks the cards;
+  - the headline values equal the registered rows;
+  - H1, H3 and H4 are stated as falsified;
+  - the linked files exist;
+  - the notice, attribution and citation are present;
+  - no em or en dash, no "will fail", no listed hype word, and no deployment URL.
+
+**Decisions made without asking.** The README lists the quickstart's data commands up to the M0 run on the development origins and leaves later steps to this file. Cohort counts are left out of the README because they are in the data card, not in the two documents the number test reads. The Mermaid diagram is not rendered in this session, so its look is checked on GitHub.
+
+**Verify (PowerShell).**
+
+```powershell
+git fetch origin
+git checkout main
+git pull
+uv run pytest tests/test_readme.py -q
+```
+
+Then open README.md on GitHub and check that the diagram renders.
 
 ## Step 16: Dashboard
 
