@@ -1,0 +1,56 @@
+{
+  "about": "What the served scores rest on (ADR 0048). Registered results are those of the locked test of Step 11 (docs/results.md); the served model itself has no reported metric.",
+  "served_model": {
+    "name": "trialpulse-m4",
+    "alias": "champion",
+    "description": "M4 with the tuned settings, fitted on all available data (the final cohort, with the origin set to the day after the data cutoff). It is a new fit: no metric of it is reported, and every number below comes from the per-origin models of Step 11.",
+    "training_data_cutoff": "2026-09-25"
+  },
+  "registered_results": {
+    "source": "docs/results.md",
+    "intervals": "95% cluster-bootstrap intervals, resampling trials",
+    "origins": {
+      "2018": {
+        "auc_12": {"value": 0.7303, "low": 0.7191, "high": 0.7414},
+        "auc_24": {"value": 0.7099, "low": 0.7016, "high": 0.7180},
+        "brier_12": {"value": 0.0300, "low": 0.0289, "high": 0.0313},
+        "brier_24": {"value": 0.0567, "low": 0.0551, "high": 0.0584},
+        "lift_12": {"value": 3.2335, "low": 3.0643, "high": 3.4466},
+        "lift_24": {"value": 2.6871, "low": 2.5532, "high": 2.8138},
+        "calibration_slope_12": {"value": 0.8554},
+        "calibration_slope_24": {"value": 0.7818}
+      },
+      "2019": {
+        "auc_12": {"value": 0.7231, "low": 0.7122, "high": 0.7340},
+        "auc_24": {"value": 0.6956, "low": 0.6872, "high": 0.7041},
+        "brier_12": {"value": 0.0297, "low": 0.0285, "high": 0.0309},
+        "brier_24": {"value": 0.0583, "low": 0.0566, "high": 0.0600},
+        "lift_12": {"value": 3.0637, "low": 2.8888, "high": 3.2537},
+        "lift_24": {"value": 2.5588, "low": 2.4448, "high": 2.6911},
+        "calibration_slope_12": {"value": 0.8030},
+        "calibration_slope_24": {"value": 0.7325}
+      }
+    },
+    "covid_stress_test": {
+      "description": "AUC at 12 months at the 2020 origin minus the mean of 2018 and 2019",
+      "value": -0.0334, "low": -0.0464, "high": -0.0198
+    }
+  },
+  "falsified_hypotheses": [
+    {"id": "H1", "statement": "M4 beats M1 at landmark 0", "result": "M4 minus M1, AUC at landmark 0: -0.0027 (-0.0166 to +0.0114) at 12 months and -0.0013 (-0.0098 to +0.0075) at 24 months"},
+    {"id": "H3", "statement": "Operational stops are ranked better than scientific ones", "result": "Operational minus scientific AUC at 12 months: +0.0229 (-0.0025 to +0.0494)"},
+    {"id": "H4", "statement": "Calibration slopes land in [0.8, 1.2]", "result": "Slopes 0.855, 0.803, 0.782, 0.732 at 12 and 24 months, 2018 and 2019"}
+  ],
+  "known_limitations": [
+    "The 24-month calibration is below the registered range (slopes 0.7818 and 0.7325): predicted risks are spread too widely (ADR 0032).",
+    "Registry metadata cannot anticipate safety and efficacy stops, which are scientific outcomes.",
+    "Scores describe elevated early-stop risk of a trial portfolio; they are not about whether a treatment works and are not medical advice."
+  ],
+  "served_scope": {
+    "between_landmarks": "Every feature is computed on the scoring date, with the two time features held at the last landmark passed (ADR 0034).",
+    "flag": "outside the validated range",
+    "flagged_trials": "Trials 42 to 119 months after registration are scored as at landmark 6 and flagged. Their development AUC at 12 months was 0.7336 (42 to 59 months) and 0.7271 (60 to 119 months), against 0.7161 at landmark 6.",
+    "flag_note": "Flagged scores ran above the observed risk in development (for example 4.2% against 2.8% for 60 to 119 months at the 2017 origin), so they may overstate the risk. Flagged scores never enter a headline number.",
+    "not_scored": "Trials 120 months or more after registration, trials of an age band that failed its check, and trials with a visible status reversal get a reason code and no score."
+  }
+}

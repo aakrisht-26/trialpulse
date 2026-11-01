@@ -91,15 +91,23 @@ TABLES: dict[str, tuple[str, tuple[str, ...]]] = {
     "serving.trials_not_scored": ("nct_id", ("recorded_at",)),
     "serving.amendment_markers": ("nct_id", ("updated_at",)),
     "monitoring.score_files": ("month", ("written_at", "run_id")),
+    "serving.trial_display": ("nct_id", ("updated_at",)),
+    "serving.sponsors": ("sponsor_id", ("updated_at",)),
+    "serving.data_status": ("status_id", ("updated_at",)),
 }  # fmt: skip
 
 
-def _digest(dsn: str) -> dict[str, str]:
+DISPLAY = ("serving.trial_display", "serving.sponsors")
+
+
+def _digest(dsn: str, skip: tuple[str, ...] = ()) -> dict[str, str]:
     """Every live and serving table's content, without timestamps and run ids, and the
     sponsor file without the id of the run that wrote it."""
     out = {}
     with psycopg.connect(dsn) as con:
         for table, (order, dropped) in TABLES.items():
+            if table in skip:
+                continue
             minus = "".join(f" - '{c}'" for c in dropped)
             rows = con.execute(f"SELECT to_jsonb(t){minus} FROM {table} t ORDER BY {order}")
             digest = hashlib.sha256()
@@ -134,6 +142,19 @@ def test_a_daily_run_publishes_and_a_second_run_changes_nothing(dsn: str) -> Non
     assert kinds == [("full", "succeeded", DAY)]
     assert through == DAY - dt.timedelta(days=1)
     assert files == 1
+    with psycopg.connect(dsn) as con:  # the API's rows (ADRs 0049 and 0051)
+        live = {r[0] for r in con.execute("SELECT nct_id FROM live.trial_state")}
+        shown = con.execute("SELECT nct_id, brief_title FROM serving.trial_display").fetchall()
+        names = [r[0] for r in con.execute("SELECT display_name FROM serving.sponsors")]
+        status = con.execute("SELECT data_as_of, model_version FROM serving.data_status").fetchone()
+    pages = ("delta_page_1.json", "delta_page_2.json")
+    pulled = {s["protocolSection"]["identificationModule"]["nctId"]
+              for p in pages for s in _load(p)["studies"]}  # fmt: skip
+    assert {n for n, _ in shown} == live & pulled
+    assert all(title for _, title in shown)
+    assert "Example Sponsor Organization" not in names  # three plain words of class OTHER
+    assert names
+    assert status == (DAY, "stand-in/1")
     before = _digest(dsn)
     # The second cron: the day already succeeded, so nothing runs.
     assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "noop"
@@ -251,7 +272,7 @@ def test_a_change_no_feature_reads_makes_no_version_history_row_or_record_change
     every live and serving table as it was."""
     _bootstrap(dsn)
     assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
-    before = _digest(dsn)
+    before = _digest(dsn, skip=DISPLAY)
 
     def edited(name: str) -> Any:
         page = _load(name)
@@ -274,7 +295,11 @@ def test_a_change_no_feature_reads_makes_no_version_history_row_or_record_change
     api = ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
     again = daily.run_daily(CFG, dsn, SECRET, api, MODEL, force=True)
     assert again.counts["details"]["actions"] == {"overlap": 8}
-    assert _digest(dsn) == before
+    assert _digest(dsn, skip=DISPLAY) == before  # no version, history row or record change
+    with psycopg.connect(dsn) as con:  # the display text follows the record (ADR 0051)
+        titles = [r[0] for r in con.execute("SELECT brief_title FROM serving.trial_display")]
+    assert titles
+    assert all(t == t.upper() for t in titles)
 
 
 def _too_risky(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
@@ -496,5 +521,5 @@ def test_a_database_not_at_the_migration_head_is_refused(dsn: str) -> None:
     with psycopg.connect(dsn) as con:
         con.execute("UPDATE alembic_version SET version_num = '0003'")
         con.commit()
-    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0004"):
+    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0005"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)

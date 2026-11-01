@@ -54,6 +54,11 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
         "monitoring.promotions",
         "monitoring.score_files",
         "live.sponsor_file",
+        "serving.data_status",
+        "serving.trial_display",
+        "serving.sponsors",
+        "serving.reason_counts",
+        "serving.model_statement",
     }
     for word in ("investigator", "email", "contact", "phone", "affiliation"):
         assert word not in sql.lower()
