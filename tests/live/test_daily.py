@@ -151,7 +151,7 @@ def test_a_run_that_fails_after_a_stage_heals_on_the_rerun(dsn: str, stage: str)
     """The crash matrix: fail after each committed stage, rerun, and the tables equal those
     of an uninterrupted run on another database."""
     _bootstrap(dsn)
-    with pytest.raises(daily.InjectedFailureError):
+    with pytest.raises(daily.JobFailedError, match=f"{stage}: InjectedFailureError: {stage}"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL, fail_after=stage)
     with psycopg.connect(dsn) as con:
         status, error = con.execute(
@@ -215,7 +215,7 @@ def test_one_running_job_at_a_time(dsn: str) -> None:
     with psycopg.connect(dsn) as con, con.cursor() as cur:
         store.start_run(cur, "daily", "daily", DAY, 120)
         con.commit()
-    with pytest.raises(store.LeaseError):
+    with pytest.raises(daily.JobFailedError, match="start: LeaseError: another live job"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
     with psycopg.connect(dsn) as con, con.cursor() as cur:  # a stale lease is released
         cur.execute("UPDATE monitoring.pipeline_runs SET started_at = now() - interval '3 hours'")
@@ -274,3 +274,45 @@ def test_a_change_no_feature_reads_makes_no_version_history_row_or_record_change
     again = daily.run_daily(CFG, dsn, SECRET, api, MODEL, force=True)
     assert again.counts["details"]["actions"] == {"overlap": 8}
     assert _digest(dsn) == before
+
+
+def _too_risky(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    out = _scorer(scored, features, day)
+    out["risk_12m"] = 2.0  # breaks the serving table's check constraint
+    return out
+
+
+@respx.mock
+def test_a_database_error_prints_no_value_of_the_row(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Review finding 1 (ADR 0040): a CheckViolation in publication, whose message repeats the
+    failing row, is reported as one line with the stage, the type and the SQLSTATE; no value
+    of any row reaches stdout, stderr, the run's ledger or the workflow's output."""
+    from trialpulse.cli import run
+
+    _bootstrap(dsn)
+    _api()
+    outputs = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+    monkeypatch.setenv("SPONSOR_ID_KEY", SECRET.decode())
+    risky = daily.Model("stand-in/1", _too_risky, DECISIONS)
+    monkeypatch.setattr(daily, "champion_model", lambda cfg, folder: risky)
+    code = run(daily.main, ["--target", "local"])
+    printed = capsys.readouterr()
+    text = printed.out + printed.err
+    assert code == 1
+    (line,) = [x for x in printed.err.splitlines() if x.strip()]
+    assert line.startswith("failed: publish: CheckViolation 23514 (at ")
+    assert outputs.read_text().strip() == "error_class=CheckViolation"
+    with psycopg.connect(dsn) as con:
+        (error,) = con.execute(
+            "SELECT error FROM monitoring.pipeline_runs WHERE job = 'daily'"
+        ).fetchone()
+        trials = [r[0] for r in con.execute("SELECT nct_id FROM live.trial_state").fetchall()]
+        hashes = [bytes(r[0]).hex()[:12] for r in con.execute(
+            "SELECT feature_hash FROM live.trial_state").fetchall()]  # fmt: skip
+    assert error == "publish: CheckViolation 23514"
+    for leaked in ("Failing row", "DETAIL", "stand-in/1", "2026-10-30", *trials, *hashes):
+        assert leaked not in text, leaked
+        assert leaked not in error, leaked

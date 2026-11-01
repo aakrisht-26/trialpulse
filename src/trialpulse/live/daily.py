@@ -77,6 +77,38 @@ class InjectedFailureError(RuntimeError):
     """Raised by the crash tests after a stage commits."""
 
 
+class JobFailedError(RefusedError):
+    """A failed run, said in one line that holds no value of any row (ADR 0040): the stage,
+    the exception's type, its SQLSTATE for a database error, the message only of the job's
+    own exceptions (which name fields and counts, never values), and where in the code it
+    happened. `cli.run` prints it without a traceback, so a database error's text (whose
+    DETAIL repeats the failing row) never reaches a log."""
+
+    exit_code = 1
+    prefix = "failed"
+
+    def __init__(self, line: str, cause: str) -> None:
+        super().__init__(line)
+        self.cause = cause  # the failing exception's class, for the failure issue
+
+
+def _locations(exc: BaseException, frames: int = 4) -> str:
+    """Where an exception happened: file names and line numbers only, never locals."""
+    import traceback
+
+    stack = traceback.extract_tb(exc.__traceback__)[-frames:]
+    return " <- ".join(f"{Path(f.filename).name}:{f.lineno}" for f in reversed(stack))
+
+
+def failure_line(stage: str, exc: BaseException) -> str:
+    """The one line a failure is reported by (see JobFailedError)."""
+    own = isinstance(exc, runs.GateError | pull.PullError | store.LeaseError | store.SchemaError
+                     | InjectedFailureError)  # fmt: skip
+    detail = f": {exc}" if own else ""
+    state = f" {_sqlstate(exc)}" if _sqlstate(exc) else ""
+    return f"{stage}: {type(exc).__name__}{state}{detail} (at {_locations(exc)})"
+
+
 def _sqlstate(exc: BaseException) -> str:
     return str(getattr(exc, "sqlstate", "") or "")
 
@@ -129,7 +161,10 @@ def run_daily(
     if runs.is_weekend(day):
         return Report("weekend", day)
     rules = CohortRules.from_config(cfg, cutoff=max(day, cfg.dataset.cutoff or day))
-    con = psycopg.connect(dsn, connect_timeout=10)
+    try:
+        con = psycopg.connect(dsn, connect_timeout=10)
+    except psycopg.Error as exc:
+        raise JobFailedError(failure_line("connect", exc), type(exc).__name__) from None
     report = Report("running", day)
     stage = "start"
     timings: dict[str, float] = {}
@@ -233,13 +268,20 @@ def run_daily(
                 report.exit_code = RETENTION_EXIT
             return report
     except BaseException as exc:
-        con.rollback()
-        if report.run_id is not None:
-            with con.cursor() as cur:
-                error = f"{stage}: {type(exc).__name__} {_sqlstate(exc)}".strip()
-                store.finish_run(cur, report.run_id, "failed", report.counts, error)
-                con.commit()
-        raise
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
+        try:
+            con.rollback()
+            if report.run_id is not None:
+                with con.cursor() as cur:
+                    error = f"{stage}: {type(exc).__name__} {_sqlstate(exc)}".strip()
+                    store.finish_run(cur, report.run_id, "failed", report.counts, error)
+                    con.commit()
+        except Exception:
+            pass
+        if isinstance(exc, RefusedError):  # the job's own refusals, written without values
+            raise
+        raise JobFailedError(failure_line(stage, exc), type(exc).__name__) from None
     finally:
         con.close()
         _vacuum(dsn)
@@ -364,7 +406,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_daily(cfg, _dsn(args.target), key.get_secret_value().encode("utf-8"), api,
                            model, force=args.force)  # fmt: skip
     except BaseException as exc:
-        _job_output("error_class", type(exc).__name__)  # for the failure issue, nothing else
+        # The failure issue gets the class of the first cause, nothing else.
+        _job_output("error_class", exc.cause if isinstance(exc, JobFailedError)
+                    else type(exc).__name__)  # fmt: skip
         raise
     minutes = (clock.perf_counter() - started) / 60
     if minutes > cfg.live.alarm_minutes:  # the alarm of ADR 0045; the workflow kills at 90
