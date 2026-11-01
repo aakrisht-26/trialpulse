@@ -759,3 +759,62 @@ def test_the_sql_identity_rule_equals_the_python_one() -> None:
             f"SELECT {has_identity_sql('key', 'individual')} FROM s ORDER BY i"
         ).fetchall()
     assert [row[0] for row in rows] == [expected for _, _, expected in IDENTITY_CASES]
+
+
+# The pass resumed from a saved state (ADR 0037) -------------------------------------------------
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
+def test_the_pass_resumed_from_its_saved_state_gives_the_same_answers(
+    world: World, rules: CohortRules, cfg: ProjectConfig
+) -> None:
+    """The live path stops the pass after a day, saves it, and resumes it on a later run.
+    Stopped and saved at every 40th distinct day (and so between a day's queries and the
+    events of later days), the answers equal those of one pass."""
+    events, n_keys, n_trials, n_queries = _events_of_the_registry(world, rules, cfg)
+    minimum, wait = cfg.features.sponsor_alias_min_trials, cfg.features.sponsor_alias_wait_days
+    expected = sp.track_records(events, n_keys, n_trials, n_queries, minimum, wait)
+    days = np.unique(events.day)
+    stops = set(days[::40].tolist())
+    state = sp.SponsorPass(minimum, wait)
+    state.grow(n_keys, n_trials)
+    out = np.full((n_queries, 3), -1, dtype=np.int64)
+    previous = None
+    saves = 0
+    for day, kind, a, b, c in events.in_order():
+        if previous is not None and day != previous and previous in stops:
+            state = sp.SponsorPass.from_bytes(state.to_bytes())
+            saves += 1
+        previous = day
+        if kind == sp.QUERY:
+            out[c] = state.answer(day, a, b)
+        else:
+            state.apply(day, kind, a, b, c)
+    assert saves > 5
+    assert np.array_equal(out, expected)
+
+
+def test_a_saved_pass_holds_runs_links_and_the_waiting_queue() -> None:
+    """Every part of the state survives a save: a run in progress, a waiting link, an alias."""
+    rows = [*SWAP, (SWAP_DAY, sp.REPLACEMENT, 0, 2, 7)]
+    state = sp.SponsorPass(alias_min_trials=2, alias_wait_days=30)
+    state.grow(3, 30)
+    for day, kind, a, b, c in _events(rows).in_order():
+        state.apply(day, kind, a, b, c)
+    again = sp.SponsorPass.from_bytes(state.to_bytes())
+    assert again.to_bytes() == state.to_bytes()
+    assert again.waiting == sorted(state.waiting)
+    assert [again.answer(SWAP_DAY + 31, k, 20) for k in range(3)] == [
+        state.answer(SWAP_DAY + 31, k, 20) for k in range(3)
+    ]
+    with pytest.raises(ValueError, match="not a registry event"):
+        state.apply(1, sp.QUERY, 0, 0, 0)
+
+
+def test_a_saved_pass_of_another_format_is_refused() -> None:
+    import json
+    import zlib
+
+    data = zlib.compress(json.dumps({"format": 99}).encode())
+    with pytest.raises(ValueError, match="format 99"):
+        sp.SponsorPass.from_bytes(data)
