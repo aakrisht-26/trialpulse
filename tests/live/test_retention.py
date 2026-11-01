@@ -177,3 +177,58 @@ def test_retention_refuses_on_a_runner(
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     with pytest.raises(RefusedError, match="never runs on a runner"):
         retention.retain(_dsn(scratch), AS_OF, 12, tmp_path)
+
+
+def test_a_slow_export_does_not_idle_in_a_transaction(
+    scratch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0058: the export and its check run with no transaction open, so a file that takes
+    longer to write than Neon's idle-in-transaction limit (here lowered to 1 second) does
+    not end the session; the rows are still exported, verified and deleted."""
+    import time
+
+    from psycopg import conninfo
+
+    dsn = _dsn(scratch)
+    _rows(dsn)
+    real = retention._write
+
+    def slow(path: Path, rows: Any) -> None:
+        time.sleep(1.5)
+        real(path, rows)
+
+    monkeypatch.setattr(retention, "_write", slow)
+    limited = conninfo.make_conninfo(dsn, options="-c idle_in_transaction_session_timeout=1000")
+    results = retention.retain(limited, AS_OF, 12, tmp_path)
+    assert all(r.deleted == r.rows for r in results)
+    assert sum(r.deleted for r in results) > 0
+
+
+def test_retention_that_lost_its_lease_deletes_nothing(
+    scratch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0060: while the file is written, retention's lease goes stale and a daily run takes
+    over. The delete renews first, finds the lease gone, and deletes nothing; the run rows
+    stay as the daily run left them."""
+    dsn = _dsn(scratch)
+    _rows(dsn)
+    before = _left(dsn)
+    real = retention._write
+
+    def taken_over(path: Path, rows: Any) -> None:
+        real(path, rows)
+        with psycopg.connect(dsn) as con, con.cursor() as cur:
+            cur.execute("UPDATE monitoring.pipeline_runs SET renewed_at = now() - "
+                        "interval '3 hours' WHERE status = 'running'")  # fmt: skip
+            store.start_run(cur, "daily", "daily", AS_OF, 120)
+            con.commit()
+
+    monkeypatch.setattr(retention, "_write", taken_over)
+    with pytest.raises(store.LeaseLostError):
+        retention.retain(dsn, AS_OF, 12, tmp_path)
+    assert _left(dsn) == before
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT job, status, error FROM monitoring.pipeline_runs "
+                           "WHERE job IN ('retention', 'daily') AND status <> 'succeeded' "
+                           "ORDER BY run_id").fetchall()  # fmt: skip
+    assert runs == [("retention", "failed", "stale lease"), ("daily", "running", None)]

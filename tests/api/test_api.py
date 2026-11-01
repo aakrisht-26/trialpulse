@@ -133,7 +133,7 @@ def test_the_timeline_holds_points_and_amendment_markers(make_client: Make) -> N
         {"post_date": "2025-01-10", "changed": ["status"]},
         {"post_date": "2026-03-02", "changed": ["dates", "enrollment"]},
     ]
-    assert "go-live" in body["note"]
+    assert "the first point is the trial's score at the data cutoff" in body["note"].lower()
 
 
 def test_the_reason_summary_holds_counts_and_the_stops_after_the_labels(make_client: Make) -> None:
@@ -233,3 +233,149 @@ def test_no_response_holds_a_name_the_serving_tables_do_not_show(make_client: Ma
 CFG_ROOT = __import__("trialpulse.config", fromlist=["REPO_ROOT"]).REPO_ROOT
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
+# Database errors that waiting will not fix (ADR 0061, review findings 7 and 8) ---------------
+
+psycopg = pytest.importorskip("psycopg")
+
+
+def _client_for(url: str, waits: list[float] | None = None) -> tuple[TestClient, Database]:
+    cfg = CFG.model_copy(update={"retry_wait_seconds": 0})
+    db = Database(engine_for(url, 5), 0, (waits if waits is not None else []).append)
+    return TestClient(create_app(Api(db, cfg, now=FakeClock())),
+                      raise_server_exceptions=False), db  # fmt: skip
+
+
+def _refused(answer: Any, caplog: pytest.LogCaptureFixture, state: str) -> None:
+    from trialpulse.api.main import REFUSED
+
+    assert answer.status_code == 500
+    assert answer.headers["content-type"].startswith("application/json")
+    assert "retry-after" not in answer.headers
+    body = answer.json()
+    _envelope(body)
+    assert body["detail"] == REFUSED
+    assert f"SQLSTATE {state}" in caplog.text
+
+
+def _role(seeded: str, grants: tuple[str, ...]) -> tuple[str, str]:
+    import uuid
+
+    role = f"api_err_{uuid.uuid4().hex[:8]}"
+    database = seeded.rsplit("/", 1)[1]
+    with psycopg.connect(seeded, autocommit=True) as con:
+        con.execute(f"CREATE ROLE {role} LOGIN PASSWORD 'pw_{role}'")
+        con.execute(f"GRANT CONNECT ON DATABASE {database} TO {role}")
+        con.execute(f"GRANT USAGE ON SCHEMA serving TO {role}")
+        for table in grants:
+            con.execute(f"GRANT SELECT ON serving.{table} TO {role}")
+    user = seeded.split("://", 1)[1].split("@", 1)[0]
+    return role, seeded.replace(f"{user}@", f"{role}:pw_{role}@", 1)
+
+
+def _drop(seeded: str, role: str) -> None:
+    with psycopg.connect(seeded, autocommit=True) as con:
+        con.execute(f"DROP OWNED BY {role}")
+        con.execute(f"DROP ROLE {role}")
+
+
+def test_a_wrong_password_answers_500_not_waking(
+    seeded: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    user = seeded.split("://", 1)[1].split("@", 1)[0]
+    waits: list[float] = []
+    client, _ = _client_for(seeded.replace(f"{user}@", f"{user.split(':')[0]}:wrong@", 1),
+                            waits)  # fmt: skip
+    with caplog.at_level("ERROR", logger="trialpulse.api"):
+        _refused(client.get("/v1/model"), caplog, "28P01")
+    assert waits == []  # not retried
+
+
+def test_a_missing_grant_answers_500_and_is_not_retried(
+    seeded: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Review fault R05: every database error was retried and answered as the database
+    waking up. A missing grant on a score table is answered at once with a JSON 500."""
+    role, url = _role(seeded, ("data_status",))
+    try:
+        waits: list[float] = []
+        client, db = _client_for(url, waits)
+        with caplog.at_level("ERROR", logger="trialpulse.api"):
+            _refused(client.get("/v1/trials/NCT00000001/risk"), caplog, "42501")
+        assert waits == []
+        assert db.queries == 2  # the data date, then one attempt of the query: no retry
+        db.engine.dispose()
+    finally:
+        _drop(seeded, role)
+
+
+def test_an_unreadable_data_date_answers_500_not_waking(
+    seeded: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    role, url = _role(seeded, ("trial_scores_latest",))
+    try:
+        client, db = _client_for(url)
+        with caplog.at_level("ERROR", logger="trialpulse.api"):
+            _refused(client.get("/v1/model"), caplog, "42501")
+        db.engine.dispose()
+    finally:
+        _drop(seeded, role)
+
+
+def test_a_missing_table_answers_500(seeded: str, caplog: pytest.LogCaptureFixture) -> None:
+    with psycopg.connect(seeded, autocommit=True) as con:
+        con.execute("DROP TABLE serving.reason_counts")
+    client, _ = _client_for(seeded)
+    with caplog.at_level("ERROR", logger="trialpulse.api"):
+        _refused(client.get("/v1/reasons/summary"), caplog, "42P01")
+
+
+def test_an_unhandled_error_is_json_with_the_notice(
+    make_client: Make, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from trialpulse.api import areas
+    from trialpulse.api.main import INTERNAL
+
+    def broken(codes: Any) -> Any:
+        raise KeyError("a value that must not be logged")
+
+    monkeypatch.setattr(areas, "slugs", broken)
+    client, _, _ = make_client()
+    client = TestClient(client.app, raise_server_exceptions=False)
+    with caplog.at_level("ERROR", logger="trialpulse.api"):
+        answer = client.get("/v1/trials/NCT00000001/risk")
+    assert answer.status_code == 500
+    assert answer.headers["content-type"].startswith("application/json")
+    _envelope(answer.json())
+    assert answer.json()["detail"] == INTERNAL
+    assert "unhandled KeyError" in caplog.text
+    assert "must not be logged" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("text", "state", "waking"),
+    [
+        ('connection to server failed: FATAL:  password authentication failed for user "x"',
+         "28P01", False),
+        ('connection to server failed: FATAL:  database "x" does not exist', "3D000", False),
+        ('connection to server failed: FATAL:  role "x" does not exist', "28000", False),
+        ('connection to server failed: FATAL:  permission denied for database "x"', "42501",
+         False),
+        ("connection to server failed: FATAL:  sorry, too many clients already", "", True),
+        ("connection to server failed: FATAL:  the database system is starting up", "", True),
+        ("connection to server failed: Connection refused", "", True),
+        ("failed to resolve host 'x': Name or service not known", "", True),
+        ("connection timeout expired", "", True),
+    ],
+)  # fmt: skip
+def test_connect_errors_are_told_apart_by_the_servers_answer(
+    text: str, state: str, waking: bool
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    from trialpulse.api.db import sqlstate, unreachable
+
+    exc = OperationalError("connect", {}, psycopg.OperationalError(text))
+    assert sqlstate(exc) == state
+    assert unreachable(exc) is waking

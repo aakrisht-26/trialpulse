@@ -8,9 +8,12 @@ below fills the tables once. Nothing here reads the dataset.
 
 - The brief title is the canonical text of the title (`contracts.text.normalize_text`).
 - The sponsor's keyed id follows ADR 0044; a display name only where `live.contract.
-  display_name` gives one, with the sponsor's key as the search key (ADR 0047). A sponsor
-  that may be a person gets no row in `serving.sponsors`, and an earlier row of its id is
-  removed.
+  display_name` gives one (the allowlist of ADR 0059), with the sponsor's key as the search
+  key (ADR 0047). Whether a name is shown depends on how many live trials the sponsor
+  leads, so it is decided when the rows are saved, from `serving.trial_display`, and again
+  for every sponsor whose trials leave. A sponsor whose name is not shown gets no row in
+  `serving.sponsors`, and an earlier row of its id is removed. The candidate name of a
+  record lives in memory only; it is never stored unless it is shown.
 - Areas follow ADR 0046 (`api.areas`).
 """
 
@@ -53,7 +56,7 @@ class Display:
     sponsor_id: str | None
     sponsor_class: str | None
     areas: list[int]
-    display_name: str | None  # the sponsor's, where it may be shown
+    sponsor_name: str | None  # the record's, in memory only; None for an individual
 
 
 def display_row(study: Mapping[str, Any], secret: bytes) -> Display | None:
@@ -72,7 +75,7 @@ def display_row(study: Mapping[str, Any], secret: bytes) -> Display | None:
         sponsor_id=sponsor_id(lead.key, lead.is_individual, secret),
         sponsor_class=kind,
         areas=area_codes(get_path(study, ANCESTORS_PATH)),
-        display_name=None if lead.is_individual else display_name(lead.name, kind),
+        sponsor_name=None if lead.is_individual else lead.name,
     )
 
 
@@ -86,9 +89,38 @@ def display_rows(studies: Iterable[Mapping[str, Any]], secret: bytes) -> list[Di
     return [rows[k] for k in sorted(rows)]
 
 
+def trials_led(cur: Any, sponsor_ids: Iterable[str]) -> dict[str, int]:
+    """The number of live trials (rows of `serving.trial_display`) each sponsor leads."""
+    rows = cur.execute(
+        """SELECT sponsor_id, count(*) FROM serving.trial_display
+        WHERE sponsor_id = ANY(%s) GROUP BY sponsor_id""",
+        (sorted(sponsor_ids),),
+    ).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
+
+
+def _store_names(cur: Any, shown: Mapping[str, tuple[str, str | None]],
+                 hidden: Iterable[str]) -> None:  # fmt: skip
+    cur.executemany(
+        """INSERT INTO serving.sponsors (sponsor_id, display_name, search_key, sponsor_class)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (sponsor_id) DO UPDATE SET display_name = EXCLUDED.display_name,
+          search_key = EXCLUDED.search_key, sponsor_class = EXCLUDED.sponsor_class,
+          updated_at = now()
+        WHERE (serving.sponsors.display_name, serving.sponsors.sponsor_class)
+          IS DISTINCT FROM (EXCLUDED.display_name, EXCLUDED.sponsor_class)""",
+        [(i, name, sponsor_key(name), kind) for i, (name, kind) in sorted(shown.items())],
+    )
+    gone = sorted(hidden)
+    if gone:
+        cur.execute("DELETE FROM serving.sponsors WHERE sponsor_id = ANY(%s)", (gone,))
+
+
 def save(cur: Any, rows: Sequence[Display]) -> dict[str, int]:
-    """Upsert the trial rows and the sponsor names; remove the name of a sponsor id that a
-    record now shows without one (it may be a person: ADR 0044)."""
+    """Upsert the trial rows, then decide each of their sponsors' names (ADR 0059) from the
+    live trials it now leads: a name is shown only if every record of the sponsor in `rows`
+    allows it (the last record's text and class are stored); every other sponsor's row is
+    removed, since it may name a person."""
     cur.executemany(
         """INSERT INTO serving.trial_display (nct_id, brief_title, sponsor_id, sponsor_class,
           areas) VALUES (%s, %s, %s, %s, %s)
@@ -101,30 +133,50 @@ def save(cur: Any, rows: Sequence[Display]) -> dict[str, int]:
                             EXCLUDED.sponsor_class, EXCLUDED.areas)""",
         [(r.nct_id, r.brief_title, r.sponsor_id, r.sponsor_class, r.areas) for r in rows],
     )
-    named = {r.sponsor_id: r for r in rows if r.sponsor_id and r.display_name}
-    hidden = sorted({r.sponsor_id for r in rows if r.sponsor_id and not r.display_name}
-                    - set(named))  # fmt: skip
-    cur.executemany(
-        """INSERT INTO serving.sponsors (sponsor_id, display_name, search_key, sponsor_class)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (sponsor_id) DO UPDATE SET display_name = EXCLUDED.display_name,
-          search_key = EXCLUDED.search_key, sponsor_class = EXCLUDED.sponsor_class,
-          updated_at = now()
-        WHERE (serving.sponsors.display_name, serving.sponsors.sponsor_class)
-          IS DISTINCT FROM (EXCLUDED.display_name, EXCLUDED.sponsor_class)""",
-        [(i, r.display_name, sponsor_key(r.display_name or ""), r.sponsor_class)
-         for i, r in named.items()],
-    )  # fmt: skip
-    if hidden:
-        cur.execute("DELETE FROM serving.sponsors WHERE sponsor_id = ANY(%s)", (hidden,))
-    return {"trials": len(rows), "sponsors_named": len(named), "sponsors_hidden": len(hidden)}
+    by_sponsor: dict[str, list[Display]] = {}
+    for r in rows:
+        if r.sponsor_id:
+            by_sponsor.setdefault(r.sponsor_id, []).append(r)
+    led = trials_led(cur, by_sponsor)
+    shown: dict[str, tuple[str, str | None]] = {}
+    for sid, records in by_sponsor.items():
+        names = [display_name(r.sponsor_name, r.sponsor_class, led.get(sid, 0)) for r in records]
+        if all(names):
+            shown[sid] = (str(names[-1]), records[-1].sponsor_class)
+    hidden = set(by_sponsor) - set(shown)
+    _store_names(cur, shown, hidden)
+    return {"trials": len(rows), "sponsors_named": len(shown), "sponsors_hidden": len(hidden)}
+
+
+def refresh(cur: Any, sponsor_ids: Iterable[str]) -> int:
+    """Decide again the stored names of sponsors whose trials changed (a trial left): a name
+    shown only because its sponsor led enough live trials goes when it leads fewer. Returns
+    the names removed."""
+    ids = sorted(set(sponsor_ids))
+    if not ids:
+        return 0
+    stored = cur.execute(
+        "SELECT sponsor_id, display_name, sponsor_class FROM serving.sponsors "
+        "WHERE sponsor_id = ANY(%s)",
+        (ids,),
+    ).fetchall()
+    led = trials_led(cur, ids)
+    hidden = [sid for sid, name, kind in stored
+              if display_name(name, kind, led.get(sid, 0)) is None]  # fmt: skip
+    _store_names(cur, {}, hidden)
+    return len(hidden)
 
 
 def remove(cur: Any, trials: Iterable[str]) -> None:
-    """The display rows of trials that left the live state."""
+    """The display rows of trials that left the live state, and the names their sponsors may
+    no longer show (`refresh`)."""
     gone = sorted(trials)
     if gone:
-        cur.execute("DELETE FROM serving.trial_display WHERE nct_id = ANY(%s)", (gone,))
+        left = cur.execute(
+            "DELETE FROM serving.trial_display WHERE nct_id = ANY(%s) RETURNING sponsor_id",
+            (gone,),
+        ).fetchall()
+        refresh(cur, {r[0] for r in left if r[0]})
 
 
 def pull_live_records(api: ApiClient, page_size: int) -> list[dict[str, Any]]:

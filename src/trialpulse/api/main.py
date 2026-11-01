@@ -12,6 +12,7 @@ response holds a person's name: sponsors without a display name show their class
 """
 
 import datetime as dt
+import logging
 import re
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -23,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from trialpulse.api import areas as area_list
 from trialpulse.api import schemas as s
-from trialpulse.api.db import Database, Unavailable, engine_for
+from trialpulse.api.db import Database, DatabaseRefused, Unavailable, engine_for
 from trialpulse.api.guards import AnswerCache, DataClock, RateLimiter, client_address
 from trialpulse.config import ApiConfig, Secrets, load_project_config
 from trialpulse.contracts.sponsor import sponsor_key
@@ -40,6 +41,12 @@ REASON_TEXT = {
 }
 MARKER_BITS = {1: "status", 2: "dates", 4: "enrollment", 8: "design", 16: "sponsor",
                32: "title phase or interventions"}  # fmt: skip
+LOG = logging.getLogger("trialpulse.api")
+REFUSED = (
+    "the API's database refused the query: a configuration error (logged by its SQLSTATE), "
+    "not the database waking up"
+)
+INTERNAL = "the API failed to answer this request (logged by the error's class)"
 NOT_FOUND = "no trial with this registry id is served"
 NO_SPONSOR = "no sponsor with a public portfolio has this name"
 DESCRIPTION = (
@@ -73,7 +80,9 @@ class Api:
     def answer(self, key: tuple[Any, ...], compute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """A cached answer for the current data date, with the envelope's date."""
         day = self.clock.current()
-        if day is None and self.clock.last_read_failed:  # the database is down: say so now
+        if day is None and self.clock.last_read_failed:  # say now why there is no date
+            if isinstance(self.clock.last_error, DatabaseRefused):
+                raise self.clock.last_error
             raise Unavailable("the database did not answer")
         body = self.cache.get_or((day, *key), compute)
         return {**body, "data_as_of": day}
@@ -139,6 +148,18 @@ def create_app(api: Api) -> FastAPI:
         wait = str(api.cfg.unavailable_retry_after_seconds)
         return _envelope(api, 503, "the database is waking up; try again shortly",
                          {"Retry-After": wait})  # fmt: skip
+
+    @app.exception_handler(DatabaseRefused)
+    async def refused(request: Request, exc: DatabaseRefused) -> JSONResponse:
+        # The SQLSTATE and class only: an error's text can hold a row (ADR 0061).
+        LOG.error("database refused a query: SQLSTATE %s (%s) on %s", exc.sqlstate or "none",
+                  exc.kind, request.url.path)  # fmt: skip
+        return _envelope(api, 500, REFUSED)
+
+    @app.exception_handler(Exception)
+    async def internal(request: Request, exc: Exception) -> JSONResponse:
+        LOG.error("unhandled %s on %s", type(exc).__name__, request.url.path)
+        return _envelope(api, 500, INTERNAL)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -435,6 +456,11 @@ def from_environment() -> FastAPI:
     """The app of the container: settings from config/project.yaml, the URL from
     API_DATABASE_URL (or DATABASE_URL locally)."""
     cfg = load_project_config().api
+    if not LOG.handlers:  # the container's log: one line per refusal or failure
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        LOG.addHandler(handler)
+        LOG.setLevel(logging.INFO)
     secrets = Secrets()
     secret = secrets.api_database_url or secrets.database_url
     if secret is None:

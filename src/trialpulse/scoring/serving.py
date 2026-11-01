@@ -30,7 +30,7 @@ The database is DATABASE_URL (Section 17), local Postgres in Docker for Step 13.
 
 import datetime as dt
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -190,9 +190,12 @@ def publish(
     scope: set[str] | None = None,
     run_id: int | None = None,
     day: dt.date | None = None,
+    lease: Callable[[Any], None] | None = None,
 ) -> dict[str, int]:
     """Write one scoring run to the serving schema (see the module text). `day` names the
-    run's date when it may hold no row (a scoped run whose trials all left)."""
+    run's date when it may hold no row (a scoped run whose trials all left). `lease`, when
+    given, runs first in the transaction and raises if the caller's job lost its lease
+    (ADR 0060), so nothing is written after a takeover."""
     import psycopg
 
     new = latest_frame(scored)
@@ -215,6 +218,8 @@ def publish(
     dsn = (url or _url()).replace("postgresql+psycopg://", "postgresql://")
     counts: dict[str, int] = {}
     with psycopg.connect(dsn) as con, con.cursor() as cur:
+        if lease is not None:
+            lease(cur)
         row = cur.execute("SELECT max(as_of_date) FROM serving.trial_scores_latest").fetchone()
         latest_day = row[0] if row else None
         if latest_day is not None and day < latest_day:

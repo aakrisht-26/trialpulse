@@ -152,7 +152,7 @@ def test_a_daily_run_publishes_and_a_second_run_changes_nothing(dsn: str) -> Non
               for p in pages for s in _load(p)["studies"]}  # fmt: skip
     assert {n for n, _ in shown} == live & pulled
     assert all(title for _, title in shown)
-    assert "Example Sponsor Organization" not in names  # three plain words of class OTHER
+    assert "Example Sponsor Organization" in names  # an organization word (ADR 0059)
     assert names
     assert status == (DAY, "stand-in/1")
     before = _digest(dsn)
@@ -239,8 +239,13 @@ def test_one_running_job_at_a_time(dsn: str) -> None:
         con.commit()
     with pytest.raises(daily.JobFailedError, match="start: LeaseError: another live job"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
-    with psycopg.connect(dsn) as con, con.cursor() as cur:  # a stale lease is released
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # long running, but renewed
         cur.execute("UPDATE monitoring.pipeline_runs SET started_at = now() - interval '3 hours'")
+        con.commit()
+    with pytest.raises(daily.JobFailedError, match="start: LeaseError: another live job"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # not renewed: a stale lease
+        cur.execute("UPDATE monitoring.pipeline_runs SET renewed_at = now() - interval '3 hours'")
         con.commit()
     assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
 
@@ -521,7 +526,7 @@ def test_a_database_not_at_the_migration_head_is_refused(dsn: str) -> None:
     with psycopg.connect(dsn) as con:
         con.execute("UPDATE alembic_version SET version_num = '0003'")
         con.commit()
-    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0005"):
+    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0006"):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
 
 
@@ -553,3 +558,310 @@ def test_a_trial_that_ends_loses_its_display_row(dsn: str) -> None:
         shown = con.execute("SELECT count(*) FROM serving.trial_display WHERE nct_id = %s",
                             (nct,)).fetchone()  # fmt: skip
     assert shown == (0,)
+
+
+# Neon's idle-in-transaction limit (ADR 0058) ------------------------------------------------
+
+IDLE_LIMIT_MS = 1000  # Neon: 300000 (5 minutes); scaled down with every wait below
+SLOW = 1.5  # seconds: longer than the limit, as a full run's drivers are longer than 5 minutes
+
+
+def _limited(dsn: str) -> str:
+    """The job's connection string with the session limit lowered on every connection it
+    opens (the main one, publication's and VACUUM's)."""
+    from psycopg import conninfo
+
+    return conninfo.make_conninfo(
+        dsn, options=f"-c idle_in_transaction_session_timeout={IDLE_LIMIT_MS}"
+    )
+
+
+def _slow_api() -> ApiClient:
+    """The recorded pages, each answered after a wait (the pull of a long catch-up run)."""
+    import time
+
+    respx.get(VERSION_URL).mock(return_value=httpx.Response(200, json=_load("version.json")))
+
+    def page(request: httpx.Request) -> httpx.Response:
+        time.sleep(SLOW)
+        name = "delta_page_2.json" if "pageToken" in request.url.params else "delta_page_1.json"
+        return httpx.Response(200, json=_load(name))
+
+    respx.get(STUDIES_URL).mock(side_effect=page)
+    return ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+
+
+def _slow_scorer(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    import time
+
+    time.sleep(SLOW)  # the drivers of a full run
+    return _scorer(scored, features, day)
+
+
+@respx.mock
+def test_the_limit_ends_a_session_idle_in_a_transaction(dsn: str) -> None:
+    """The control for the test below: the lowered limit does end an idle transaction."""
+    import time
+
+    with psycopg.connect(_limited(dsn)) as con:
+        assert con.execute("SHOW idle_in_transaction_session_timeout").fetchone() == ("1s",)
+        time.sleep(SLOW)
+        with pytest.raises(psycopg.Error, match="idle-in-transaction timeout"):
+            con.execute("SELECT 1").fetchone()
+
+
+@respx.mock
+def test_runs_that_wait_longer_than_the_idle_limit_succeed(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The review's two-run reproduction (finding 1): with the limit lowered and a slow pull,
+    sponsor pass and scorer, the job held a transaction open while it waited, the session was
+    ended, every run failed at publication and stayed a full run. Now no transaction is open
+    while the job waits, and both runs succeed."""
+    import time
+
+    _bootstrap(dsn)
+    advance = daily.engine.advance
+
+    def slow_advance(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(SLOW)
+        return advance(*args, **kwargs)
+
+    monkeypatch.setattr(daily.engine, "advance", slow_advance)
+    model = daily.Model("stand-in/1", _slow_scorer, DECISIONS)
+    limited = _limited(dsn)
+    first = daily.run_daily(CFG, limited, SECRET, _slow_api(), model)
+    assert (first.status, first.exit_code) == ("succeeded", 0)
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT run_kind, status FROM monitoring.pipeline_runs "
+                           "WHERE job = 'daily' ORDER BY run_id").fetchall()  # fmt: skip
+        assert runs == [("full", "succeeded")]
+        assert con.execute("SELECT data_as_of FROM serving.data_status").fetchone() == (DAY,)
+        assert con.execute("SELECT count(*) FROM monitoring.score_files").fetchone() == (1,)
+    second = daily.run_daily(CFG, limited, SECRET, _slow_api(), model, force=True)
+    assert second.status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT run_kind, status FROM monitoring.pipeline_runs "
+                           "WHERE job = 'daily' ORDER BY run_id").fetchall()  # fmt: skip
+    assert runs == [("full", "succeeded"), ("daily", "succeeded")]
+
+
+@respx.mock
+def test_a_failure_is_recorded_when_the_jobs_connection_is_gone(dsn: str) -> None:
+    """The run's own connection is ended while it scores (as Neon ends a session, or a network
+    drops): the failure is recorded on a fresh connection, so the run is not left running
+    and its lease is free at once."""
+
+    def ending(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+        with psycopg.connect(dsn, autocommit=True) as other:
+            other.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            )
+        return _scorer(scored, features, day)
+
+    _bootstrap(dsn)
+    with pytest.raises(daily.JobFailedError, match=r"^publish: "):
+        daily.run_daily(CFG, dsn, SECRET, _api(), daily.Model("stand-in/1", ending, DECISIONS))
+    with psycopg.connect(dsn) as con:
+        status, error = con.execute(
+            "SELECT status, error FROM monitoring.pipeline_runs WHERE job = 'daily'"
+        ).fetchone()
+    assert status == "failed"
+    assert error.startswith("publish: ")
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+
+
+# The renewable lease (ADR 0060) --------------------------------------------------------------
+
+
+def _take_over(dsn: str) -> None:
+    """Another job finds this run's lease stale and starts: the review's experiment E2."""
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        cur.execute("UPDATE monitoring.pipeline_runs SET renewed_at = now() - interval '3 hours'"
+                    " WHERE status = 'running'")  # fmt: skip
+        store.start_run(cur, "retention", "retention", DAY, 120)
+        con.commit()
+
+
+@respx.mock
+def test_a_job_whose_lease_was_taken_over_stops_without_writing(dsn: str) -> None:
+    """Finding 5: while the job scores, its lease goes stale and another job takes over. The
+    job finds out at its next renewal (first in publication's transaction) and stops: it
+    publishes nothing, writes no data date or score file, and leaves both run rows as the
+    other job left them."""
+
+    def taken_over(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+        _take_over(dsn)
+        return _scorer(scored, features, day)
+
+    _bootstrap(dsn)
+    with pytest.raises(daily.JobFailedError, match="publish: LeaseLostError: run"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), daily.Model("stand-in/1", taken_over,
+                                                               DECISIONS))  # fmt: skip
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT job, status, error FROM monitoring.pipeline_runs "
+                           "WHERE job <> 'bootstrap' ORDER BY run_id").fetchall()  # fmt: skip
+        published = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()
+        status = con.execute("SELECT count(*) FROM serving.data_status").fetchone()
+        files = con.execute("SELECT count(*) FROM monitoring.score_files").fetchone()
+    assert runs == [("daily", "failed", "stale lease"), ("retention", "running", None)]
+    assert (published, status, files) == ((0,), (0,), (0,))
+
+
+@respx.mock
+@pytest.mark.parametrize("stage", ["ingest", "sponsors"])
+def test_a_lost_lease_is_found_at_every_stage(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    """The takeover happens during the pull (ingest) or the sponsor pass: the stage's write
+    transaction renews first and finds the lease gone, so the stage writes nothing."""
+    _bootstrap(dsn)
+    if stage == "ingest":
+        convert = daily.pull.convert
+
+        def taken(*args: Any, **kwargs: Any) -> Any:
+            _take_over(dsn)
+            return convert(*args, **kwargs)
+
+        monkeypatch.setattr(daily.pull, "convert", taken)
+    else:
+        advance = daily.engine.advance
+
+        def taken(*args: Any, **kwargs: Any) -> Any:
+            _take_over(dsn)
+            return advance(*args, **kwargs)
+
+        monkeypatch.setattr(daily.engine, "advance", taken)
+    with pytest.raises(daily.JobFailedError, match=f"{stage}: LeaseLostError"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con:
+        versions = con.execute("SELECT count(*) FROM live.study_versions").fetchone()
+        written = con.execute("SELECT last_run_id FROM live.sponsor_file").fetchone()[0]
+        boot = con.execute("SELECT run_id FROM monitoring.pipeline_runs "
+                           "WHERE job = 'bootstrap'").fetchone()[0]  # fmt: skip
+    if stage == "ingest":
+        assert versions == (0,)
+    assert written == boot  # the sponsor file is the bootstrap's
+
+
+def test_a_run_that_lost_its_lease_cannot_renew_or_finish(dsn: str) -> None:
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        run = store.start_run(cur, "daily", "daily", DAY, 120)
+        store.renew(cur, run)
+        cur.execute("UPDATE monitoring.pipeline_runs SET status = 'failed', "
+                    "error = 'stale lease' WHERE run_id = %s", (run,))  # fmt: skip
+        with pytest.raises(store.LeaseLostError):
+            store.renew(cur, run)
+        with pytest.raises(store.LeaseLostError):
+            store.finish_run(cur, run, "succeeded", {})
+        con.rollback()
+    assert not daily.record_failure(dsn, 10_000, {}, "no such run")
+
+
+# A rebuild of the bootstrap (review finding 4) ----------------------------------------------
+
+
+def _rebuild(dsn: str) -> None:
+    aliases = (CFG.features.sponsor_alias_min_trials, CFG.features.sponsor_alias_wait_days)
+    seeded = seed(compact_history(120), RELEASE, RULES, KEEP, *aliases)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        store.load_bootstrap(cur, seeded.wides, seeded.sponsors, seeded.markers, RELEASE,
+                             rebuild=True)  # fmt: skip
+        con.commit()
+
+
+@respx.mock
+def test_a_rebuild_after_daily_runs_is_a_fresh_bootstrap(dsn: str) -> None:
+    """A rebuild clears every table the daily job writes and every other run's row, keeps
+    the reason labels' date, and the next daily run is a first run: the tables then equal
+    those of a fresh bootstrap and one run."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        con.execute("UPDATE serving.data_status SET labeled_through = %s", (RELEASE,))
+        con.execute("INSERT INTO live.quarantine (nct_id, payload_hash, reasons) "
+                    "VALUES ('NCT00000099', 'x', 'status: check')")  # fmt: skip
+        con.commit()
+    _rebuild(dsn)
+    with psycopg.connect(dsn) as con:
+        counts = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                  for t in store.REBUILT_TABLES}  # fmt: skip
+        runs = con.execute("SELECT job, status FROM monitoring.pipeline_runs").fetchall()
+        status = con.execute("SELECT data_as_of, model_version, early_stops_after_labels, "
+                             "labeled_through FROM serving.data_status").fetchone()  # fmt: skip
+    seeded = {"live.trial_state", "live.sponsor_file", "serving.amendment_markers"}
+    assert all(n == 0 for t, n in counts.items() if t not in seeded), counts
+    assert all(counts[t] > 0 for t in seeded)
+    assert runs == [("bootstrap", "succeeded")]
+    assert status == (None, None, None, RELEASE)
+    first = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    assert first.status == "succeeded"
+    assert first.counts["details"]["full"] is True
+    rebuilt = _digest(dsn, skip=("serving.data_status",))
+    with psycopg.connect(dsn) as con, con.cursor() as cur:  # a fresh bootstrap and one run
+        for table in (*TABLES, "live.sponsor_file", "monitoring.pipeline_runs"):
+            cur.execute(f"DELETE FROM {table}")
+        con.commit()
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    assert _digest(dsn, skip=("serving.data_status",)) == rebuilt
+
+
+@respx.mock
+def test_a_rebuild_waits_for_the_lease(dsn: str) -> None:
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        store.start_run(cur, "daily", "daily", DAY, 120)
+        con.commit()
+    before = _digest(dsn)
+    with pytest.raises(store.LeaseError):
+        _rebuild(dsn)
+    assert _digest(dsn) == before
+
+
+# Review faults R08 and R09 ------------------------------------------------------------------
+
+
+@respx.mock
+def test_a_trial_first_posted_before_2008_is_never_served(dsn: str) -> None:
+    """Review fault R08: the population's first-post bound (Section 6) was never tested on
+    the live path. The live state keeps an open trial first posted in 2007 (it counts among
+    the open trials), but no serving table may hold it."""
+    _bootstrap(dsn)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        rows = store.population_rows(cur, DAY, RULES.open_statuses, RULES.study_type,
+                                     RULES.min_first_post_date)  # fmt: skip
+        old = rows[0][0]
+        before = store.open_count(cur, DAY, RULES.open_statuses, RULES.study_type)
+        cur.execute("UPDATE live.trial_state SET study_first_post_date = '2007-06-01' "
+                    "WHERE nct_id = %s", (old,))  # fmt: skip
+        assert store.open_count(cur, DAY, RULES.open_statuses, RULES.study_type) == before
+        con.commit()
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        for table in ("serving.trial_scores_latest", "serving.trial_score_history",
+                      "serving.trials_not_scored"):  # fmt: skip
+            held = con.execute(f"SELECT count(*) FROM {table} WHERE nct_id = %s", (old,))
+            assert held.fetchone() == (0,), table
+        served = con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()[0]
+    assert served > 0
+
+
+@respx.mock
+def test_the_data_date_moves_only_after_publication(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review fault R09: the API's data-as-of date must never name a day whose scores were
+    not published. Publication fails here, and the date stays where it was."""
+    _bootstrap(dsn)
+
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(daily.serving, "publish", broken)
+    with pytest.raises(daily.JobFailedError, match="publish: RuntimeError"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    with psycopg.connect(dsn) as con:
+        assert con.execute("SELECT count(*) FROM serving.data_status").fetchone() == (0,)

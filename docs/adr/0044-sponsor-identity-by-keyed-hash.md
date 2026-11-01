@@ -3,6 +3,7 @@
 - Date: 2026-11-01
 - Status: **Accepted.** Decided by Aakrisht on 2026-11-01 (Step 14 decision 9).
 - Refines ADRs 0012, 0018 and 0022 for the live system, and CLAUDE.md Section 17 (a new secret, `SPONSOR_ID_KEY`).
+- Decision 2 (display names) is replaced by ADR 0059, an allowlist.
 
 ## Context
 

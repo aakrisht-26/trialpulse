@@ -5,9 +5,12 @@
 - psycopg's automatic prepared statements are off (`prepare_threshold=None`): a statement
   prepared on one server connection may not exist on the next one a transaction-mode pooler
   hands out, and preparing saves little for these small queries.
-- A query that cannot reach the database waits `retry_wait_seconds` and tries once more (a
-  compute waking from scale-to-zero); a second failure is `Unavailable`, which the API
-  answers with 503 and Retry-After. No error text is ever passed on: it can hold a row.
+- A query that cannot reach the database (a connection failure or a timeout) waits
+  `retry_wait_seconds` and tries once more (a compute waking from scale-to-zero); a second
+  failure is `Unavailable`, which the API answers with 503 and Retry-After. Any other
+  database error (a wrong password, a missing grant, a missing table: ADR 0061) is not
+  retried and is `DatabaseRefused`, which the API answers with a JSON 500 and logs by its
+  SQLSTATE. No error text is ever passed on: it can hold a row.
 - `queries` counts the statements sent, so the tests can show what the cache saves.
 """
 
@@ -17,11 +20,23 @@ from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 
 class Unavailable(RuntimeError):  # noqa: N818 (an answer, not a bug: 503)
     """The database did not answer after the retry."""
+
+
+class DatabaseRefused(RuntimeError):  # noqa: N818 (an answer, not a bug: 500)
+    """The database answered with an error that waiting will not fix: a configuration
+    error such as a wrong password, a missing grant or a missing table (ADR 0061). Holds
+    the SQLSTATE and the error's class only, never its message."""
+
+    def __init__(self, sqlstate: str, kind: str) -> None:
+        super().__init__(f"{kind} {sqlstate}".strip())
+        self.sqlstate = sqlstate
+        self.kind = kind
 
 
 def engine_for(url: str, connect_timeout: int) -> Engine:
@@ -53,18 +68,74 @@ class Database:
                     self.queries += 1
                     result = con.execute(sa.text(sql), dict(params or {}))
                     return [dict(r._mapping) for r in result]
-            except (OperationalError, DBAPIError) as exc:
-                if not _unreachable(exc):
-                    raise
+            except (DBAPIError, PoolTimeoutError) as exc:
+                if not unreachable(exc):
+                    raise refused(exc) from None
                 if attempt == 2:
                     raise Unavailable("the database did not answer") from None
                 self.sleep(self.retry_wait)
         raise AssertionError("unreachable")
 
 
-def _unreachable(exc: DBAPIError) -> bool:
-    """A connection that failed or was lost, as opposed to a bad query."""
-    if exc.connection_invalidated or isinstance(exc, OperationalError):
+# SQLSTATEs of a connection that failed, was lost or timed out (ADR 0061): class 08
+# (connection exception), the server shutting down or starting (57P01 to 57P03), a statement
+# timeout (57014) and too many connections (53300). Everything else is a refusal.
+UNREACHABLE_STATES = frozenset({"57P01", "57P02", "57P03", "57014", "53300"})
+
+
+# A refusal at connect time has no SQLSTATE in psycopg: libpq gives only the server's text,
+# which starts with "FATAL:". Known texts are mapped to their SQLSTATE for the log; transient
+# ones (the server busy, starting or stopping) count as unreachable. Neon answers in English.
+CONNECT_REFUSALS: tuple[tuple[str, str], ...] = (  # first match wins
+    ("permission denied", "42501"),  # for database "x": no CONNECT grant
+    ("password authentication failed", "28P01"),
+    ("no pg_hba.conf entry", "28000"),
+    ("role", "28000"),  # role "x" does not exist
+    ("database", "3D000"),  # database "x" does not exist
+)
+CONNECT_TRANSIENT: tuple[str, ...] = (
+    "too many clients", "remaining connection slots", "starting up", "shutting down",
+    "in recovery mode", "administrator command", "couldn't connect to compute",
+)  # fmt: skip
+
+
+def _connect_text(exc: BaseException) -> str:
+    orig = getattr(exc, "orig", None)
+    return str(orig if orig is not None else exc).lower()
+
+
+def sqlstate(exc: BaseException) -> str:
+    """The error's SQLSTATE, or the one a refusal at connect time stands for (see above)."""
+    state = str(getattr(getattr(exc, "orig", None), "sqlstate", None) or "")
+    if state:
+        return state
+    text = _connect_text(exc)
+    if "fatal:" not in text or any(t in text for t in CONNECT_TRANSIENT):
+        return ""
+    refusal = text.split("fatal:", 1)[1]
+    for pattern, code in CONNECT_REFUSALS:
+        if pattern in refusal:
+            return code
+    return "FATAL"
+
+
+def unreachable(exc: BaseException) -> bool:
+    """A connection that failed, was lost or timed out, as opposed to an error the database
+    answered with (a wrong password, a missing grant or table, a bad query)."""
+    if isinstance(exc, PoolTimeoutError):  # every pooled connection busy past the timeout
         return True
-    state = getattr(getattr(exc, "orig", None), "sqlstate", None) or ""
-    return state.startswith("08") or state == "57P01"  # connection exceptions, admin shutdown
+    if not isinstance(exc, DBAPIError):
+        return False
+    state = sqlstate(exc)
+    if state:
+        return state.startswith("08") or state in UNREACHABLE_STATES
+    # No SQLSTATE and no refusal: the server never answered (refused, reset, DNS, timeout),
+    # or the connection was lost. A client-side error without one is a bug, not a wake-up.
+    return bool(exc.connection_invalidated) or type(exc.orig).__name__ in {
+        "OperationalError", "InterfaceError",
+    }  # fmt: skip
+
+
+def refused(exc: BaseException) -> DatabaseRefused:
+    orig = getattr(exc, "orig", None)
+    return DatabaseRefused(sqlstate(exc), type(orig if orig is not None else exc).__name__)

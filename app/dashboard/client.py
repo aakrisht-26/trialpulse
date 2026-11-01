@@ -5,6 +5,10 @@ proxy, while its container starts; then, while Neon wakes, the API itself answer
 `Retry-After` and its notice. `Client.get` waits both out within a fixed budget and says why
 it waits through `on_wait`; it returns every other answer (200, 404, 422) as it came.
 
+A 200 or 404 whose body is not the API's JSON (every answer of the API carries its notice)
+is never returned, so no page reads it and nothing caches it: it is a page of the platform,
+or of another site at the address, and is waited out like the service starting (ADR 0063).
+
 This module imports no Streamlit, so its waits are tested on their own.
 """
 
@@ -26,6 +30,18 @@ RETRIED = frozenset({429, 502, 503, 504})
 STARTING = "The API service is starting (it sleeps when idle); retrying in {n} seconds."
 DATABASE = "The database is waking up; retrying in {n} seconds."
 BUSY = "The API is busy (too many requests); retrying in {n} seconds."
+NOT_API = (
+    "The API's address answered with a page that is not the API (the service may be "
+    "starting); retrying in {n} seconds."
+)
+GAVE_UP = (
+    "The API did not answer within about 3 minutes. It may still be starting after a quiet "
+    "period; try again in a minute."
+)
+GAVE_UP_NOT_API = (
+    "The API's address kept answering with a page that is not the TrialPulse API. It may "
+    "still be starting; if this lasts, the dashboard's API address is wrong."
+)
 
 # Seams for the tests: the waits and the clock. Pages never change them.
 sleep: Callable[[float], None] = time.sleep
@@ -111,23 +127,23 @@ class Client:
             except httpx.TransportError:  # refused, reset or timed out: the service is starting
                 wait, message = None, STARTING
             else:
-                if response.status_code not in RETRIED:
+                if response.status_code in (200, 404) and not _is_envelope(response):
+                    wait, message = None, NOT_API  # never returned, so never cached
+                elif response.status_code not in RETRIED:
                     return Answer(response.status_code, _body(response))
-                wait = retry_after(response.headers.get("retry-after"))
-                if response.status_code == 429:
-                    message = BUSY
-                elif response.status_code == 503 and _is_envelope(response):
-                    message = DATABASE
                 else:
-                    message = STARTING
+                    wait = retry_after(response.headers.get("retry-after"))
+                    if response.status_code == 429:
+                        message = BUSY
+                    elif response.status_code == 503 and _is_envelope(response):
+                        message = DATABASE
+                    else:
+                        message = STARTING
             if wait is None:
                 wait = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
             attempt += 1
             if monotonic() - start + wait > BUDGET_SECONDS:
-                raise ApiUnavailableError(
-                    "The API did not answer within about 3 minutes. It may still be starting "
-                    "after a quiet period; try again in a minute."
-                )
+                raise ApiUnavailableError(GAVE_UP_NOT_API if message == NOT_API else GAVE_UP)
             if on_wait is not None:
                 on_wait(message.format(n=wait))
             sleep(wait)

@@ -12,12 +12,15 @@ the rows older than `live.retention_months` before `--as-of` (default today):
 - `live.study_versions`, except each trial's newest row, which ingest compares a record
   with, and except rows the sponsor pass has not consumed (a run after the file's last run).
 
-Each table, in one transaction under the job lease (so no daily run overlaps it): the rows
-are selected and locked, written to `data/live_exports/` as Parquet with a manifest, read
-back from disk and compared with the database rows by count and by a digest of every value,
-and only then deleted by the same condition. The delete must remove exactly the exported
-rows, or the transaction is rolled back and nothing is deleted. The files stay on the laptop
-(ADR 0045, decision 11's backups go to the same folder); they are never published.
+Each table, under the job lease, renewed at every table and first in the delete (ADR 0060),
+so no daily run overlaps it: the rows are selected,
+written to `data/live_exports/` as Parquet with a manifest, and read back from disk and
+compared with the database rows by count and by a digest of every value, all with no
+transaction open (ADR 0058: Neon ends a session idle inside a transaction after 5 minutes).
+Only then are they deleted by the same condition, in one short transaction that returns the
+deleted rows: they must be exactly the exported rows, value for value, or the transaction is
+rolled back and nothing is deleted. The files stay on the laptop (ADR 0045, decision 11's
+backups go to the same folder); they are never published.
 """
 
 import argparse
@@ -133,45 +136,43 @@ def retain(
     cutoff = add_months(as_of, -months)
     out_dir.mkdir(parents=True, exist_ok=True)
     results: list[Exported] = []
-    with psycopg.connect(dsn, connect_timeout=10) as con:
+    with psycopg.connect(dsn, connect_timeout=10, autocommit=True) as con:
+        con.execute("SET TimeZone = 'UTC'")
         with con.cursor() as cur:
             store.check_head(cur)
-            run_id = store.start_run(cur, "retention", "retention", as_of, stale_minutes)
-            con.commit()
+            with con.transaction():
+                run_id = store.start_run(cur, "retention", "retention", as_of, stale_minutes)
         try:
             for table in TABLES:
                 results.append(_one(con, table, cutoff, run_id, out_dir, export_only))
         except BaseException:
-            con.rollback()
-            with con.cursor() as cur:
-                store.finish_run(cur, run_id, "failed", {}, "retention failed")
-                con.commit()
+            from trialpulse.live.daily import record_failure
+
+            record_failure(dsn, run_id, {}, "retention failed")
             raise
-        with con.cursor() as cur:
+        with con.cursor() as cur, con.transaction():
             details = {r.table: {"rows": r.rows, "deleted": r.deleted} for r in results}
             store.finish_run(cur, run_id, "succeeded", {"watermark_to": cutoff,
                                                         "details": details})  # fmt: skip
-            con.commit()
     return results
 
 
 def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
          export_only: bool) -> Exported:  # fmt: skip
-    """One table in one transaction (see the module text)."""
+    """One table (see the module text). `con` is in autocommit: the export and its check run
+    with no transaction open, and the delete is one short transaction."""
     with con.cursor() as cur:
-        cur.execute("SET LOCAL TimeZone = 'UTC'")
+        store.renew(cur, run_id)  # every table renews the lease (ADR 0060)
         row = cur.execute("SELECT last_run_id FROM live.sponsor_file WHERE file_id = 1").fetchone()
         params = {"cutoff": cutoff, "consumed": row[0] if row and row[0] is not None else -1}
         a = table.alias
         cur.execute(
-            f"SELECT {a}.* FROM {table.name} {a} WHERE {table.condition} "
-            f"ORDER BY {table.order} FOR UPDATE OF {a}",
+            f"SELECT {a}.* FROM {table.name} {a} WHERE {table.condition} ORDER BY {table.order}",
             params,
         )
         names = [d.name for d in cur.description]
         rows = [dict(zip(names, values, strict=True)) for values in cur.fetchall()]
         if not rows:
-            con.commit()
             return Exported(table.name, 0, None, 0)
         stem = f"{table.name.replace('.', '_')}_before_{cutoff.isoformat()}_run{run_id}"
         path = out_dir / f"{stem}.parquet"
@@ -179,7 +180,6 @@ def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
         expected = digest(rows)
         back = _read(path)
         if len(back) != len(rows) or digest(back) != expected:
-            con.rollback()
             raise ExportMismatchError(
                 f"{path.name} does not hold the {len(rows)} rows of {table.name} it was "
                 "written from; nothing was deleted"
@@ -191,15 +191,22 @@ def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
         (out_dir / f"{stem}.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         deleted = 0
         if not export_only:
-            cur.execute(f"DELETE FROM {table.name} {a} WHERE {table.condition}", params)
-            deleted = cur.rowcount
-            if deleted != len(rows):
-                con.rollback()
-                raise ExportMismatchError(
-                    f"{table.name}: the delete would remove {deleted} rows, not the "
-                    f"{len(rows)} exported; nothing was deleted"
+            order = table.order.replace(f"{a}.", "")
+            with con.transaction():
+                store.renew(cur, run_id)  # a job that lost its lease deletes nothing
+                cur.execute(
+                    f"WITH gone AS (DELETE FROM {table.name} {a} WHERE {table.condition} "
+                    f"RETURNING {a}.*) SELECT * FROM gone ORDER BY {order}",
+                    params,
                 )
-        con.commit()
+                names = [d.name for d in cur.description]
+                gone = [dict(zip(names, values, strict=True)) for values in cur.fetchall()]
+                deleted = len(gone)
+                if deleted != len(rows) or digest(gone) != expected:
+                    raise ExportMismatchError(
+                        f"{table.name}: the delete would remove {deleted} rows that are not "
+                        f"the {len(rows)} exported; nothing was deleted"
+                    )
     return Exported(table.name, len(rows), path, deleted)
 
 

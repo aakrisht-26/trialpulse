@@ -16,7 +16,7 @@ from trialpulse.live.engine import Ingested
 from trialpulse.live.sponsors import FORMAT, SponsorFile
 from trialpulse.live.state import FIRST_FIELDS, Event, Wide
 
-HEAD = "0005"
+HEAD = "0006"
 WIDE_COLUMNS: tuple[str, ...] = (
     "nct_id", *LIVE_FIELDS, "feature_hash", *FIRST_FIELDS, "n_versions", "ever_suspended",
     "recent_post_dates", "lapse_from", "reversal", "run_id",
@@ -26,6 +26,10 @@ VERSION_COLUMNS: tuple[str, ...] = ("nct_id", *LIVE_FIELDS, "feature_hash", "run
 
 class LeaseError(RuntimeError):
     """Another job holds the lease."""
+
+
+class LeaseLostError(LeaseError):
+    """This job's lease was taken over (it went stale): the job stops without writing."""
 
 
 class SchemaError(RuntimeError):
@@ -43,13 +47,14 @@ def check_head(cur: Any) -> None:
 
 def start_run(cur: Any, job: str, kind: str, data_day: dt.date | None, stale_minutes: int) -> int:
     """A running row for this job, or LeaseError when another job is running. A running row
-    older than `stale_minutes` is stale and marked failed first."""
+    whose last renewal is older than `stale_minutes` is stale and marked failed first
+    (ADR 0060: renewal, not the start, keeps a lease)."""
     import psycopg
 
     cur.execute(
         """UPDATE monitoring.pipeline_runs SET status = 'failed', finished_at = now(),
           error = 'stale lease' WHERE status = 'running'
-          AND started_at < now() - make_interval(mins => %s)""",
+          AND renewed_at < now() - make_interval(mins => %s)""",
         (stale_minutes,),
     )
     try:
@@ -63,14 +68,28 @@ def start_run(cur: Any, job: str, kind: str, data_day: dt.date | None, stale_min
     return int(row[0])
 
 
+def renew(cur: Any, run_id: int) -> None:
+    """Renew this job's lease, or raise LeaseLostError when it was taken over (ADR 0060).
+    Called at every stage and first in every write transaction: the row lock it takes holds
+    off a takeover until the transaction ends, so a write never lands after one."""
+    row = cur.execute(
+        """UPDATE monitoring.pipeline_runs SET renewed_at = now()
+        WHERE run_id = %s AND status = 'running' RETURNING run_id""",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise LeaseLostError(f"run {run_id} lost its lease (taken over as stale)")
+
+
 def finish_run(
     cur: Any, run_id: int, status: str, counts: Mapping[str, Any], error: str | None = None
 ) -> None:
+    """End a run that still holds its lease; LeaseLostError otherwise (ADR 0060)."""
     cur.execute(
         """UPDATE monitoring.pipeline_runs SET status = %s, finished_at = now(),
           watermark_from = %s, watermark_to = %s, records_fetched = %s, versions_added = %s,
           records_quarantined = %s, trials_rescored = %s, details = %s, error = %s
-        WHERE run_id = %s""",
+        WHERE run_id = %s AND status = 'running'""",
         (
             status, counts.get("watermark_from"), counts.get("watermark_to"),
             counts.get("records_fetched"), counts.get("versions_added"),
@@ -78,6 +97,8 @@ def finish_run(
             json.dumps(counts.get("details", {}), default=str), error, run_id,
         ),
     )  # fmt: skip
+    if cur.rowcount != 1:
+        raise LeaseLostError(f"run {run_id} lost its lease (taken over as stale)")
 
 
 def last_run(cur: Any, job: str, kind: str | None = None) -> dict[str, Any] | None:
@@ -389,6 +410,16 @@ def save_score_file(cur: Any, day: dt.date, model_version: str, content: bytes, 
     )  # fmt: skip
 
 
+# Every table the daily job writes (held to its SQL by tests/live/test_store.py): a rebuild
+# clears them all, so nothing of an earlier live state survives it.
+REBUILT_TABLES: tuple[str, ...] = (
+    "live.trial_state", "live.study_versions", "live.sponsor_file", "live.outcome_events",
+    "live.quarantine", "serving.amendment_markers", "serving.trial_scores_latest",
+    "serving.trial_score_history", "serving.trials_not_scored", "serving.trial_display",
+    "serving.sponsors", "monitoring.score_files",
+)  # fmt: skip
+
+
 def load_bootstrap(
     cur: Any,
     wides: Mapping[str, Wide],
@@ -399,15 +430,22 @@ def load_bootstrap(
 ) -> int:
     """Load seeded state (`live.seed`) in the caller's one transaction, with a succeeded
     `bootstrap` run whose watermark is the release date (ADR 0045). Refuses over live rows
-    unless `rebuild`. The bootstrap command itself runs on the laptop (ADR 0040)."""
+    unless `rebuild`. A rebuild takes the lease first, then clears every table the daily job
+    writes (`REBUILT_TABLES`), every other run's row, and the daily job's columns of
+    `serving.data_status` (the reason counts' `labeled_through` is the laptop's and stays), so
+    the next daily run is a first run on the new state. The bootstrap command itself runs on
+    the laptop (ADR 0040)."""
     present = cur.execute("SELECT count(*) FROM live.trial_state").fetchone()[0]
     if present and not rebuild:
         raise RuntimeError("live state exists: the bootstrap refuses to load over it")
+    run_id = start_run(cur, "bootstrap", "bootstrap", release, 120)  # the lease, first
     if rebuild:
-        for table in ("live.trial_state", "live.study_versions", "live.sponsor_file",
-                      "serving.amendment_markers"):  # fmt: skip
-            cur.execute(f"DELETE FROM {table}")
-    run_id = start_run(cur, "bootstrap", "bootstrap", release, 120)
+        cur.execute(f"TRUNCATE {', '.join(REBUILT_TABLES)}")
+        cur.execute("DELETE FROM monitoring.pipeline_runs WHERE run_id <> %s", (run_id,))
+        cur.execute(
+            """UPDATE serving.data_status SET data_as_of = NULL, model_version = NULL,
+              early_stops_after_labels = NULL, updated_at = now()"""
+        )
     sponsors.last_run_id = run_id
     save_wides(cur, wides.values(), run_id)
     save_file(cur, sponsors)

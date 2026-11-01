@@ -10,7 +10,7 @@ Neon's free compute suspends when idle; a keep-alive every 5 minutes or less wou
 
 ## Decision
 
-1. **Connection.** `API_DATABASE_URL` is Neon's pooled URL for a role created by SQL (`scripts/api_role.sql`) that may read the `serving` schema only. SQLAlchemy's pool with pre-ping and a 15-second connect timeout; a request that finds Neon waking is retried once; if Neon still does not answer, 503 with `Retry-After` and the notice.
+1. **Connection.** `API_DATABASE_URL` is Neon's pooled URL for a role created by SQL (`uv run python -m trialpulse.live.api_role`, in `src/trialpulse/live/api_role.py`) that may read the `serving` schema only. SQLAlchemy's pool with pre-ping and a 15-second connect timeout; a request that finds Neon waking is retried once; if Neon still does not answer, 503 with `Retry-After` and the notice.
 2. **Prepared statements.** psycopg prepares a statement automatically after five executions, which a transaction-mode pooler may not carry between connections. Neon's documentation could not be read from the cloud session, so automatic preparing is turned off (`prepare_threshold=None`): correct whether or not the pooler supports it, at a negligible cost. Confirming Neon's behavior is left to the laptop.
 3. **Cache.** Answers are cached in memory, keyed by the data-as-of date and the request. **The data-as-of date is read from Neon at most once every 15 minutes, never per request**, so a cached answer never wakes the compute.
 4. **Rate limit.** Per client address, taken from the `X-Forwarded-For` entry that Spaces' proxy appends (the last one), not the proxy's own address; 429 with `Retry-After` and the notice above the limit.

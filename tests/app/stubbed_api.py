@@ -33,7 +33,8 @@ def response(entry: dict[str, Any]) -> httpx.Response:
 class StubApi:
     """What the dashboard asked and how the stub answered. `fail` queues failures that come
     before the recorded answers, for every path or for paths that start with `on`: "connect"
-    (refused), "timeout", "proxy" (the platform's 502 without the API's notice), "waking" (the
+    (refused), "timeout", "proxy" (the platform's 502 without the API's notice), "platform"
+    (a 200 page that is not the API's JSON), "waking" (the
     API's recorded 503), "busy" (its recorded 429) or "error" (a 500). `always` fails every
     request; `override` replaces the body of one recorded answer."""
 
@@ -74,6 +75,8 @@ class StubApi:
             return httpx.Response(500, json={"detail": "Internal Server Error"})
         if kind == "proxy":
             return httpx.Response(502, text="<html>Bad gateway</html>")
+        if kind == "platform":  # a 200 page of the platform, not the API's JSON
+            return httpx.Response(200, text="<html>This Space is starting</html>")
         if kind == "waking":
             return response(NAMED["database waking"])
         if kind == "busy":
