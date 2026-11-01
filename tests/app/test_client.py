@@ -129,7 +129,9 @@ def test_each_attempt_has_a_30_second_timeout() -> None:
      httpx.Response(200, json=["a", "list"]),
      httpx.Response(404, text="<html>Space not found</html>")],
 )  # fmt: skip
-def test_an_answer_that_is_not_the_apis_is_never_returned(clock: Clock, page: httpx.Response) -> None:
+def test_an_answer_that_is_not_the_apis_is_never_returned(
+    clock: Clock, page: httpx.Response
+) -> None:
     """Review finding 9: a 200 that was not the API's JSON reached the page (a KeyError) and
     was cached for 15 minutes. It is now waited out like the service starting."""
     answer, messages = run(clock, page, httpx.Response(200, json=ENVELOPE))
