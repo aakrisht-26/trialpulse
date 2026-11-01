@@ -2563,8 +2563,8 @@ About 5,850 lines of code and tests were added (366 removed) in 9 commits after 
 | Neon: the project, `NEON_DATABASE_URL`, `SPONSOR_ID_KEY` (new in Section 17, ADR 0044) and the three MLflow names as GitHub secrets, `gh secret list` | Needs Aakrisht's accounts |
 | Registering the ADR 0034 decisions (`step13_checks.json`) with the champion, so `live.daily` finds them in the fetched bundle | Needs the laptop's `data/` and DagsHub |
 | Dispatching `timing.yml` | Needs the MLflow secrets in GitHub |
-| The weekly backup scheduled task and the retention export-then-delete command | Run on the laptop against Neon; the export command is not built yet |
-| Moving `huggingface-hub` out of the default dependencies (ADR 0040 item 5) | Deferred as the ADR says; the import test already shows no workflow module loads it |
+| The weekly backup scheduled task, and running the retention command | Run on the laptop against Neon. The command itself was built in the last cloud task (below) |
+| ~~Moving `huggingface-hub` out of the default dependencies (ADR 0040 item 5)~~ | Done in the last cloud task (below) |
 
 **Decisions made without asking (flagged)**
 
@@ -2663,6 +2663,65 @@ uv run mypy src
 docker compose up -d
 uv run pytest -q -m "slow or not slow"
 ```
+
+### The last cloud task (2026-11-01, branch `step-14-last`)
+
+Approved by Aakrisht with the four decisions of the fixes. Three items:
+
+**1. The retention command of ADR 0045** (`src/trialpulse/live/retention.py`):
+
+```powershell
+uv run python -m trialpulse.live.retention --target neon
+```
+
+- **What it exports:** the score history and live versions older than `live.retention_months` (12) before `--as-of` (default today), to `data/live_exports/` as Parquet, with a JSON manifest.
+- **Verification before any delete:** each file is read back from disk and compared with the database rows by count and by a SHA-256 over every value. Only then are the rows deleted, by the same condition. The delete must remove exactly the exported count, or the transaction is rolled back and nothing is deleted.
+- **Transactions and the lease:** each table is one transaction, under the job lease, so it never overlaps a daily run.
+- **What it keeps:**
+  - each trial's newest history row, which the next publication compares with;
+  - each trial's newest live version, which ingest compares a record with;
+  - any version the sponsor pass has not consumed.
+- **Options and limits:** `--export-only` stops after the check. It refuses on a runner.
+- **Tests on this VM's Postgres:**
+  - the right rows are exported and deleted, every value intact in the file;
+  - a second run finds nothing;
+  - export-only keeps the rows;
+  - a file that lost a row, or changed a value, deletes nothing and records a failed run;
+  - the lease and the runner refusal.
+- **Faults:** three faults against these tests were all caught: deleting without the check, not keeping the newest history row, and not protecting unconsumed versions.
+
+**2. The dataset client off the runners** (ADR 0040 item 5, now done):
+
+- **The move:** `huggingface-hub` is no longer a dependency of the package. It is the dependency group `dataset`, set as a default group with `dev`, so a plain `uv sync` on the laptop (and in CI, where `mypy src` needs it) installs it exactly as before, and no laptop command changes.
+- **The runners:** `daily.yml` and `timing.yml` install with `uv sync --locked --no-dev --no-group dataset`.
+- **`datasets`:** never a dependency of this project (it is not in `pyproject.toml` or `uv.lock`), so there was nothing to move.
+- **The lockfile:** `uv lock` changed only the group of `huggingface-hub`; no version moved.
+- **Checked by a real install:** the runners' install into a scratch environment outside the repository imports `trialpulse.live.daily`, `.timing` and `.registry` with neither `huggingface_hub` nor the dev tools installed. A plain `uv sync` installs both.
+- **Held by `tests/test_workflows.py`:**
+  - the package's dependencies hold no dataset package, and the `dataset` group is a default group;
+  - every `uv sync` of the live workflows has `--locked --no-dev --no-group dataset`;
+  - those workflows run nothing but that sync and the project's own modules;
+  - the lockfile's export for the runners holds no dataset package, while the laptop's holds `huggingface-hub`.
+
+**3. Regenerating the cutoff over the converted Step 13 rows** (`tests/scoring/test_publish.py`):
+
+- **The setup:** the test writes Step 13-shaped rows at revision 0003 (the cutoff, every row a first score, canonical content hashes, JSON drivers), lets migration 0004 convert them, and then publishes the cutoff's regenerated scores with feature hashes.
+- **The result:** no history row says `record_change`. A later run with the same records writes no history row, and a real record change still shows.
+- **It passed without a fix.** The regeneration is dated the cutoff, the same day as the Step 13 rows, and history compares only with rows of earlier days, so the converted rows are replaced as first scores.
+- **A condition for the bootstrap:** it must regenerate at the cutoff date, as ADR 0040 item 2 says. A regeneration dated later would compare each new feature hash with an old canonical hash and mark every trial as a record change.
+
+**Decisions made without asking (flagged)**
+
+1. **What retention keeps:**
+   - each trial's newest history row and newest live version, even when older than 12 months, because the next run compares with them;
+   - every version the sponsor pass has not consumed.
+2. **One transaction per table,** so a failure in the second table leaves the first table's verified export and delete in place.
+3. **`--export-only`** was added to stop after the check; the default does all three steps, as asked.
+4. **The runner refusal of retention** uses its own message: the rows are live rows, not the dataset, but the files belong on the laptop.
+
+**Checks** (this VM, run the CI way with `TRIALPULSE_REQUIRE_POSTGRES=1`): `ruff check .` clean, `ruff format --check .` clean (280 files), `mypy src` clean (112 files), `pytest -q -m "slow or not slow"`: **1,180 passed, 11 skipped** (10 need `data/`, one needs Windows).
+
+**Files touched:** `pyproject.toml`, `uv.lock`, `.github/workflows/daily.yml`, `.github/workflows/timing.yml`, `src/trialpulse/live/retention.py` (new), `tests/live/test_retention.py` (new), `tests/test_workflows.py`, `tests/scoring/test_publish.py`, `docs/adr/0040-the-gated-dataset-stays-on-the-laptop.md`, `docs/progress.md`.
 
 ### The options (2026-11-01, before the decisions)
 

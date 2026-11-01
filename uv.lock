@@ -1704,7 +1704,6 @@ dependencies = [
     { name = "alembic" },
     { name = "duckdb" },
     { name = "httpx" },
-    { name = "huggingface-hub" },
     { name = "joblib" },
     { name = "lifelines" },
     { name = "lightgbm" },
@@ -1725,6 +1724,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+dataset = [
+    { name = "huggingface-hub" },
+]
 dev = [
     { name = "mypy" },
     { name = "pre-commit" },
@@ -1739,7 +1741,6 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.20.0" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "huggingface-hub", specifier = ">=1.32.0" },
     { name = "joblib", specifier = ">=1.6.0" },
     { name = "lifelines", specifier = ">=0.30.3" },
     { name = "lightgbm", specifier = ">=4.7.0" },
@@ -1760,6 +1761,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+dataset = [{ name = "huggingface-hub", specifier = ">=1.32.0" }]
 dev = [
     { name = "mypy", specifier = ">=2.3.1" },
     { name = "pre-commit", specifier = ">=4.6.2" },
