@@ -553,3 +553,115 @@ def test_a_trial_that_ends_loses_its_display_row(dsn: str) -> None:
         shown = con.execute("SELECT count(*) FROM serving.trial_display WHERE nct_id = %s",
                             (nct,)).fetchone()  # fmt: skip
     assert shown == (0,)
+
+
+# Neon's idle-in-transaction limit (ADR 0058) ------------------------------------------------
+
+IDLE_LIMIT_MS = 1000  # Neon: 300000 (5 minutes); scaled down with every wait below
+SLOW = 1.5  # seconds: longer than the limit, as a full run's drivers are longer than 5 minutes
+
+
+def _limited(dsn: str) -> str:
+    """The job's connection string with the session limit lowered on every connection it
+    opens (the main one, publication's and VACUUM's)."""
+    from psycopg import conninfo
+
+    return conninfo.make_conninfo(
+        dsn, options=f"-c idle_in_transaction_session_timeout={IDLE_LIMIT_MS}"
+    )
+
+
+def _slow_api() -> ApiClient:
+    """The recorded pages, each answered after a wait (the pull of a long catch-up run)."""
+    import time
+
+    respx.get(VERSION_URL).mock(return_value=httpx.Response(200, json=_load("version.json")))
+
+    def page(request: httpx.Request) -> httpx.Response:
+        time.sleep(SLOW)
+        name = "delta_page_2.json" if "pageToken" in request.url.params else "delta_page_1.json"
+        return httpx.Response(200, json=_load(name))
+
+    respx.get(STUDIES_URL).mock(side_effect=page)
+    return ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+
+
+def _slow_scorer(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    import time
+
+    time.sleep(SLOW)  # the drivers of a full run
+    return _scorer(scored, features, day)
+
+
+@respx.mock
+def test_the_limit_ends_a_session_idle_in_a_transaction(dsn: str) -> None:
+    """The control for the test below: the lowered limit does end an idle transaction."""
+    import time
+
+    with psycopg.connect(_limited(dsn)) as con:
+        assert con.execute("SHOW idle_in_transaction_session_timeout").fetchone() == ("1s",)
+        time.sleep(SLOW)
+        with pytest.raises(psycopg.Error, match="idle-in-transaction timeout"):
+            con.execute("SELECT 1").fetchone()
+
+
+@respx.mock
+def test_runs_that_wait_longer_than_the_idle_limit_succeed(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The review's two-run reproduction (finding 1): with the limit lowered and a slow pull,
+    sponsor pass and scorer, the job held a transaction open while it waited, the session was
+    ended, every run failed at publication and stayed a full run. Now no transaction is open
+    while the job waits, and both runs succeed."""
+    import time
+
+    _bootstrap(dsn)
+    advance = daily.engine.advance
+
+    def slow_advance(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(SLOW)
+        return advance(*args, **kwargs)
+
+    monkeypatch.setattr(daily.engine, "advance", slow_advance)
+    model = daily.Model("stand-in/1", _slow_scorer, DECISIONS)
+    limited = _limited(dsn)
+    first = daily.run_daily(CFG, limited, SECRET, _slow_api(), model)
+    assert (first.status, first.exit_code) == ("succeeded", 0)
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT run_kind, status FROM monitoring.pipeline_runs "
+                           "WHERE job = 'daily' ORDER BY run_id").fetchall()  # fmt: skip
+        assert runs == [("full", "succeeded")]
+        assert con.execute("SELECT data_as_of FROM serving.data_status").fetchone() == (DAY,)
+        assert con.execute("SELECT count(*) FROM monitoring.score_files").fetchone() == (1,)
+    second = daily.run_daily(CFG, limited, SECRET, _slow_api(), model, force=True)
+    assert second.status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        runs = con.execute("SELECT run_kind, status FROM monitoring.pipeline_runs "
+                           "WHERE job = 'daily' ORDER BY run_id").fetchall()  # fmt: skip
+    assert runs == [("full", "succeeded"), ("daily", "succeeded")]
+
+
+@respx.mock
+def test_a_failure_is_recorded_when_the_jobs_connection_is_gone(dsn: str) -> None:
+    """The run's own connection is ended while it scores (as Neon ends a session, or a network
+    drops): the failure is recorded on a fresh connection, so the run is not left running
+    and its lease is free at once."""
+
+    def ending(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+        with psycopg.connect(dsn, autocommit=True) as other:
+            other.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            )
+        return _scorer(scored, features, day)
+
+    _bootstrap(dsn)
+    with pytest.raises(daily.JobFailedError, match=r"^publish: "):
+        daily.run_daily(CFG, dsn, SECRET, _api(), daily.Model("stand-in/1", ending, DECISIONS))
+    with psycopg.connect(dsn) as con:
+        status, error = con.execute(
+            "SELECT status, error FROM monitoring.pipeline_runs WHERE job = 'daily'"
+        ).fetchone()
+    assert status == "failed"
+    assert error.startswith("publish: ")
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"

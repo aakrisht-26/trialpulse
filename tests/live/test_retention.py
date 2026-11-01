@@ -177,3 +177,28 @@ def test_retention_refuses_on_a_runner(
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     with pytest.raises(RefusedError, match="never runs on a runner"):
         retention.retain(_dsn(scratch), AS_OF, 12, tmp_path)
+
+
+def test_a_slow_export_does_not_idle_in_a_transaction(
+    scratch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0058: the export and its check run with no transaction open, so a file that takes
+    longer to write than Neon's idle-in-transaction limit (here lowered to 1 second) does
+    not end the session; the rows are still exported, verified and deleted."""
+    import time
+
+    from psycopg import conninfo
+
+    dsn = _dsn(scratch)
+    _rows(dsn)
+    real = retention._write
+
+    def slow(path: Path, rows: Any) -> None:
+        time.sleep(1.5)
+        real(path, rows)
+
+    monkeypatch.setattr(retention, "_write", slow)
+    limited = conninfo.make_conninfo(dsn, options="-c idle_in_transaction_session_timeout=1000")
+    results = retention.retain(limited, AS_OF, 12, tmp_path)
+    assert all(r.deleted == r.rows for r in results)
+    assert sum(r.deleted for r in results) > 0

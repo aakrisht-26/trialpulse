@@ -7,19 +7,25 @@ A run, in order (ADR 0037 decision 5):
 
 1. **The date d** is API v2's `dataTimestamp`. A Saturday or Sunday does nothing, and so
    does a day that already has a succeeded run (the second cron), unless `--force`.
-2. **Ingest** (one transaction): pull from the watermark minus the overlap through d,
-   convert, quarantine what fails the contract, stop on the NULL gate or a short overlap,
-   apply the records to the wide rows, append the kept records, record outcome events,
-   lapse exits and amendment markers.
-3. **The sponsor pass** (one transaction): the versions of runs the file has not consumed,
-   through d minus one day; the file is written once.
+2. **Ingest** (its writes in one transaction): pull from the watermark minus the overlap
+   through d and convert, with no transaction open; quarantine what fails the contract,
+   stop on the NULL gate or a short overlap, apply the records to the wide rows; then write
+   the kept records, outcome events, lapse exits and amendment markers in one transaction.
+3. **The sponsor pass** (its write in one transaction): the versions of runs the file has
+   not consumed, through d minus one day, computed with no transaction open; the file is
+   written once.
 4. **Publication**: the population of d, the scope (every open trial on a full run, which
    is due every 7 days; else the trials whose record, landmark or model changed), features
-   through the shared final SELECT, scores and drivers from the champion, and
-   `scoring.serving.publish` within the scope. A full run also stores the month's score file.
+   through the shared final SELECT, scores and drivers from the champion, all with no
+   transaction open, then `scoring.serving.publish` within the scope. A full run also
+   stores the month's score file.
+
+No transaction is ever open while the job waits on the API or computes (ADR 0058): Neon
+ends a session idle inside a transaction after 5 minutes.
 
 Failures record the stage, the exception type and the SQLSTATE only (ADR 0040): never a
-message, which could hold a row. Quarantined records end the run in failure after
+message, which could hold a row. A failure is recorded on a fresh connection, since the
+run's own connection may be what failed. Quarantined records end the run in failure after
 publishing, so the failure issue opens. VACUUM runs at the end, whatever happened.
 
 The job refuses to run under GitHub Actions without SPONSOR_ID_KEY, refuses a database not
@@ -27,6 +33,7 @@ at the migration head, and refuses before the bootstrap has run.
 """
 
 import argparse
+import contextlib
 import datetime as dt
 import io
 import time as clock
@@ -153,7 +160,15 @@ def run_daily(
     force: bool = False,
     fail_after: str | None = None,
 ) -> Report:
-    """One run of the daily job (see the module text)."""
+    """One run of the daily job (see the module text).
+
+    No transaction is open while the job waits on the API or computes (ADR 0058): the
+    connection runs in autocommit, so each read is its own statement, and every write sits in
+    a short explicit transaction. Neon ends a session that stays idle inside a transaction for
+    5 minutes (`idle_in_transaction_session_timeout`), and a full run's drivers take longer.
+    Reads and the writes that follow them are separate transactions; the lease keeps every
+    other writer out between them.
+    """
     import psycopg
 
     live = cfg.live
@@ -162,7 +177,7 @@ def run_daily(
         return Report("weekend", day)
     rules = CohortRules.from_config(cfg, cutoff=max(day, cfg.dataset.cutoff or day))
     try:
-        con = psycopg.connect(dsn, connect_timeout=10)
+        con = psycopg.connect(dsn, connect_timeout=10, autocommit=True)
     except psycopg.Error as exc:
         raise JobFailedError(failure_line("connect", exc), type(exc).__name__) from None
     report = Report("running", day)
@@ -175,17 +190,16 @@ def run_daily(
             if boot is None:
                 raise RefusedError("the bootstrap has not run: no live state to update")
             if not force and store.day_succeeded(cur, day):
-                con.rollback()
                 return Report("noop", day)
             previous = store.last_run(cur, "daily") or boot
             last_full = store.last_run(cur, "daily", "full")
             full = runs.full_run_due(last_full["data_timestamp"] if last_full else None, day,
                                      live.full_run_days)  # fmt: skip
-            report.run_id = store.start_run(cur, "daily", "full" if full else "daily", day,
-                                            live.lease_stale_minutes)  # fmt: skip
-            con.commit()
+            with con.transaction():
+                report.run_id = store.start_run(cur, "daily", "full" if full else "daily",
+                                                day, live.lease_stale_minutes)  # fmt: skip
 
-            # 1. Ingest --------------------------------------------------------------------
+            # 1. Ingest: the pull and the conversion run outside any transaction -------------
             stage, tick = INGEST, clock.perf_counter()
             latest = store.latest_post_date(cur) or boot["watermark_to"]
             mark = runs.watermark(latest, day)
@@ -216,19 +230,19 @@ def run_daily(
                 missing = runs.missing_overlap(store.overlap_rows(cur, since), newest, since)
                 if len(missing) > live.max_missing_overlap:
                     raise pull.PullError(f"{len(missing)} stored overlap rows were not returned")
+            lapsed = store.lapsed_between(cur, previous["data_timestamp"], day)
             done = engine.ingest(memory, records, rules, day, live.recent_post_days)
-            exits = lapse_events(store.lapsed_between(cur, previous["data_timestamp"], day),
-                                 previous["data_timestamp"], day)  # fmt: skip
-            store.save_ingest(cur, done, report.run_id)
+            exits = lapse_events(lapsed, previous["data_timestamp"], day)
             # Display rows (ADR 0051) of the live trials whose record was applied today.
             applied = {str(r["nct_id"]) for r in records}
             shown = [r for r in display.display_rows(pulled.studies, secret)
                      if r.nct_id in applied and r.nct_id in memory.wides]  # fmt: skip
-            display.save(cur, shown)
-            display.remove(cur, done.dropped)
-            store.save_events(cur, exits, report.run_id)
-            store.quarantine(cur, converted.quarantined, report.run_id)
-            con.commit()
+            with con.transaction():
+                store.save_ingest(cur, done, report.run_id)
+                display.save(cur, shown)
+                display.remove(cur, done.dropped)
+                store.save_events(cur, exits, report.run_id)
+                store.quarantine(cur, converted.quarantined, report.run_id)
             timings[INGEST] = clock.perf_counter() - tick
             report.counts.update(
                 watermark_from=since, watermark_to=mark, records_fetched=len(pulled.studies),
@@ -240,27 +254,30 @@ def run_daily(
             if fail_after == INGEST:
                 raise InjectedFailureError(INGEST)
 
-            # 2. The sponsor pass -----------------------------------------------------------
+            # 2. The sponsor pass: computed outside any transaction, written in one ---------
             stage, tick = SPONSORS, clock.perf_counter()
             sponsors = store.load_file(cur)
             pending = [v for v in store.versions_after(cur, sponsors.last_run_id)
                        if v["run_id"] <= report.run_id]  # fmt: skip
             if pending or sponsors.through_day < day - dt.timedelta(days=1):
                 engine.advance(engine.Memory({}, sponsors), pending, day, rules, report.run_id)
-                store.save_file(cur, sponsors)  # the pass's one commit point
-                con.commit()
+                with con.transaction():
+                    store.save_file(cur, sponsors)  # the pass's one commit point
             timings[SPONSORS] = clock.perf_counter() - tick
             if fail_after == SPONSORS:
                 raise InjectedFailureError(SPONSORS)
 
-            # 3. Publication ----------------------------------------------------------------
+            # 3. Publication: features, scores and drivers outside any transaction ----------
             stage, tick = PUBLISH, clock.perf_counter()
             if sponsors.through_day < day - dt.timedelta(days=1):
                 raise RefusedError(f"the sponsor pass is behind: through {sponsors.through_day}")
-            rescored = publish_day(cur, cfg, rules, day, sponsors, model, full, dsn,
-                                   report.run_id)  # fmt: skip
-            store.set_data_status(cur, day, model.version, rules.early_stop)
-            con.commit()
+            rescored, file = publish_day(cur, cfg, rules, day, sponsors, model, full, dsn,
+                                         report.run_id)  # fmt: skip
+            with con.transaction():
+                if file is not None:
+                    store.save_score_file(cur, day, model.version, file[0], file[1],
+                                          report.run_id)  # fmt: skip
+                store.set_data_status(cur, day, model.version, rules.early_stop)
             timings[PUBLISH] = clock.perf_counter() - tick
             report.counts["trials_rescored"] = rescored
             size = store.database_mb(cur)
@@ -270,8 +287,8 @@ def run_daily(
             status = "failed" if converted.quarantined else "succeeded"
             error = (f"QuarantinedRecords: {len(converted.quarantined)}"
                      if converted.quarantined else None)  # fmt: skip
-            store.finish_run(cur, report.run_id, status, report.counts, error)
-            con.commit()
+            with con.transaction():
+                store.finish_run(cur, report.run_id, status, report.counts, error)
             report.status = status
             if converted.quarantined:
                 report.exit_code = QUARANTINED_EXIT
@@ -281,21 +298,31 @@ def run_daily(
     except BaseException as exc:
         if isinstance(exc, KeyboardInterrupt | SystemExit):
             raise
-        try:
-            con.rollback()
-            if report.run_id is not None:
-                with con.cursor() as cur:
-                    error = f"{stage}: {type(exc).__name__} {_sqlstate(exc)}".strip()
-                    store.finish_run(cur, report.run_id, "failed", report.counts, error)
-                    con.commit()
-        except Exception:
-            pass
+        if report.run_id is not None:
+            error = f"{stage}: {type(exc).__name__} {_sqlstate(exc)}".strip()
+            record_failure(dsn, report.run_id, report.counts, error)
         if isinstance(exc, RefusedError):  # the job's own refusals, written without values
             raise
         raise JobFailedError(failure_line(stage, exc), type(exc).__name__) from None
     finally:
-        con.close()
+        with contextlib.suppress(Exception):
+            con.close()
         _vacuum(dsn)
+
+
+def record_failure(dsn: str, run_id: int, counts: Mapping[str, Any], error: str) -> bool:
+    """Mark the run failed on a fresh connection: the run's own connection may be the thing
+    that failed (a session Neon ended, a dropped network). Returns whether it was written;
+    a failure here is ignored, and the stale lease then releases the run."""
+    import psycopg
+
+    try:
+        with psycopg.connect(dsn, connect_timeout=10) as fresh, fresh.cursor() as cur:
+            store.finish_run(cur, run_id, "failed", counts, error)
+            fresh.commit()
+    except Exception:
+        return False
+    return True
 
 
 def publish_day(
@@ -308,8 +335,11 @@ def publish_day(
     full: bool,
     dsn: str,
     run_id: int,
-) -> int:
-    """Score the run's scope on `day` and publish it; returns the trials rescored."""
+) -> tuple[int, tuple[bytes, int] | None]:
+    """Score the run's scope on `day` and publish it; returns the trials rescored and, on a
+    full run, the month's score file and its row count for the caller to store. `cur` must
+    be in autocommit: the reads here are single statements, and the scoring that follows
+    them runs with no transaction open (ADR 0058)."""
     rows = store.population_rows(cur, day, rules.open_statuses, rules.study_type,
                                  rules.min_first_post_date)  # fmt: skip
     people = pd.DataFrame(rows, columns=["trial_id", "t0", "reversal", "content_hash",
@@ -334,12 +364,12 @@ def publish_day(
     unscored.insert(1, "as_of_date", np.datetime64(day, "D"))
     serving.publish(Scored(scores, unscored.reset_index(drop=True), {}), cfg, dsn,
                     scope=chosen.trials, run_id=run_id, day=day)  # fmt: skip
+    file = None
     if full and len(scores):
         classes = dict(zip(people["trial_id"], people["sponsor_class"], strict=True))
         with_class = scores.assign(sponsor_class=scores["nct_id"].map(classes))
-        store.save_score_file(cur, day, model.version, score_file(with_class), len(scores),
-                              run_id)  # fmt: skip
-    return len(scored)
+        file = (score_file(with_class), len(scores))
+    return len(scored), file
 
 
 def _empty_scores() -> pd.DataFrame:
