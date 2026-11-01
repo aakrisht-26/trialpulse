@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 14 (live ingestion and daily workflow)**: the options are reported and wait for Aakrisht's decisions, as his review of Step 13 asked (see "Step 14" below). Nothing is built yet. Step 13 was approved on 2026-10-31.
+Current step: **Step 14 (live ingestion and daily workflow)**: Aakrisht decided the options on 2026-11-01 (ADRs 0037 to 0045). A cloud session built every part that needs neither `data/` nor Neon, on branch `step-14-cloud` (see "Step 14", "The cloud build"); the laptop and Neon parts remain. Step 13 was approved on 2026-10-31.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ Current step: **Step 14 (live ingestion and daily workflow)**: the options are r
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Options reported 2026-11-01, waiting for Aakrisht's decisions; nothing built |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045); the cloud part built on `step-14-cloud`, waiting for review; the laptop and Neon parts not started |
 | 15 | API service | Not started |
 | 16 | Dashboard | Not started |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2501,6 +2501,110 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
 
 ## Step 14: Live ingestion and daily workflow
+
+### The cloud build (2026-11-01, branch `step-14-cloud`)
+
+Status: **the parts that need neither `data/` nor Neon are built and tested in a cloud session; waiting for review.** Aakrisht decided the options below on 2026-11-01: Option 3, Parity C, Grades 1 with replay rows on the laptop, compact rows with the export adapter, his reading of rule 2 (the retrain and the gate move to the laptop), Gap (b), the census on four conditions, markers with the risk line from go-live, keyed sponsor ids with a display-name rule, and the defaults of decisions 10 to 14 (backups by a weekly scheduled task on the laptop). The session had no `data/`, no laptop and no Neon. Evidence below is from its shell on Linux with Postgres 16; it is not a claim about the laptop.
+
+**ADRs first.** ADRs 0037 to 0045 record the 14 decisions, each with its Amendments line in CLAUDE.md, in the first commit of the branch (`e47cbf2`), before any code.
+
+**What was built**
+
+| Part | Where | Held by |
+| --- | --- | --- |
+| The `normalize_text` fix: a Markdown line that is only an HTML comment is a blank line; HTML texts keep their path | `contracts/text.py` | Two tests: the API form and the HTML form of the same criteria normalize alike; an HTML text with a comment is unchanged |
+| Migration 0004: the wide `live.trial_state`, compact `live.study_versions`, `live.sponsor_file`, a unique quarantine payload hash, the kind of an outcome event (status, lapsed, reopened), compact serving rows (drivers as four arrays, hashes as bytes, `run_id` on history), `serving.amendment_markers`, aggregate `monitoring.graded_predictions`, `monitoring.score_files`, `data_timestamp` and `run_kind` on runs, one running job at a time | `alembic/versions/0004_compact_live_state.py` | Upgrade, downgrade, upgrade on Postgres 16; Step 13's served rows converted both ways (tested); the compact columns held to the live contract and the feature numbers to the registry |
+| The compact live row: the fields served features read, the submitted status, the resolved title phase, distinct intervention pairs, the keyed sponsor id (HMAC-SHA256 under `SPONSOR_ID_KEY`), the feature hash, marker codes and the display-name rule | `live/contract.py` | A field no feature reads never moves the hash; one a feature reads always does; the id is keyed and only for a sponsor with an identity; 15 display-name cases |
+| The shared final SELECT: `feature_select_sql` reads one relation of feature inputs; the offline build joins its at-landmark rows into it | `features/select.py`, `features/build.py` | The offline feature table of the synthetic registry is byte-identical to the one before the change, with and without text (digest pinned in a test) |
+| The resumable sponsor pass: `track_records` runs through `SponsorPass`, which saves and restores its whole state | `features/sponsor.py` | Stopped and restored every 40th day of the synthetic registry: the answers of one pass |
+| State accumulation and event derivation: the decision table of Part 1, outcome events, lapse exits, markers | `live/state.py`, `live/engine.py` | Hand-worked fixtures: a new version, a same-date replacement, an earlier record, a closed trial refetched and reopened, a trial that ends, a new trial and a new key, a late record, a lapse exit, a record after d refused |
+| The sponsor file: thin data per trial, the pass, a queue for records posted on d, events derived per state and ordered by the ids' text | `live/sponsors.py` | Parity C below, and a rename after the seed date checked on each day around its link day |
+| The seed: live state from a full version history as of a date (the core of the bootstrap) | `live/seed.py` | Parity C below |
+| Live features: the population, the open count and the inputs as of d, through the shared SELECT | `live/features.py` | **Parity C, layer 1:** live equals offline on the same feed, on every served feature and row, at every day after a posting day of a 300-trial synthetic registry (runs on each posting day and the day after), at spread dates with most runs missed, and around a rename's link day. A mutation that applies sponsor events one day late fails the last test; one that counts two versions for one fails the first |
+| The export adapter: compact rows back into what the offline code reads | `live/export.py` | The offline feature code on exported rows equals it on the original canonical rows, at every landmark of a 150-trial registry |
+| The API v2 delta client: the date from `dataTimestamp`, the `RANGE[since,d]` filter, the live `fields`, paging to the last token, failure on zero records or a short count, quarantine by payload hash with the failed checks only | `live/pull.py` | Two recorded pages and `/version` (scrubbed, in `tests/live/fixtures/`); seven changed API shapes quarantine with the check and never the value; a renamed optional field reads as NULL, which the gate catches |
+| Run control: the weekend rule, the watermark, the NULL gate, the overlap check, the full-run rule, the scope | `live/runs.py` | Through the daily tests |
+| The store and the daily job: three transactions (ingest, the sponsor pass, publication), the lease, failures recorded as stage, type and SQLSTATE only, the month's score file, VACUUM at the end | `live/store.py`, `live/daily.py`, `scoring/serving.py` (a scope, `run_id` and a date for `publish`) | On Postgres: a run publishes; the second cron is a no-op; a forced rerun changes no table; the crash matrix (fail after each committed stage, rerun) equals an uninterrupted run; quarantine ends the run in failure after publishing; the lease and a stale lease; no bootstrap refuses; a weekend does nothing; records that differ only in fields no feature reads change no table (ADR 0042, condition 4) |
+| The retention alerts: recorded at 600 MB, the run ends non-zero at 700 so the issue opens; nothing is deleted by the job | `live/daily.py` | One test per threshold |
+| `daily.yml`: the Section 12 cron and a second one 3 hours later, one run at a time, killed at 90 minutes, a warning past 60, and a separate notify job (on failure or cancel, main only, `issues: write` only) that reuses one open issue and carries the run link and the error class only | `.github/workflows/daily.yml` | `tests/test_workflows.py` |
+| The dispatch timing job of rule 3: the champion's predictions and drivers on rows generated from the feature types, `lscpu`, `/version` and one page from the runner | `.github/workflows/timing.yml`, `live/timing.py`, `live/registry.py` | Generated rows go through the real prediction and driver pass on a small fitted M4; the API check reports counts only |
+| The rule 2 guards: the dataset download refuses under GitHub Actions; every module a workflow starts is imported in a fresh interpreter and must not load `ingest.history`, `warehouse.build`, `features.build` or `huggingface_hub`; no workflow names a Hugging Face address, `data/raw` or the token; every action is pinned to a commit | `ingest/history.py`, `tests/test_workflows.py` | To pass, the pieces the daily job shares with Step 13 moved into modules that read no dataset (`features.select`, `features.arrays`, `scoring.predict`, `scoring.bundle`); the old modules re-export every name |
+| The connection check of `tests/scoring/test_publish.py` waits 10 seconds, as `alembic/env.py` does | | |
+
+About 5,850 lines of code and tests were added (366 removed) in 9 commits after the ADRs.
+
+**Checks run in the session (Linux, Python 3.12, Postgres 16 on this VM, as CI does)**
+
+- `ruff check .`: all checks passed. `ruff format --check .`: 277 files already formatted. `mypy src` (strict): no issues in 111 source files.
+- `pytest -q -m "slow or not slow"` with `DATABASE_URL` on this VM's Postgres: **1,131 passed, 12 skipped** in 5 minutes 28 seconds. The skip of `tests/eval/test_results.py` was this clone's missing tag: after `git fetch --tags` its 23 tests pass. The other 11 skip because their inputs exist only on the laptop:
+
+| Skipped test | Needs |
+| --- | --- |
+| `tests/eda/test_report.py` (2) | the warehouse, the cohort and the current-record snapshot in `data/` |
+| `tests/eval/test_hypotheses.py` (1) | the reason labels in `data/` |
+| `tests/models/test_discrete_time.py` (2) | the cohort in `data/` |
+| `tests/models/test_tuned_files.py` (3) | the Optuna study in `data/` |
+| `tests/nlp/test_llm_labeler.py` (1) | the LLM sample in `data/` |
+| `tests/scoring/test_parity.py` (1) | the real data and the cached 2016 development model |
+| `tests/test_cli.py` (1) | Windows (not data) |
+
+- `alembic upgrade head`, `downgrade base`, `upgrade head` on this VM's Postgres: clean.
+
+**Acceptance of Step 14: not met yet, by design of this session.** None of the four criteria can be met without the laptop and Neon: the first live run and the same-day no-op on Neon, the census (ADR 0042, replacing the 50 trials), and the storage estimate (Part 3) checked on Neon. What this session shows is the code those criteria will run, and its behavior on synthetic histories and recorded pages.
+
+**Left for the laptop, and why**
+
+| Item | Why not here |
+| --- | --- |
+| Items 10 and 13 in the warehouse: the content hash over the submitted status and intervention types in the canonical schema, then the rebuild, guarded by an old-against-new comparison of every column (which also shows whether any dataset text in plain form had a comment line), the feature build's "Identical to the previous build" and Step 13's risks and drivers | Needs `data/`. The live path already hashes the submitted status and carries intervention types in its own compact contract, so it does not wait on the rebuild; the warehouse's own `content_hash` is unchanged |
+| The bootstrap command: compact rows of every version from the warehouse and the interventions config, `live.seed`, the cutoff's scores regenerated with the feature hash as the content hash, the stop-reason labels, the amendment markers, one transaction with `store.load_bootstrap` | Needs `data/` and Neon. `seed` is plain Python over dicts and was run on hundreds of trials only; 4.4M versions may need chunking or a DuckDB form, to be measured first under the one-hour rule |
+| The gap read of ADR 0041 (an adapter for the new layout, at a pinned commit), after the real API pull from the cutoff | Needs the laptop's Hugging Face access and `data/` |
+| Parity layers 2 (the replay on the real warehouse), 3 (the cutoff reproduced), 4 (the census) and 5a/5b | Need `data/`; layer 3 on a runner also needs Neon and the registered bundle |
+| Neon: the project, `NEON_DATABASE_URL`, `SPONSOR_ID_KEY` (new in Section 17, ADR 0044) and the three MLflow names as GitHub secrets, `gh secret list` | Needs Aakrisht's accounts |
+| Registering the ADR 0034 decisions (`step13_checks.json`) with the champion, so `live.daily` finds them in the fetched bundle | Needs the laptop's `data/` and DagsHub |
+| Dispatching `timing.yml` | Needs the MLflow secrets in GitHub |
+| The weekly backup scheduled task and the retention export-then-delete command | Run on the laptop against Neon; the export command is not built yet |
+| Moving `huggingface-hub` out of the default dependencies (ADR 0040 item 5) | Deferred as the ADR says; the import test already shows no workflow module loads it |
+
+**Decisions made without asking (flagged)**
+
+1. **The branch** is `step-14-cloud`, as Aakrisht asked, not the session's default branch name.
+2. **The serving `content_hash` becomes the feature hash** of ADR 0037 on both paths, so the bootstrap's regenerated cutoff scores must carry it. Step 13's local serving rows keep their old hashes until then; the first live run would read every one of them as a record change.
+3. **The marker codes** (status 1, dates 2 including the verification date, enrollment 4, design 8, sponsor 16, title phase or interventions 32) are mine; ADR 0043 states them.
+4. **Compact drivers:** contributions are `real` rounded to 3 decimals (a sign survives), values are text (categories are values too), feature numbers are positions in `registry.model_columns()`, frozen in the migration and held by a test.
+5. **Migration 0004 drops the old `live` tables and `live.texts`** (built empty in Step 3 and never written) and converts the serving rows both ways instead of dropping them.
+6. **A closed trial whose last version came from the dataset** has no stored hash for that date, so a record with that date counts as a refetch. A change between two terminal statuses of a closed trial is recorded only when a live version holds the earlier one.
+7. **t0 on the live path** is the latest record's `study_first_post_date` (the offline path takes version 0's; the registry keeps it constant).
+8. **What a daily run reads:** the population through SQL, wide rows only for the scope, the sponsor file whole. Not measured against Part 3's transfer estimate.
+9. **The alarm at 60 minutes** is a warning annotation at the end of the job; the 90-minute kill is the workflow's timeout.
+10. **The retention alert at 700 MB** ends the run with exit code 3 after it succeeded, so the issue opens; 600 MB is recorded only.
+11. **Recording the fixtures** took six requests to API v2 from the VM (two checks, `/version`, two pages, all under the rate limit). The pages were trimmed and scrubbed before they were written (organization names only, no email, no personal-data key).
+12. **The scoring split** for ADR 0040 moved Step 13 code into four new modules; every old name is re-exported, the tests pass unchanged.
+13. **The stop-reason table** of Part 3's sizing is not in migration 0004: decision 10 defers new labels to Step 15, so its table comes with them.
+
+**The three checks**
+
+1. **Acceptance:** not met; no criterion is claimed. The evidence is the table above and the checks run here.
+2. **Decisions made without asking:** the 13 above.
+3. **Blocked, skipped or deferred:** everything in "Left for the laptop", each with its reason. No test, threshold or definition was weakened; condition 3 of ADR 0042 is Aakrisht's decision.
+
+**Verify (PowerShell, on the branch)**
+
+```powershell
+git fetch origin
+git checkout step-14-cloud
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+docker compose up -d
+uv run alembic upgrade head
+uv run pytest -q -m "slow or not slow"
+```
+
+`alembic upgrade head` converts the Step 13 rows in local Postgres to the compact form; `alembic downgrade 0003` converts them back.
+
+### The options (2026-11-01, before the decisions)
 
 Date: 2026-11-01. Status: **options only, waiting for Aakrisht's decisions (rule 1 of his review).** Nothing is built: no code, migration, workflow or ADR, and no Neon project exists. "Measured" below means run on this laptop on real data, or against the public API. Nothing has run on Neon or on a GitHub runner. Neon's and GitHub's limits were read on their own pages on 2026-10-31 and 2026-11-01. Sizes assume go-live on 2026-12-01, 67 days after the data cutoff. "Part N" is a part of this section, "Section N" a section of CLAUDE.md, and "item N" an item of "Guidance for later steps" above.
 

@@ -74,13 +74,14 @@ from trialpulse.eval.walkforward import (
     sha256_of,
 )
 from trialpulse.explain.report import champion_for, fit_champion
-from trialpulse.features.frame import as_arrays
+from trialpulse.features.arrays import as_arrays
 from trialpulse.features.transforms import SponsorPriors
 from trialpulse.ingest.history import RAW_HISTORY_DIR, config_glob
 from trialpulse.models.aalen_johansen import aalen_johansen
 from trialpulse.models.discrete_time import DiscreteTimeBoosting
 from trialpulse.reports import markdown_table, write_text_if_changed
 from trialpulse.scoring import features as served_features
+from trialpulse.scoring.rows import BANDS, OLDEST_INDEX
 from trialpulse.warehouse.build import WAREHOUSE_PATH
 
 CHAMPION = "m4"
@@ -93,8 +94,6 @@ MID_OFFSET_MONTHS = 3
 HORIZON_MONTHS = 12
 BETWEEN, BEYOND = "between", "beyond"
 # The age bands of check 2, by the true landmark index (ADR 0034, decision 3).
-BANDS: tuple[tuple[str, int, int], ...] = (("42 to 59 months", 7, 9), ("60 to 119 months", 10, 19))
-OLDEST_INDEX = 20  # 120 months: no development row reaches it
 Q1_MARGIN = 0.005
 BAND_MARGIN = 0.03
 MIN_STOPS = 100

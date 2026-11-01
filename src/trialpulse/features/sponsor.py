@@ -50,6 +50,8 @@ day's versions are applied. That order is what makes the counts point-in-time.
 """
 
 import heapq
+import json
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -110,6 +112,205 @@ class Events:
             yield from zip(*(column[part].tolist() for column in columns), strict=True)
 
 
+class SponsorPass:
+    """The pass of `track_records` as an object, so that it can stop after any day and resume
+    from its saved state (the live path, ADR 0037). `apply` takes one event in the order of
+    `Events.order`; `to_bytes` and `from_bytes` save and restore everything it holds. Key and
+    trial numbers are positions in its lists; `grow` makes room for new ones."""
+
+    FORMAT = 1
+
+    def __init__(self, alias_min_trials: int, alias_wait_days: int) -> None:
+        self.alias_min_trials = alias_min_trials
+        self.alias_wait_days = alias_wait_days
+        self.parent: list[int] = []  # the key this key is an alias of today
+        # The run of a key: since its first replacement, how many trials each key took over,
+        # and which trials still post under the old key (a version after the run's first day).
+        self.run_start: list[int] = []
+        self.left_for: list[dict[int, int] | None] = []
+        self.left: list[int] = []
+        self.still: list[set[int] | None] = []
+        self.successor: list[int] = []  # the key that holds the majority of the run, if any
+        self.stamp: list[int] = []  # changes whenever the successor does: a waiting link is stale
+        self.waiting: list[tuple[int, int, int]] = []  # (first day the link counts, key, stamp)
+        self.regs: list[int] = []  # of the key and its aliases
+        self.ended: list[int] = []
+        self.stopped: list[int] = []
+        self.reg_key: list[int] = []
+        self.term_key: list[int] = []
+        self.term_kind: list[int] = []
+
+    @property
+    def n_keys(self) -> int:
+        return len(self.parent)
+
+    @property
+    def n_trials(self) -> int:
+        return len(self.reg_key)
+
+    def grow(self, n_keys: int, n_trials: int) -> None:
+        extra = n_keys - self.n_keys
+        if extra > 0:
+            for name in ("parent", "run_start", "successor"):
+                getattr(self, name).extend([-1] * extra)
+            for name in ("left", "stamp", "regs", "ended", "stopped"):
+                getattr(self, name).extend([0] * extra)
+            self.left_for.extend([None] * extra)
+            self.still.extend([None] * extra)
+        extra = n_trials - self.n_trials
+        if extra > 0:
+            self.reg_key.extend([-1] * extra)
+            self.term_key.extend([-1] * extra)
+            self.term_kind.extend([0] * extra)
+
+    def root(self, k: int) -> int:
+        parent = self.parent
+        while parent[k] != -1:
+            k = parent[k]
+        return k
+
+    def _add(self, k: int, dr: int, de: int, ds: int) -> None:
+        parent, regs, ended, stopped = self.parent, self.regs, self.ended, self.stopped
+        while k != -1:
+            regs[k] += dr
+            ended[k] += de
+            stopped[k] += ds
+            k = parent[k]
+
+    def _cut(self, k: int) -> None:
+        above = self.parent[k]
+        if above != -1:
+            self.parent[k] = -1
+            self._add(above, -self.regs[k], -self.ended[k], -self.stopped[k])
+
+    def _choose(self, k: int, day: int, risen: int) -> None:
+        """Set the successor of key k after its run changed. Only `risen`, the key whose
+        count just rose, or the successor so far can hold the majority."""
+        takers, posting = self.left_for[k], self.still[k]
+        assert takers is not None
+        assert posting is not None
+        total = self.left[k] + len(posting)
+        wanted = -1
+        for candidate in (risen, self.successor[k]):
+            taken = takers.get(candidate, 0) if candidate >= 0 else 0
+            if taken >= self.alias_min_trials and 2 * taken > total:
+                wanted = candidate
+                break
+        if wanted != self.successor[k]:
+            self._cut(k)
+            self.successor[k] = wanted
+            self.stamp[k] += 1
+            if wanted != -1:  # it counts once the run is old enough
+                first_day = max(day, self.run_start[k] + self.alias_wait_days) + 1
+                heapq.heappush(self.waiting, (first_day, k, self.stamp[k]))
+
+    def start_day(self, day: int) -> None:
+        """Make the links that count from `day` on (done before any event of the day)."""
+        waiting = self.waiting
+        while waiting and waiting[0][0] <= day:
+            _, key, issued = heapq.heappop(waiting)
+            target = self.successor[key]
+            if issued == self.stamp[key] and target != -1 and self.root(target) != key:
+                self.parent[key] = target  # never a loop
+                self._add(target, self.regs[key], self.ended[key], self.stopped[key])
+
+    def answer(self, day: int, key: int, trial: int) -> tuple[int, int, int]:
+        """(registrations, ended, stopped) of the other trials of `key` and its aliases, as
+        of `day`, from the events of earlier days. `trial` -1 is a trial the pass never saw,
+        so nothing of it is left out."""
+        self.start_day(day)
+        r = self.root(key)
+        n_reg, n_ended, n_stopped = self.regs[r], self.ended[r], self.stopped[r]
+        if trial < 0:
+            return n_reg, n_ended, n_stopped
+        own = self.reg_key[trial]
+        if own != -1 and self.root(own) == r:  # the row's own trial is not "another trial"
+            n_reg -= 1
+        own = self.term_key[trial]
+        if own != -1 and self.root(own) == r:
+            n_ended -= 1
+            n_stopped -= self.term_kind[trial] == STOP
+        return n_reg, n_ended, n_stopped
+
+    def apply(self, day: int, kind: int, a: int, b: int, c: int) -> None:
+        """Apply one registry event (any kind but QUERY), fields as in `track_records`."""
+        self.start_day(day)
+        if kind == APPEARANCE:
+            posting = self.still[a]
+            if posting is not None and day > self.run_start[a] and b not in posting:
+                posting.add(b)
+                if len(posting) > self.left[a]:  # the name is in use: it was not renamed
+                    self._cut(a)
+                    self.left_for[a], self.left[a], self.still[a] = None, 0, None
+                    self.run_start[a] = -1
+                    self.successor[a] = -1
+                    self.stamp[a] += 1
+                else:
+                    self._choose(a, day, -1)
+        elif kind == REPLACEMENT:
+            takers = self.left_for[a]
+            posting = self.still[a]
+            if takers is None or posting is None:  # the first replacement opens a run
+                takers = self.left_for[a] = {}
+                posting = self.still[a] = set()
+                self.run_start[a] = day
+            if b >= 0:
+                takers[b] = takers.get(b, 0) + 1
+            self.left[a] += 1
+            posting.discard(c)  # the trial no longer posts under the old key
+            self._choose(a, day, b)
+        elif kind == REGISTRATION:
+            self._add(a, 1, 0, 0)
+            self.reg_key[b] = a
+        elif kind == ENTER:
+            self._add(a, 0, 1, int(b == STOP))
+            self.term_key[c], self.term_kind[c] = a, b
+        elif kind == LEAVE:
+            self._add(a, 0, -1, -int(b == STOP))
+            self.term_key[c], self.term_kind[c] = -1, 0
+        else:
+            raise ValueError(f"not a registry event: kind {kind}")
+
+    def to_bytes(self) -> bytes:
+        """Everything the pass holds, as compressed JSON (no pickle: the file is data)."""
+        state = {
+            "format": self.FORMAT,
+            "alias_min_trials": self.alias_min_trials,
+            "alias_wait_days": self.alias_wait_days,
+            "parent": self.parent,
+            "run_start": self.run_start,
+            "left_for": [None if d is None else sorted(d.items()) for d in self.left_for],
+            "left": self.left,
+            "still": [None if s is None else sorted(s) for s in self.still],
+            "successor": self.successor,
+            "stamp": self.stamp,
+            "waiting": sorted(self.waiting),
+            "regs": self.regs,
+            "ended": self.ended,
+            "stopped": self.stopped,
+            "reg_key": self.reg_key,
+            "term_key": self.term_key,
+            "term_kind": self.term_kind,
+        }
+        return zlib.compress(json.dumps(state, separators=(",", ":")).encode("utf-8"), 6)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "SponsorPass":
+        state = json.loads(zlib.decompress(data).decode("utf-8"))
+        if state.get("format") != cls.FORMAT:
+            raise ValueError(f"a sponsor pass of format {state.get('format')}, not {cls.FORMAT}")
+        out = cls(int(state["alias_min_trials"]), int(state["alias_wait_days"]))
+        for name in ("parent", "run_start", "left", "successor", "stamp", "regs", "ended",
+                     "stopped", "reg_key", "term_key", "term_kind"):  # fmt: skip
+            setattr(out, name, [int(v) for v in state[name]])
+        out.left_for = [None if d is None else {int(k): int(v) for k, v in d}
+                        for d in state["left_for"]]  # fmt: skip
+        out.still = [None if s is None else {int(v) for v in s} for s in state["still"]]
+        out.waiting = [(int(d), int(k), int(s)) for d, k, s in state["waiting"]]
+        heapq.heapify(out.waiting)
+        return out
+
+
 def track_records(
     events: Events,
     n_keys: int,
@@ -128,110 +329,14 @@ def track_records(
     - REGISTRATION: a = the key, b = the trial;
     - ENTER and LEAVE: a = the key, b = STOP or COMPLETE, c = the trial.
     """
-    parent = [-1] * n_keys  # the key this key is an alias of today
-    # The run of a key: since its first replacement, how many trials each key took over,
-    # and which trials still post under the old key (a version after the run's first day).
-    run_start = [-1] * n_keys
-    left_for: list[dict[int, int] | None] = [None] * n_keys
-    left = [0] * n_keys
-    still: list[set[int] | None] = [None] * n_keys
-    successor = [-1] * n_keys  # the key that holds the majority of the run, if any
-    stamp = [0] * n_keys  # changes whenever the successor does: a waiting link is then stale
-    waiting: list[tuple[int, int, int]] = []  # (first day the link counts, key, stamp)
-    regs, ended, stopped = [0] * n_keys, [0] * n_keys, [0] * n_keys  # of the key and its aliases
-    reg_key = [-1] * n_trials
-    term_key, term_kind = [-1] * n_trials, [0] * n_trials
+    sponsor_pass = SponsorPass(alias_min_trials, alias_wait_days)
+    sponsor_pass.grow(n_keys, n_trials)
     out = np.full((n_queries, 3), -1, dtype=np.int64)
-
-    def root(k: int) -> int:
-        while parent[k] != -1:
-            k = parent[k]
-        return k
-
-    def add(k: int, dr: int, de: int, ds: int) -> None:
-        while k != -1:
-            regs[k] += dr
-            ended[k] += de
-            stopped[k] += ds
-            k = parent[k]
-
-    def cut(k: int) -> None:
-        above = parent[k]
-        if above != -1:
-            parent[k] = -1
-            add(above, -regs[k], -ended[k], -stopped[k])
-
-    def choose(k: int, day: int, risen: int) -> None:
-        """Set the successor of key k after its run changed. Only `risen`, the key whose
-        count just rose, or the successor so far can hold the majority."""
-        takers, posting = left_for[k], still[k]
-        assert takers is not None
-        assert posting is not None
-        total = left[k] + len(posting)
-        wanted = -1
-        for candidate in (risen, successor[k]):
-            taken = takers.get(candidate, 0) if candidate >= 0 else 0
-            if taken >= alias_min_trials and 2 * taken > total:
-                wanted = candidate
-                break
-        if wanted != successor[k]:
-            cut(k)
-            successor[k] = wanted
-            stamp[k] += 1
-            if wanted != -1:  # it counts once the run is old enough
-                first_day = max(day, run_start[k] + alias_wait_days) + 1
-                heapq.heappush(waiting, (first_day, k, stamp[k]))
-
     for day, kind, a, b, c in events.in_order():
-        while waiting and waiting[0][0] <= day:  # links that count from today on
-            _, key, issued = heapq.heappop(waiting)
-            target = successor[key]
-            if issued == stamp[key] and target != -1 and root(target) != key:  # never a loop
-                parent[key] = target
-                add(target, regs[key], ended[key], stopped[key])
         if kind == QUERY:
-            r = root(a)
-            n_reg, n_ended, n_stopped = regs[r], ended[r], stopped[r]
-            own = reg_key[b]
-            if own != -1 and root(own) == r:  # the row's own trial is not "another trial"
-                n_reg -= 1
-            own = term_key[b]
-            if own != -1 and root(own) == r:
-                n_ended -= 1
-                n_stopped -= term_kind[b] == STOP
-            out[c] = (n_reg, n_ended, n_stopped)
-        elif kind == APPEARANCE:
-            posting = still[a]
-            if posting is not None and day > run_start[a] and b not in posting:
-                posting.add(b)
-                if len(posting) > left[a]:  # the name is in use: it was not renamed
-                    cut(a)
-                    left_for[a], left[a], still[a], run_start[a] = None, 0, None, -1
-                    successor[a] = -1
-                    stamp[a] += 1
-                else:
-                    choose(a, day, -1)
-        elif kind == REPLACEMENT:
-            takers = left_for[a]
-            posting = still[a]
-            if takers is None or posting is None:  # the first replacement opens a run
-                takers = left_for[a] = {}
-                posting = still[a] = set()
-                run_start[a] = day
-            if b >= 0:
-                takers[b] = takers.get(b, 0) + 1
-            left[a] += 1
-            posting.discard(c)  # the trial no longer posts under the old key
-            choose(a, day, b)
-        elif kind == REGISTRATION:
-            add(a, 1, 0, 0)
-            reg_key[b] = a
-        elif kind == ENTER:
-            add(a, 0, 1, int(b == STOP))
-            term_key[c], term_kind[c] = a, b
-        else:  # LEAVE
-            add(a, 0, -1, -int(b == STOP))
-            term_key[c], term_kind[c] = -1, 0
+            out[c] = sponsor_pass.answer(day, a, b)
+        else:
+            sponsor_pass.apply(day, kind, a, b, c)
     return out
 
 

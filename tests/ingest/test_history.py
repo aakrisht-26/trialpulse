@@ -69,3 +69,16 @@ def test_refusals(tmp_path: Path) -> None:
     unpinned = cfg.model_copy(update={"dataset": dataset})
     with pytest.raises(RefusedError, match="pins no dataset revision"):
         history.download_config(unpinned, "interventions", tmp_path, None, lambda **_: None)
+
+
+def test_the_dataset_is_never_downloaded_on_a_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0040: under GitHub Actions the download refuses before anything else."""
+    from trialpulse.cli import RefusedError
+    from trialpulse.config import load_project_config
+    from trialpulse.ingest.history import download_config
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    with pytest.raises(RefusedError, match="never read on a GitHub runner"):
+        download_config(load_project_config(), "core", tmp_path, None, downloader=None)

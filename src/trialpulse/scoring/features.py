@@ -19,8 +19,9 @@ from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import ProjectConfig
 from trialpulse.features.build import FEATURE_TABLE, compute_features, connect, prepare_sources
 from trialpulse.features.states import KEYS_TABLE
-from trialpulse.features.transforms import SponsorPriors
 from trialpulse.scoring import rows as served
+from trialpulse.scoring.predict import keys_for as keys_for  # re-exported
+from trialpulse.scoring.predict import with_priors as with_priors  # re-exported
 
 KEY_COLUMNS: tuple[str, ...] = ("trial_id", "landmark_index", "landmark_date", "window_start")
 
@@ -70,43 +71,3 @@ def compute_served(
     for name, values in served.time_features(k_star, rules.spacing_months).items():
         frame[name] = values
     return frame
-
-
-def with_priors(frame: pd.DataFrame, priors: SponsorPriors) -> pd.DataFrame:
-    """The frame with the sponsor's early-stop rate smoothed toward the class rates of
-    `priors` (the origin's for a development check, the served champion's when serving)."""
-    out = frame.copy()
-    out["sponsor_stop_rate"] = priors.rate(
-        out["sponsor_class"].to_numpy(dtype=object),
-        out["sponsor_prior_ended"].to_numpy(dtype=np.float64, na_value=np.nan),
-        out["sponsor_prior_stopped"].to_numpy(dtype=np.float64, na_value=np.nan),
-    )
-    return out
-
-
-def keys_for(
-    trial_id: np.ndarray,
-    t0: np.ndarray,
-    index: np.ndarray,
-    day: np.ndarray,
-    rules: CohortRules,
-    recent_months: int,
-) -> pd.DataFrame:
-    """Served keys for rows scored on `day` with their own index (the true landmark index
-    for rows beyond the last landmark): the window slides the gap of k*, the index capped."""
-    k_star = served.capped(np.asarray(index, dtype=np.int64), rules.max_index)
-    start = served.window_start(
-        np.asarray(t0, dtype="datetime64[D]"),
-        k_star,
-        np.asarray(day, dtype="datetime64[D]"),
-        rules.spacing_months,
-        recent_months,
-    )
-    return pd.DataFrame(
-        {
-            "trial_id": np.asarray(trial_id).astype(str),
-            "landmark_index": np.asarray(index, dtype=np.int64),
-            "landmark_date": np.asarray(day, dtype="datetime64[D]"),
-            "window_start": start,
-        }
-    )

@@ -18,17 +18,17 @@ import datetime as dt
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import duckdb
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 
 from trialpulse.cli import RefusedError
 from trialpulse.cohort.build import COHORT_DIR
 from trialpulse.cohort.rules import add_months
 from trialpulse.config import ProjectConfig
+from trialpulse.features.arrays import as_arrays as as_arrays  # re-exported
 from trialpulse.features.build import (
     COMPONENT_COLUMNS,
     FEATURES_DIR,
@@ -39,7 +39,7 @@ from trialpulse.features.build import (
     components_name,
     origin_source,
 )
-from trialpulse.features.registry import BY_NAME, CATEGORY, KEY_COLUMNS, TEXT_FIELDS, matrix_columns
+from trialpulse.features.registry import TEXT_FIELDS, matrix_columns
 from trialpulse.features.transforms import SponsorPriors
 
 Role = Literal["training", "evaluation"]
@@ -125,20 +125,3 @@ def load(
         frame["sponsor_prior_stopped"].to_numpy(dtype=np.float64, na_value=np.nan),
     )
     return frame[list(matrix_columns())]
-
-
-def as_arrays(frame: pd.DataFrame) -> dict[str, npt.NDArray[Any]]:
-    """The feature columns of a matrix as plain arrays, one per feature: numbers and flags
-    as floats with NaN for a missing value (a flag is 1.0 or 0.0), categories as objects
-    with None for a missing value. The key columns are left out, except `landmark_index`,
-    which is a feature too."""
-    out: dict[str, npt.NDArray[Any]] = {}
-    for name in frame.columns:
-        if name in KEY_COLUMNS and name not in BY_NAME:
-            continue
-        column = frame[name]
-        if BY_NAME[name].kind == CATEGORY:
-            out[name] = column.astype(object).where(column.notna(), None).to_numpy(dtype=object)
-        else:
-            out[name] = column.astype("Float64").to_numpy(dtype=np.float64, na_value=np.nan)
-    return out

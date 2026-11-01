@@ -82,3 +82,10 @@ def time_features(k_star: IntArray, spacing_months: int) -> dict[str, npt.NDArra
     """The two time features the model reads for rows held at landmark k*."""
     k = np.asarray(k_star, dtype=np.float64)
     return {"landmark_index": k, "months_since_t0": spacing_months * k}
+
+
+# The age bands of check 2 (ADR 0034) and the index from which no trial is scored.
+BANDS: tuple[tuple[str, int, int], ...] = (("42 to 59 months", 7, 9), ("60 to 119 months", 10, 19))
+
+
+OLDEST_INDEX = 20  # 120 months: no development row reaches it

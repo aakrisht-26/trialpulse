@@ -1,0 +1,48 @@
+name: Runner timing
+
+# Rule 3 of the Step 13 review (ADR 0045 item 6): before Neon exists, time the champion's
+# predictions and driver pass on rows generated from the feature types (no dataset row),
+# log the runner's CPU, and check that API v2 answers from a GitHub runner.
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: Generated rows to score
+        default: "5000"
+
+permissions:
+  contents: read
+
+env:
+  HF_HUB_OFFLINE: "1"
+  UV_NO_SYNC: "1"
+
+jobs:
+  timing:
+    name: Time the scoring
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.11.26"
+          enable-cache: true
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked --no-dev
+
+      - name: Fetch the champion from the registry
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: uv run python -m trialpulse.live.registry --alias champion --to "$RUNNER_TEMP/bundle"
+
+      - name: Time the scoring and check API v2
+        env:
+          ROWS: ${{ inputs.rows }}
+        run: uv run python -m trialpulse.live.timing --bundle "$RUNNER_TEMP/bundle" --rows "$ROWS"

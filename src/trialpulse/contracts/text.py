@@ -11,7 +11,11 @@ Both are reduced to one canonical plain text:
 - HTML entities are unescaped, repeatedly, so double-escaped text is also recovered;
 - Markdown backslash escapes are removed;
 - email addresses are replaced with a fixed marker, because free text may hold contact
-  details, which are never stored.
+  details, which are never stored;
+- on the Markdown path only, a line that is nothing but an HTML comment is a blank line.
+  API v2 writes `<!-- -->` between two adjacent lists so that they stay two lists
+  (CommonMark HTML block type 2); the comment is markup, not text (ADR 0042). HTML texts,
+  which is how the dataset stores long texts, keep their path unchanged.
 
     normalize_text("<p>Inclusion:</p><ul><li>Age &gt;\\n18</li></ul>")  -> "Inclusion:\\nAge > 18"
     normalize_text("Inclusion:\\n\\n* Age \\\\>\\n18")                -> "Inclusion:\\nAge > 18"
@@ -29,6 +33,7 @@ _HTML_ANY_TAG = re.compile(r"(?i)</?[a-z][a-z0-9]*\b[^<>]*>")
 _BLANK_LINE = re.compile(r"\n[ \t]*\n")
 _LIST_MARKER = re.compile(r"^\s*(?:[*+-]|(\d{1,9})[.)])\s+")
 # CommonMark: any ASCII punctuation character can be escaped with a backslash.
+_COMMENT_LINE = re.compile(r"^\s*<!--.*?-->\s*$")
 _MARKDOWN_ESCAPE = re.compile(r"\\([!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~])")
 
 
@@ -63,13 +68,14 @@ def _markdown_blocks(text: str) -> list[str]:
       numbered 1, so "2) ..." right after a plain paragraph line continues that paragraph;
     - inside a list any item number starts the next item, and a paragraph indented under an
       item after a blank line (API v2 writes `\\n\\n   OR\\n4. ...`) keeps the list open;
-    - a paragraph that is not indented after a blank line ends the list.
+    - a paragraph that is not indented after a blank line ends the list;
+    - a line that is only an HTML comment counts as a blank line (ADR 0042).
     """
     blocks: list[list[str]] = []
     current: list[str] | None = None
     in_list = False
     for line in unescape_html(text).split("\n"):
-        if not line.strip():
+        if not line.strip() or _COMMENT_LINE.match(line):
             current = None
             continue
         marker = _LIST_MARKER.match(line)

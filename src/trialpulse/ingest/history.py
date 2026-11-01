@@ -10,6 +10,7 @@ redistributed. HF_TOKEN comes from the environment or .env and is never printed.
 """
 
 import argparse
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,13 @@ def config_glob(raw_dir: Path, revision: str, config_name: str) -> str:
     return (config_dir(raw_dir, revision, config_name) / "*.parquet").as_posix()
 
 
+def refuse_on_a_runner() -> None:
+    """The gated dataset is read on Aakrisht's laptop only (ADR 0040). This guards against
+    an accident, not intent: the variable can be unset."""
+    if os.environ.get("GITHUB_ACTIONS"):
+        raise RefusedError("the gated dataset is never read on a GitHub runner (ADR 0040)")
+
+
 def download_config(
     cfg: ProjectConfig,
     config_name: str,
@@ -37,7 +45,9 @@ def download_config(
     token: str | None,
     downloader: Downloader | None = None,
 ) -> dict[str, Any]:
-    """Download the Parquet files of one config at the pinned revision (resumable)."""
+    """Download the Parquet files of one config at the pinned revision (resumable). Refused
+    under GitHub Actions: the gated dataset never reaches a runner (ADR 0040)."""
+    refuse_on_a_runner()
     if cfg.dataset.revision is None:
         raise RefusedError("config/project.yaml pins no dataset revision yet (Step 2 pins it)")
     if config_name not in KNOWN_CONFIGS:

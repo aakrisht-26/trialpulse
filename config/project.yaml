@@ -84,3 +84,19 @@ tuning:
 
 seeds:
   default: 42
+
+# The live system (ADR 0045): run control, retention and the API v2 pull.
+live:
+  overlap_days: 3                # the pull starts at the stored watermark minus 3 days
+  null_gate_share: 0.01          # stop before any write if one field turned NULL in more
+                                 # than 1% of the overlap records that match a stored row
+  max_missing_overlap: 5         # stored overlap rows the pull may miss before it fails
+  full_run_days: 7               # a full run is due when the last one is this old
+  lease_stale_minutes: 120       # a running job older than this is stale
+  alarm_minutes: 60
+  kill_minutes: 90
+  recent_post_days: 185          # post dates kept on the wide row (the longest window is 184)
+  page_size: 1000                # API v2 clamps larger values
+  requests_per_minute: 40        # CLAUDE.md Section 7
+  retention_alert_mb: [600, 700]
+  retention_months: 12
