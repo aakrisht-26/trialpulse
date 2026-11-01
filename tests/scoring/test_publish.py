@@ -7,9 +7,6 @@ DATABASE_URL to its Postgres service)."""
 import datetime as dt
 import hashlib
 import json
-import uuid
-from collections.abc import Iterator
-from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -17,12 +14,11 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-from trialpulse.config import REPO_ROOT, Secrets, load_project_config
+from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.scoring import serving
 from trialpulse.scoring.score import Scored
 
 psycopg = pytest.importorskip("psycopg")
-from psycopg import conninfo  # noqa: E402 (after the import check)
 
 DAY1, DAY2 = dt.date(2026, 9, 25), dt.date(2026, 9, 26)
 DRIVERS = {
@@ -38,35 +34,6 @@ DRIVERS = {
 
 def _libpq(url: str) -> str:
     return url.replace("postgresql+psycopg://", "postgresql://", 1)
-
-
-@pytest.fixture
-def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """A migrated scratch database; its SQLAlchemy URL, also set as DATABASE_URL."""
-    secret = Secrets().database_url
-    if secret is None:
-        pytest.skip("DATABASE_URL is not set")
-    base = _libpq(secret.get_secret_value())
-    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
-    name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
-    try:
-        with psycopg.connect(admin, autocommit=True) as con:
-            con.execute(f"CREATE DATABASE {name}")
-    except psycopg.OperationalError as exc:  # the address is not printed: it holds a password
-        pytest.skip(f"no Postgres answers at DATABASE_URL ({type(exc).__name__})")
-    parts = conninfo.conninfo_to_dict(base)
-    url = (
-        f"postgresql+psycopg://{quote(str(parts.get('user', '')), safe='')}:"
-        f"{quote(str(parts.get('password', '')), safe='')}@{parts.get('host', 'localhost')}:"
-        f"{parts.get('port', 5432)}/{name}"
-    )
-    monkeypatch.setenv("DATABASE_URL", url)
-    try:
-        command.upgrade(Config(str(REPO_ROOT / "alembic.ini")), "head")
-        yield url
-    finally:
-        with psycopg.connect(admin, autocommit=True) as con:
-            con.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
 
 
 def _hex(content: str) -> str:

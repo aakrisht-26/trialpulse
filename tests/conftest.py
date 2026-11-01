@@ -93,3 +93,63 @@ def not_on_a_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     The tests use synthetic data only, so they run as on the laptop; a test of the refusal
     sets the variable itself."""
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
+# A scratch Postgres database ----------------------------------------------------------------
+
+REQUIRE_POSTGRES = "TRIALPULSE_REQUIRE_POSTGRES"
+
+
+def no_postgres(reason: str) -> None:
+    """Skip a database test when no Postgres answers, except where Postgres is required: CI's
+    workflow sets TRIALPULSE_REQUIRE_POSTGRES, so there an unreachable server fails the test
+    instead of hiding it behind a skip."""
+    import os
+
+    if os.environ.get(REQUIRE_POSTGRES):
+        pytest.fail(f"{reason}, and {REQUIRE_POSTGRES} is set", pytrace=False)
+    pytest.skip(reason)
+
+
+@pytest.fixture
+def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """A migrated scratch database on the server of DATABASE_URL, dropped afterwards; its
+    SQLAlchemy URL, also set as DATABASE_URL. Skipped without a server (failed in CI)."""
+    import uuid
+    from urllib.parse import quote
+
+    from alembic import command
+    from alembic.config import Config
+
+    from trialpulse.config import REPO_ROOT, Secrets
+
+    try:
+        import psycopg
+        from psycopg import conninfo
+    except ImportError:
+        no_postgres("psycopg is not installed")
+        raise
+    secret = Secrets().database_url
+    if secret is None:
+        no_postgres("DATABASE_URL is not set")
+        raise AssertionError("unreachable")
+    base = secret.get_secret_value().replace("postgresql+psycopg://", "postgresql://", 1)
+    admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
+    name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
+    try:
+        with psycopg.connect(admin, autocommit=True) as con:
+            con.execute(f"CREATE DATABASE {name}")
+    except psycopg.OperationalError as exc:  # the address is not printed: it holds a password
+        no_postgres(f"no Postgres answers at DATABASE_URL ({type(exc).__name__})")
+    parts = conninfo.conninfo_to_dict(base)
+    user = quote(str(parts.get("user", "")), safe="")
+    password = quote(str(parts.get("password", "")), safe="")
+    host, port = parts.get("host", "localhost"), parts.get("port", 5432)
+    url = f"postgresql+psycopg://{user}:{password}@{host}:{port}/{name}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    try:
+        command.upgrade(Config(str(REPO_ROOT / "alembic.ini")), "head")
+        yield url
+    finally:
+        with psycopg.connect(admin, autocommit=True) as con:
+            con.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")

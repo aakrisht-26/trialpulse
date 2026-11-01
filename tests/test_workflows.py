@@ -90,3 +90,32 @@ def test_the_daily_job_has_two_crons_and_a_separate_failure_job() -> None:
     assert notify["permissions"] == {"contents": "read", "issues": "write"}
     assert daily["env"] == {"HF_HUB_OFFLINE": "1", "UV_NO_SYNC": "1"}
     assert daily["concurrency"]["cancel-in-progress"] is False
+
+
+def test_ci_requires_postgres_for_the_database_tests() -> None:
+    """Review finding 4: in CI an unreachable Postgres fails the database tests."""
+    ci = _load(REPO_ROOT / ".github" / "workflows" / "ci.yml")
+    (tests,) = [s for s in ci["jobs"]["checks"]["steps"] if s.get("name") == "Tests"]
+    assert tests["env"]["TRIALPULSE_REQUIRE_POSTGRES"] == "1"
+
+
+def test_a_missing_postgres_skips_locally_and_fails_where_it_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "root_conftest", REPO_ROOT / "tests" / "conftest.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(root)
+    REQUIRE_POSTGRES, no_postgres = root.REQUIRE_POSTGRES, root.no_postgres  # noqa: N806
+
+    monkeypatch.delenv(REQUIRE_POSTGRES, raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        no_postgres("no Postgres answers")
+    monkeypatch.setenv(REQUIRE_POSTGRES, "1")
+    with pytest.raises(pytest.fail.Exception, match="TRIALPULSE_REQUIRE_POSTGRES is set"):
+        no_postgres("no Postgres answers")
