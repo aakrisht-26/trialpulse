@@ -118,6 +118,26 @@ def no_postgres(reason: str) -> None:
     pytest.skip(reason)
 
 
+# The only hosts a test may create databases on (ADR 0062): the laptop's Docker Compose
+# Postgres and CI's service, which ci.yml publishes at 127.0.0.1 (held by
+# tests/test_workflows.py). A DATABASE_URL left pointing at Neon fails here instead.
+TEST_HOSTS: tuple[str, ...] = ("localhost", "127.0.0.1")
+
+
+def check_test_host(url: str) -> None:
+    """Fail (never skip) when a URL's host is not a test host."""
+    from psycopg import conninfo
+
+    hosts = str(conninfo.conninfo_to_dict(url).get("host") or "localhost").split(",")
+    outside = [h for h in hosts if h not in TEST_HOSTS]
+    if outside:
+        pytest.fail(
+            f"refused: DATABASE_URL points at {', '.join(outside)}; tests create and drop "
+            f"databases only on {' or '.join(TEST_HOSTS)} (ADR 0062)",
+            pytrace=False,
+        )
+
+
 @pytest.fixture
 def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     """A migrated scratch database on the server of DATABASE_URL, dropped afterwards; its
@@ -141,6 +161,7 @@ def scratch(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         no_postgres("DATABASE_URL is not set")
         raise AssertionError("unreachable")
     base = secret.get_secret_value().replace("postgresql+psycopg://", "postgresql://", 1)
+    check_test_host(base)
     admin = conninfo.make_conninfo(base, dbname="postgres", connect_timeout=10)
     name = f"trialpulse_test_{uuid.uuid4().hex[:12]}"
     try:
