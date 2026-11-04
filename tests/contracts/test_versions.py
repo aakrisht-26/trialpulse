@@ -29,6 +29,7 @@ from trialpulse.contracts.versions import (
     distinct_intervention_types,
     parse_partial_date,
     split_valid,
+    strip_space_separators,
     submitted_statuses,
     typed_frame,
     valid_date,
@@ -77,6 +78,11 @@ def test_ages_in_years(text: str | None, years: float | None) -> None:
 
 def test_sql_twins_match_the_python_rules() -> None:
     values = ["RANDOMIZED", " randomized ", "ANTICIPATED", "anticipated", "N/A", "", None, "X"]
+    # Only space separators (Unicode Zs) are trimmed, on either path: a tab or a line break
+    # stays, so the value fails the contract on both (the two paths agree on every input).
+    nbsp, ideographic, zero_width = chr(0xA0), chr(0x3000), chr(0x200B)
+    values += ["drug\t", "\ndrug", " drug\r\n", "\t", "  ", f"{nbsp}drug{ideographic}"]
+    values += [f"drug{zero_width}", "drug\x85", f"drug{chr(0x2028)}", "\x1fdrug"]
     dates = [dt.date(1900, 1, 1), dt.date(1901, 1, 1), dt.date(2099, 12, 31), dt.date(2100, 1, 1)]
     with duckdb.connect() as con:
         for value in values:
@@ -87,6 +93,24 @@ def test_sql_twins_match_the_python_rules() -> None:
             assert sql.fetchone() == (valid_date(day),), day
     assert canonical_enum("anticipated") == "ESTIMATED"
     assert canonical_enum("N/A") == "NA"
+    assert canonical_enum(f"{nbsp}drug{ideographic}") == "DRUG"
+    assert canonical_enum("drug\t") == "DRUG\t"
+
+
+def test_space_separators_are_exactly_what_duckdb_trims() -> None:
+    """Every code point of the Basic Multilingual Plane, padded on both sides, is trimmed by
+    DuckDB exactly when the contract's Python rule trims it."""
+    points = [cp for cp in range(0x10000) if not 0xD800 <= cp <= 0xDFFF]
+    with duckdb.connect() as con:
+        rows = con.execute(
+            "SELECT cp FROM range(65536) t(cp) WHERE (cp < 55296 OR cp > 57343) "
+            "AND trim(chr(cp::INTEGER) || 'x' || chr(cp::INTEGER)) = 'x'"
+        ).fetchall()
+    trimmed = {int(cp) for (cp,) in rows}
+    expected = {cp for cp in points if strip_space_separators(f"{chr(cp)}x{chr(cp)}") == "x"}
+    assert trimmed == expected
+    assert {0x20, 0xA0, 0x3000} <= trimmed
+    assert not {0x09, 0x0A, 0x0D, 0x200B} & trimmed
 
 
 def _study(**overrides: Any) -> dict[str, Any]:
@@ -292,7 +316,8 @@ def test_intervention_types_outside_the_contract_or_unsorted_are_quarantined() -
 def test_the_sql_rule_for_intervention_types_matches_the_python_rule() -> None:
     pairs = [
         ("A", "DRUG"), ("A", "DRUG"), ("a", "DRUG"), ("B", " device "), ("C", None),
-        (None, "OTHER"), (None, "OTHER"), ("D", ""), ("E", "drug"),
+        (None, "OTHER"), (None, "OTHER"), ("D", ""), ("E", "drug"), ("F", "drug\t"),
+        ("G", "\nbiological"),
     ]  # fmt: skip
     with duckdb.connect() as con:
         con.execute(
@@ -303,7 +328,9 @@ def test_the_sql_rule_for_intervention_types_matches_the_python_rule() -> None:
         con.execute("INSERT INTO config VALUES ('NCT00000002', 0, 'X', NULL)")  # no type at all
         got = {(n, v): t for n, v, t in con.execute(intervention_lists_sql("config")).fetchall()}
     expected = distinct_intervention_types((name, canonical_enum(kind)) for name, kind in pairs)
-    assert expected == ["DEVICE", "DRUG", "DRUG", "DRUG", "OTHER"]
+    # A tab or a line break is not trimmed on either path: the list keeps the raw type, which
+    # the contract then refuses (known_intervention_types) on both paths alike.
+    assert expected == ["\nBIOLOGICAL", "DEVICE", "DRUG", "DRUG", "DRUG", "DRUG\t", "OTHER"]
     assert got == {("NCT00000001", 0): expected}  # the warehouse gives the other an empty list
 
 

@@ -30,6 +30,7 @@ the offline history dataset and live API v2 records, so downstream code is sourc
 import datetime as dt
 import hashlib
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -172,10 +173,25 @@ HASHED_FIELDS: tuple[str, ...] = tuple(
 )
 
 
+def strip_space_separators(text: str) -> str:
+    """The text without its leading and trailing space separators (Unicode category Zs: the
+    space, the no-break space and their kin), exactly what DuckDB's `trim` removes (tested). A
+    tab or a line break is not a space separator and stays."""
+    start, end = 0, len(text)
+    while start < end and unicodedata.category(text[start]) == "Zs":
+        start += 1
+    while end > start and unicodedata.category(text[end - 1]) == "Zs":
+        end -= 1
+    return text[start:end]
+
+
 def canonical_enum(value: str | None) -> str | None:
+    """Trimmed as DuckDB's `trim` trims in the SQL twin of the dataset path (space separators
+    only, so a tab or a line break stays and fails the contract on both paths), upper case,
+    with the aliases applied; empty is missing."""
     if value is None:
         return None
-    text = str(value).strip().upper()
+    text = strip_space_separators(str(value)).upper()
     return ENUM_ALIASES.get(text, text) or None
 
 
