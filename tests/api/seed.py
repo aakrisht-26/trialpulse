@@ -34,6 +34,14 @@ SPONSORS = (("sp-acme", "Acme Pharma Inc.", "acme pharma inc", "INDUSTRY"),
              "OTHER"))  # fmt: skip
 
 
+def _risk(rng: random.Random) -> float:
+    """A 12-month risk between 0.002 and 0.122, skewed low, from integers only: the seeded
+    database must be the same on every platform, and `random.betavariate` goes through the C
+    maths library, whose last digit differs between Windows and Linux."""
+    u = rng.randrange(1, 1001)
+    return (2_000 + u * u * 120 // 1000) / 1_000_000
+
+
 def _drivers(rng: random.Random) -> tuple[list[int], list[int], list[str], list[float]]:
     months = [12] * 5 + [24] * 5
     features = [rng.randrange(0, 57) for _ in months]
@@ -61,7 +69,7 @@ def seed(dsn: str, scored: int = 40, unscored: int = 6, rng_seed: int = 7) -> di
     for i in range(scored):
         nct = f"NCT{10_000_000 + i:08d}"
         flagged = rng.random() < 0.21
-        risk = min(0.95, rng.betavariate(1.2, 25))
+        risk = _risk(rng)
         latest.append((nct, DAY, min(6, i % 9), 7 + i % 10 if flagged else i % 7, flagged, MODEL,
                        risk, min(0.99, risk * 1.7), *_drivers(rng), rng.randbytes(32)))  # fmt: skip
         history.append((nct, DAY, MODEL, risk, min(0.99, risk * 1.7), ["first_score"],
