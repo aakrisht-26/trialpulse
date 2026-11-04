@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): items 1 (the contract changes of guidance items 10 and 13 and the rebuild) and 2 (the bootstrap, its rehearsal and the day-0 check) are done; items 3 and 4 follow (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
+Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): items 1 (the contract changes of guidance items 10 and 13 and the rebuild), 2 (the bootstrap, its rehearsal and the day-0 check) and 3 (the census) are done; item 4 follows (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2672,6 +2672,63 @@ The bootstrap must print the held-to-Step-13 counts with no difference but the c
 | The Neon figures are lower bounds | Said above |
 
 One risk the check named but could not test without Neon, a connection left silent for the 5 minutes of the scores stage, is removed: the bootstrap now checks first on a short connection, computes the scores with none held, then takes the lease (`d6e9e84`). Since that changed the command after its rehearsal, the rehearsal and the day-0 check run again on the final commit of phase A.
+
+### Item 3: the census of ADR 0042 on every unchanged trial
+
+**What was built.** `trialpulse.warehouse.census` (`364b46b`, fixed in `e47b548`): it pulls every open or UNKNOWN interventional record of API v2 at 30 requests a minute, converts each as the live pull does (scrubbed, `canonical_from_api_v2`, the canonical contract) in 6 worker processes, and compares every unchanged trial (the record's last update posted date equals the date of the trial's last version in the warehouse) column by column. Each difference gets its column's rule from ADR 0042. In a field a served feature reads (the sources of the compact row), the raw values must differ: a registry change made without a new version, counted with its cause. They are read again from API v2 by id, and from `raw_versions`, the pinned core files and the interventions config, and compared in substance (HTML entities decoded, enums without their form, dates parsed). The same raw value with another canonical value is a bug. The status goes by the submitted status (ADR 0066), the sponsor by the raw name and class, the titles by the phase they state, the intervention types by the raw pairs. Summary, eligibility and why-stopped texts are counted by cause. Condition 4 is also checked on real records, through both sources' compact rows under a throwaway key. Counts only; records are held in memory only. Tests on the synthetic warehouse against a fake API cover every rule and failure; 13 of 13 mutants fail them.
+
+**The run** (2026-11-05, from `e47b548`, charger in; log `data/logs/census_20261105_run2.log`, counts in `data/census/census_2026-11-04.json`): API v2 data as of 2026-11-04, dataset v2026.09.26, 1,102 s.
+
+| | Count |
+| --- | --- |
+| Records pulled (161 pages; the API counted the same) | 160,194 |
+| Unchanged trials | **145,535** |
+| Later on the registry, behind the warehouse, not in the warehouse | 10,794; 390; 3,475 |
+| Records quarantined on the API path | 0 |
+| Unchanged trials with no difference | 134,148 |
+| Differing only in the registry's UNKNOWN label, or in fields no feature reads | 9,856 |
+| Differing in a field a served feature reads | 1,531 |
+| **Failing differences** (a bug, a title phase moved, an unreadable raw value) | **0** |
+
+| Column | Differences, by cause |
+| --- | --- |
+| Sponsor key (and name) | Another name 1,374; the class changed under the same name 2 (the name also: the same name but for case or punctuation 6) |
+| Lead sponsor class; organization class | The value changed 27; 40 |
+| Official title; brief title | Case only 113; 78, and letters or digits 2; 1, all with **the same title phase** |
+| Intervention types | The interventions changed 2 |
+| Overall status and last known status | The registry's UNKNOWN label only, the submitted status equal: 9,866 |
+| Brief summary; eligibility (counted, never failed) | 57 (case or punctuation 22, letters or digits 35); 75 (21, 54) |
+
+**The four conditions of ADR 0042.**
+
+1. `normalize_text` drops a Markdown line that is only an HTML comment: 0 differing API texts still hold an HTML comment. On 2026-11-01, 288 fields differed for that reason.
+2. Every field a served feature reads matches but for registry changes made without a new version: each of the 1,531 trials has a counted cause, with **0 bugs** (the same raw value giving another canonical value) and **0 titles stating another phase**.
+3. Summary and eligibility differences are counted by cause and fail nothing: 57 and 75. The 2026-11-01 census expected about 133 after the comment fix; 132 remain.
+4. A difference in a field no feature reads never makes a version, a history row or a `record_change`: the test of `tests/live/test_daily.py:278`, and on real records all 9,856 trials that differ only in such fields have equal feature hashes on both sources (and all 134,148 without a difference). 0 breaks.
+
+**The seeded 50** (a draw of 50 unchanged trials with the project's seed): 2 differ, one by a sponsor rename (a feature field, with its cause) and one by the UNKNOWN label; 0 failing differences; condition 4 holds on all 50. The literal criterion of Step 14, "identical canonical rows", would have stopped on those 2 for registry-side causes, as ADR 0042 foresaw.
+
+**A working agreement broken, reported.** The first run converted every record in one process (about 14 ms a record). It ran 62 minutes and then stopped on an HTTP error the message did not name, losing everything it held. I had estimated about 12 minutes from the 2026-11-01 census, which converted in 6 worker processes, without measuring this command first, and did not propose a cheaper plan before it passed an hour. The likely cause of the error is the second read of the differing records at 500 ids a request, against the 200 the 2026-11-01 census used. The fix converts in 6 worker processes while the pull goes on, reads 200 ids a request, prints progress every 20 pages, and names the path and HTTP status of a failed request (never its query, which holds trial ids). The rerun took 18.4 minutes.
+
+**Decisions made without asking (flagged).**
+
+1. The population is every open or UNKNOWN interventional record of API v2: the population of the 2026-11-01 census, on which ADR 0042 and its estimate of about 12 minutes rest. Closed trials are outside it; their fields go through the same mapping.
+2. Raw values are compared in substance, not in their source's form (the dataset's HTML entities, enum spellings and parsed dates against API v2's JSON). Without that, a format difference would pass as a registry change and could hide a bug.
+3. A bug fails the census in any column but the texts, not only in fields a feature reads: stricter than condition 2.
+4. The seeded 50 are drawn with the project's seed (42), salted `census-50`.
+
+**Files touched.** `src/trialpulse/warehouse/census.py` and `tests/warehouse/test_census.py` (new).
+
+**Blocked or deferred.** Nothing is blocked. ADR 0042 runs the census at the bootstrap; this run is phase A's, and it runs again at the bootstrap of the Neon phase.
+
+**Verify (PowerShell).** About 20 minutes and 160 requests to API v2.
+
+```powershell
+uv run pytest -q -m "slow or not slow" tests/warehouse/test_census.py
+uv run python -m trialpulse.warehouse.census
+```
+
+The census must end with "Census: passes".
 
 ## Laptop work before the deployments (2026-11-04)
 
