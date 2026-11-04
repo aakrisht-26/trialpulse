@@ -166,12 +166,21 @@ def prepare(
     register_keys(con, files)
 
 
+FEED_VERSIONS = "feed_versions"
+
+
 def prepare_sources(
-    con: duckdb.DuckDBPyConnection, warehouse: Path, interventions: str, rules: CohortRules
+    con: duckdb.DuckDBPyConnection,
+    warehouse: Path,
+    interventions: str,
+    rules: CohortRules,
+    only_versions: str | None = None,
 ) -> None:
     """What the feature queries read, without any key: the whitelisted `versions` view,
     `texts` and `intervention_versions`. A caller with keys of its own (Step 13's served
-    rows) registers `feature_keys` itself."""
+    rows) registers `feature_keys` itself. With `only_versions`, a relation of `con` holding
+    (nct_id, nct_version), the view shows those versions of the warehouse and no other (the
+    feed of parity layer 2, ADR 0038)."""
     if not warehouse.is_file():
         raise RefusedError(
             f"no warehouse at {warehouse}; run: uv run python -m trialpulse.warehouse.build"
@@ -183,7 +192,14 @@ def prepare_sources(
         )
     con.execute(f"ATTACH '{warehouse.as_posix()}' AS wh (READ_ONLY)")
     check_warehouse_schema(con)
-    expose_versions(con, "wh.versions", rules)
+    source = "wh.versions"
+    if only_versions is not None:
+        con.execute(
+            f"""CREATE OR REPLACE TEMP TABLE {FEED_VERSIONS} AS SELECT v.* FROM wh.versions v
+            SEMI JOIN {only_versions} k ON k.nct_id = v.nct_id AND k.nct_version = v.nct_version"""
+        )
+        source = FEED_VERSIONS
+    expose_versions(con, source, rules)
     con.execute("CREATE OR REPLACE TEMP VIEW texts AS SELECT text_hash, text FROM wh.texts")
     con.execute(
         f"""CREATE OR REPLACE TEMP TABLE intervention_versions AS

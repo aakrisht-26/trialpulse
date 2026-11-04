@@ -151,6 +151,30 @@ def score_file(scores: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
+@dataclass
+class Fetched:
+    """What a run's pull gives: the raw records (the display rows read them), their
+    conversion and the pages read."""
+
+    studies: list[dict[str, Any]]
+    converted: pull.Converted
+    pages: int
+
+
+Fetch = Callable[[dt.date, dt.date], Fetched]
+
+
+def api_fetch(api: ApiClient, rules: CohortRules, secret: bytes, page_size: int) -> Fetch:
+    """The job's own pull: the API v2 records updated from `since` through `day`,
+    converted as the live path converts them (ADR 0037)."""
+
+    def fetch(since: dt.date, day: dt.date) -> Fetched:
+        pulled = pull.pull_delta(api, since, day, page_size)
+        return Fetched(pulled.studies, pull.convert(pulled.studies, rules, secret), pulled.pages)
+
+    return fetch
+
+
 def run_daily(
     cfg: ProjectConfig,
     dsn: str,
@@ -159,6 +183,7 @@ def run_daily(
     model: Model,
     force: bool = False,
     fail_after: str | None = None,
+    fetch: Fetch | None = None,
 ) -> Report:
     """One run of the daily job (see the module text).
 
@@ -168,6 +193,10 @@ def run_daily(
     5 minutes (`idle_in_transaction_session_timeout`), and a full run's drivers take longer.
     Reads and the writes that follow them are separate transactions; the lease keeps every
     other writer out between them.
+
+    `fetch` replaces the pull (`api_fetch`, the default) and nothing else: the replay of
+    parity layer 2 (`live.replay_parity`) feeds the job records from the warehouse. The date
+    of the run still comes from `api`.
     """
     import psycopg
 
@@ -206,8 +235,9 @@ def run_daily(
             latest = store.latest_post_date(cur) or boot["watermark_to"]
             mark = runs.watermark(latest, day)
             since = runs.pull_since(mark, live.overlap_days)
-            pulled = pull.pull_delta(api, since, day, live.page_size)
-            converted = pull.convert(pulled.studies, rules, secret)
+            source = fetch or api_fetch(api, rules, secret, live.page_size)
+            fetched = source(since, day)
+            converted = fetched.converted
             store.renew(cur, report.run_id)
             records = [r for r in converted.rows if r["effective_date"] <= day]
             # Quarantined records' trials too: the gate compares them with their stored rows.
@@ -238,7 +268,7 @@ def run_daily(
             exits = lapse_events(lapsed, previous["data_timestamp"], day)
             # Display rows (ADR 0051) of the live trials whose record was applied today.
             applied = {str(r["nct_id"]) for r in records}
-            shown = [r for r in display.display_rows(pulled.studies, secret)
+            shown = [r for r in display.display_rows(fetched.studies, secret)
                      if r.nct_id in applied and r.nct_id in memory.wides]  # fmt: skip
             with con.transaction():
                 store.renew(cur, report.run_id)  # first in every write (ADR 0060)
@@ -249,11 +279,12 @@ def run_daily(
                 store.quarantine(cur, converted.quarantined, report.run_id)
             timings[INGEST] = clock.perf_counter() - tick
             report.counts.update(
-                watermark_from=since, watermark_to=mark, records_fetched=len(pulled.studies),
+                watermark_from=since, watermark_to=mark,
+                records_fetched=len(converted.rows) + len(converted.quarantined),
                 versions_added=len(done.versions),
                 records_quarantined=len(converted.quarantined),
                 details={"actions": dict(done.counts), "deferred": len(converted.rows)
-                         - len(records), "lapse_exits": len(exits), "pages": pulled.pages},
+                         - len(records), "lapse_exits": len(exits), "pages": fetched.pages},
             )  # fmt: skip
             if fail_after == INGEST:
                 raise InjectedFailureError(INGEST)
@@ -355,7 +386,18 @@ class DayScores:
     rescored: int  # the scored trials of the scope
 
 
-def score_day(
+@dataclass
+class DayFeatures:
+    """The classified population of a run's date, its scope, the scored trials of the scope
+    and their served features."""
+
+    people: pd.DataFrame
+    chosen: runs.Scope
+    scored: pd.DataFrame
+    features: pd.DataFrame
+
+
+def day_features(
     cur: Any,
     cfg: ProjectConfig,
     rules: CohortRules,
@@ -363,11 +405,10 @@ def score_day(
     sponsors: Any,
     model: Model,
     full: bool,
-) -> DayScores:
-    """The scores of the run's scope on `day`, from the live tables and the sponsor file,
-    publishing nothing (the day-0 check of ADR 0038 calls it as the job does). `cur` must be
-    in autocommit: the reads here are single statements, and the scoring that follows them
-    runs with no transaction open (ADR 0058)."""
+) -> DayFeatures:
+    """The served features of the run's scope on `day`, from the live tables and the sponsor
+    file (`score_day` scores them; the replay of parity layer 2 compares them with the
+    offline path). `cur` must be in autocommit: the reads are single statements."""
     rows = store.population_rows(cur, day, rules.open_statuses, rules.study_type,
                                  rules.min_first_post_date)  # fmt: skip
     people = pd.DataFrame(rows, columns=["trial_id", "t0", "reversal", "content_hash",
@@ -382,6 +423,24 @@ def score_day(
     keys = live_features.served_keys(scored, day, rules, cfg)
     count = store.open_count(cur, day, rules.open_statuses, rules.study_type)
     features = live_features.compute_live(wides, keys, sponsors, count, rules)
+    return DayFeatures(people, chosen, scored, features)
+
+
+def score_day(
+    cur: Any,
+    cfg: ProjectConfig,
+    rules: CohortRules,
+    day: dt.date,
+    sponsors: Any,
+    model: Model,
+    full: bool,
+) -> DayScores:
+    """The scores of the run's scope on `day`, from the live tables and the sponsor file,
+    publishing nothing (the day-0 check of ADR 0038 calls it as the job does). `cur` must be
+    in autocommit: the reads here are single statements, and the scoring that follows them
+    runs with no transaction open (ADR 0058)."""
+    found = day_features(cur, cfg, rules, day, sponsors, model, full)
+    people, chosen, scored, features = found.people, found.chosen, found.scored, found.features
     scores = model.score(scored, features, day) if len(scored) else _empty_scores()
     if set(scores["model_version"]) - {model.version}:
         raise RefusedError(f"the scores are not of the model {model.version} that was scoped")

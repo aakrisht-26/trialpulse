@@ -14,8 +14,9 @@ import pytest
 import respx
 from tenacity import wait_none
 
-from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL, ApiClient
-from trialpulse.live import daily, store
+from trialpulse.cohort.rules import CohortRules
+from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL, ApiClient, scrub_personal_data
+from trialpulse.live import daily, pull, store
 from trialpulse.live.seed import seed
 from trialpulse.live.sponsors import SponsorFile
 
@@ -171,6 +172,32 @@ def test_a_daily_run_publishes_and_a_second_run_changes_nothing(dsn: str) -> Non
     assert again.counts["trials_rescored"] == 0
     assert _digest(dsn) == before
     _assert_served_is_the_population(dsn, DAY)
+
+
+@respx.mock
+def test_an_injected_fetch_replaces_the_pull_and_nothing_else(dsn: str) -> None:
+    """The replay of parity layer 2 feeds the job its own records (`fetch`): given the
+    records the API path converts, the job writes what it writes from the API, the display
+    rows aside (they are made from raw records, which a feed has none of)."""
+    _bootstrap(dsn)
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "succeeded"
+    through_api = _digest(dsn, skip=DISPLAY)
+    _bootstrap(dsn, rebuild=True)
+    rules = CohortRules.from_config(CFG, cutoff=max(DAY, CFG.dataset.cutoff or DAY))
+    studies = [s for name in ("delta_page_1.json", "delta_page_2.json")
+               for s in _load(name)["studies"]]  # fmt: skip
+    converted = pull.convert(scrub_personal_data(studies), rules, SECRET)
+    asked: list[tuple[dt.date, dt.date]] = []
+
+    def fetch(since: dt.date, day: dt.date) -> daily.Fetched:
+        asked.append((since, day))
+        return daily.Fetched([], converted, pages=2)
+
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL, fetch=fetch)
+    assert report.status == "succeeded"
+    assert asked == [(RELEASE - dt.timedelta(days=CFG.live.overlap_days), DAY)]
+    assert report.counts["records_fetched"] == len(studies)
+    assert _digest(dsn, skip=DISPLAY) == through_api
 
 
 @respx.mock

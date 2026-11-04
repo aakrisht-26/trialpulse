@@ -375,8 +375,11 @@ def run_bootstrap(
     rebuild: bool,
     inputs: Inputs,
     say: Callable[[str], None] = print,
+    day: dt.date | None = None,
 ) -> dict[str, Any]:
-    """The bootstrap (see the module text); returns its report."""
+    """The bootstrap (see the module text); returns its report. It is dated the data cutoff;
+    the replay of parity layer 2 (`live.replay_parity`) dates it earlier, on a day whose
+    Step 13 files exist, so that the daily job can run forward to the cutoff."""
     import psycopg
 
     from trialpulse.live import daily, reasons
@@ -385,7 +388,9 @@ def run_bootstrap(
 
     if cfg.dataset.cutoff is None:
         raise RefusedError("config/project.yaml records no data cutoff")
-    day = cfg.dataset.cutoff
+    day = day or cfg.dataset.cutoff
+    if day > cfg.dataset.cutoff:
+        raise RefusedError(f"the bootstrap cannot be dated after the data cutoff ({day})")
     rules = CohortRules.from_config(cfg, cutoff=day)
     started = clock.perf_counter()
     report: dict[str, Any] = {"release": day.isoformat(), "seconds": {}, "memory_mb": {}}
