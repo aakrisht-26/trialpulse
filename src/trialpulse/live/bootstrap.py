@@ -6,13 +6,16 @@ the live state as of the data cutoff, computed from the warehouse and written on
 
 Laptop only (ADR 0040): it reads the warehouse and refuses under GitHub Actions. It needs
 SPONSOR_ID_KEY (ADR 0044) and a database at the migration head, and without `--rebuild` it
-refuses over any live row. In order:
+refuses over any live row; both are checked first, on a short connection. In order:
 
-1. **The lease** (`store.start_bootstrap`), in a short transaction of its own; the stages
-   below renew it (ADR 0060), and a failure is recorded on a fresh connection.
-2. **The cutoff's scores and drivers**, regenerated through Step 13's code
+1. **The cutoff's scores and drivers**, regenerated through Step 13's code
    (`scoring.score.score`) on the warehouse, and held to Step 13's files of that date: the
-   write is refused if a trial, a risk, a driver or a reason differs.
+   bootstrap stops if a trial, a risk, a driver or a reason differs. No connection is held
+   while they are computed (about 5 minutes), since a database such as Neon may end a
+   session that sends nothing.
+2. **The lease** (`store.start_bootstrap`), on a new connection after the checks are made
+   again, in a short transaction of its own; the stages below renew it (ADR 0060), and a
+   failure is recorded on a fresh connection.
 3. **The seeded state, streamed** (`stream_seed`): one DuckDB query reads the versions in
    (trial, post date, version) order with their titles and intervention types, a batch of
    rows at a time; each becomes a compact row (`contract.compact_row`), and each trial goes
@@ -27,6 +30,10 @@ refuses over any live row. In order:
 6. **The write** (W1): every row prepared with no transaction open
    (`store.prepare_bootstrap`), then sent in one transaction (`store.load_bootstrap`), so
    nothing is computed while it is open.
+
+A rebuild empties the display tables (`serving.trial_display`, `serving.sponsors`), which
+only the bulk display pull fills (ADR 0051): run `trialpulse.live.display` after every
+bootstrap, and never before the first, since its rows would make the bootstrap refuse.
 
 It prints counts, the seconds of each stage and of the write, the rows and bytes sent per
 table, the stored bytes per table, and the process's memory (its peak working set and peak
@@ -73,6 +80,8 @@ SCORE_COLUMNS: tuple[str, ...] = ("as_of_date", "true_index", "landmark_index", 
                                   "drivers")  # fmt: skip
 UNSCORED_COLUMNS: tuple[str, ...] = ("as_of_date", "true_index", "reason")
 UPLINKS_MBPS: tuple[float, ...] = (10.0, 2.0)  # the Neon estimate's uplinks
+DISPLAY_NEXT = ("next: the display tables are empty; fill them with uv run python -m "
+                "trialpulse.live.display --target <the same target> (ADR 0051)")  # fmt: skip
 
 
 # Memory -----------------------------------------------------------------------------------
@@ -389,19 +398,41 @@ def run_bootstrap(
         report["memory_mb"][stage] = memory_mb()
         say(f"{stage}: {report['seconds'][stage]} s, memory {report['memory_mb'][stage]}")
 
+    def connect() -> Any:
+        try:
+            return psycopg.connect(dsn, connect_timeout=10, autocommit=True)
+        except psycopg.Error as exc:
+            raise daily.JobFailedError(daily.failure_line("connect", exc),
+                                       type(exc).__name__) from None  # fmt: skip
+
+    def check(cur: Any) -> None:
+        store.check_head(cur)
+        occupied = store.occupied_tables(cur)
+        if occupied and not rebuild:
+            raise RefusedError(f"live state exists in {len(occupied)} tables; start it "
+                               "again with --rebuild")  # fmt: skip
+
+    with connect() as first, first.cursor() as cur:  # refuse before computing anything
+        check(cur)
+    stage, tick = "scores", clock.perf_counter()
     try:
-        con = psycopg.connect(dsn, connect_timeout=10, autocommit=True)
-    except psycopg.Error as exc:
-        raise daily.JobFailedError(daily.failure_line("connect", exc), type(exc).__name__) from None
+        scored = offline.score(cfg, day, bundle, decisions, warehouse=inputs.warehouse)
+    except Exception as exc:  # no lease is held yet, so there is no run row to fail
+        raise daily.JobFailedError(daily.failure_line(stage, exc), type(exc).__name__) from None
+    compared = compare_scores(scored, *reference)
+    report["held_to_step13"] = compared
+    found = differences(compared)
+    if found:
+        raise RefusedError("the regenerated cutoff scores differ from Step 13's: "
+                           + "; ".join(found))  # fmt: skip
+    mark(stage, tick)
+
+    con = connect()
     run_id: int | None = None
     stage = "start"
     try:
         with con.cursor() as cur:
-            store.check_head(cur)
-            occupied = store.occupied_tables(cur)
-            if occupied and not rebuild:
-                raise RefusedError(f"live state exists in {len(occupied)} tables; start it "
-                                   "again with --rebuild")  # fmt: skip
+            check(cur)  # again: the database may have changed while the scores were made
             with con.transaction():
                 run_id = store.start_bootstrap(cur, day, cfg.live.lease_stale_minutes)
             report["run_id"] = run_id
@@ -409,17 +440,6 @@ def run_bootstrap(
 
             def renew() -> None:
                 store.renew(cur, lease)
-
-            stage, tick = "scores", clock.perf_counter()
-            scored = offline.score(cfg, day, bundle, decisions, warehouse=inputs.warehouse)
-            compared = compare_scores(scored, *reference)
-            report["held_to_step13"] = compared
-            found = differences(compared)
-            if found:
-                raise RefusedError("the regenerated cutoff scores differ from Step 13's: "
-                                   + "; ".join(found))  # fmt: skip
-            renew()
-            mark(stage, tick)
 
             stage, tick = "seed", clock.perf_counter()
             with open_warehouse(inputs.warehouse) as wh:
@@ -481,6 +501,8 @@ def run_bootstrap(
         con.close()
     report["seconds"]["total"] = round(clock.perf_counter() - started, 1)
     report["memory_mb"]["end"] = memory_mb()
+    report["next"] = DISPLAY_NEXT
+    say(DISPLAY_NEXT)
     return report
 
 

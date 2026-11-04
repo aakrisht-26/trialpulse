@@ -7,17 +7,33 @@ CI)."""
 import dataclasses
 import datetime as dt
 import json
+import re
+from pathlib import Path
 
+import duckdb
 import numpy as np
 import pandas as pd
 import pytest
 
-from trialpulse.live import contract, seed, store
+from trialpulse.cli import RefusedError
+from trialpulse.live import bootstrap, contract, daily, reasons, seed, store
 from trialpulse.live.sponsors import SponsorFile
+from trialpulse.scoring import bundle as bundle_module
 from trialpulse.scoring import predict, serving
+from trialpulse.scoring import score as score_module
 from trialpulse.scoring.predict import Scored
 
-from .conftest import CFG, KEEP, RULES, compact_history
+from .conftest import (
+    _FEATURES,
+    CFG,
+    DECISIONS,
+    KEEP,
+    RULES,
+    SECRET,
+    compact_history,
+    compact_history_of,
+    registry,
+)
 
 psycopg = pytest.importorskip("psycopg")
 
@@ -154,6 +170,10 @@ def test_the_write_is_all_or_nothing(dsn: str) -> None:
 def test_a_bootstrap_refuses_over_live_rows_unless_it_rebuilds(dsn: str) -> None:
     seeded = _seeded()
     with psycopg.connect(dsn, autocommit=True) as con:
+        with con.cursor() as cur, con.transaction():  # an earlier state's daily run
+            old = store.start_run(cur, "daily", "full", RELEASE, 120)
+            store.finish_run(cur, old, "succeeded", {"watermark_to": RELEASE})
+            store.set_data_status(cur, RELEASE, "old-model/1", RULES.early_stop)
         con.execute("INSERT INTO serving.trials_not_scored (nct_id, as_of_date, "
                     "true_landmark_index, reason) VALUES ('NCT99999999', %s, 21, "
                     "'beyond_120_months')", (RELEASE,))  # fmt: skip
@@ -173,7 +193,35 @@ def test_a_bootstrap_refuses_over_live_rows_unless_it_rebuilds(dsn: str) -> None
             store.load_bootstrap(cur, rows, rebuild=True)
         left = con.execute("SELECT count(*) FROM serving.trials_not_scored WHERE nct_id = "
                            "'NCT99999999'").fetchone()  # fmt: skip
+        runs = con.execute("SELECT run_id, job FROM monitoring.pipeline_runs").fetchall()
+        status = con.execute("SELECT data_as_of, model_version FROM serving.data_status"
+                             ).fetchone()  # fmt: skip
     assert left == (0,)
+    assert runs == [(run_id, "bootstrap")]  # every other run's row is gone
+    assert status == (None, None)  # the daily job's columns start again
+
+
+def test_a_write_after_its_lease_was_taken_over_writes_nothing(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lease is renewed first in the write (ADR 0060): a bootstrap whose run was taken
+    over as stale while it computed sends no row at all, and leaves every table as it was."""
+    seeded = _seeded()
+    sent: list[str] = []
+    real_file = store._write_file
+    monkeypatch.setattr(store, "_write_file", lambda cur, values: (
+        sent.append("file"), real_file(cur, values)))  # fmt: skip
+    with psycopg.connect(dsn, autocommit=True) as con:
+        run_id = _lease(con)
+        with con.cursor() as cur:
+            rows = store.prepare_bootstrap(cur, run_id, RELEASE, seeded.wides, seeded.sponsors,
+                                           seeded.markers, _scored(seeded), REASONS)  # fmt: skip
+        con.execute("UPDATE monitoring.pipeline_runs SET status = 'failed' WHERE run_id = %s",
+                    (run_id,))  # fmt: skip
+        with pytest.raises(store.LeaseLostError), con.cursor() as cur, con.transaction():
+            store.load_bootstrap(cur, rows)
+        assert sent == []  # stopped before its first write, not only at the end
+        assert set(_counts(con).values()) == {0}
 
 
 def test_the_copied_scores_are_the_rows_publish_writes_into_empty_tables(dsn: str) -> None:
@@ -200,3 +248,112 @@ def test_the_copied_scores_are_the_rows_publish_writes_into_empty_tables(dsn: st
     assert serving.table_digest(dsn) == published
     reasons = {tuple(r[5]) for r in history}
     assert reasons == {(serving.FIRST,)}
+
+
+# The command's own flow (the item 2 check, finding 1) -------------------------------------
+
+DATA = registry(300, 7)
+
+
+def _registry_warehouse() -> duckdb.DuckDBPyConnection:
+    """The synthetic registry in the warehouse's layout, as the bootstrap's stream reads it."""
+    con = duckdb.connect()
+    _FEATURES.load_versions(con, DATA.versions, "versions")
+    _FEATURES.load_texts(con, DATA.texts)
+    return con
+
+
+@pytest.fixture
+def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> bootstrap.Inputs:
+    """The bootstrap's inputs on the synthetic registry: Step 13's scoring and files, the
+    bundle and the reason counts stood in for, the stream reading the registry."""
+    seeded = seed.seed(compact_history_of(DATA.versions, DATA.texts, DATA.interventions),
+                       RELEASE, RULES, KEEP, *ALIASES)  # fmt: skip
+    scored = _scored(seeded)
+    scored.scores.to_parquet(tmp_path / f"scores_{RELEASE}.parquet")
+    scored.unscored.to_parquet(tmp_path / f"unscored_{RELEASE}.parquet")
+    monkeypatch.setattr(score_module, "score", lambda *a, **k: Scored(
+        scored.scores.copy(), scored.unscored.copy(), {}))  # fmt: skip
+    monkeypatch.setattr(score_module, "served_decisions", lambda *a, **k: DECISIONS)
+    monkeypatch.setattr(bundle_module, "load_bundle", lambda *a, **k: None)
+    monkeypatch.setattr(bootstrap, "open_warehouse", lambda path: _registry_warehouse())
+    monkeypatch.setattr(reasons, "counts_from_files", lambda *a: REASONS)
+    return bootstrap.Inputs(tmp_path / "warehouse.duckdb", tmp_path, tmp_path / "checks.json",
+                            tmp_path / "outcomes.parquet", tmp_path)  # fmt: skip
+
+
+def _runs(dsn: str) -> list[tuple[object, ...]]:
+    with psycopg.connect(dsn) as con:
+        return con.execute("SELECT job, status, error FROM monitoring.pipeline_runs").fetchall()
+
+
+def test_the_command_prepares_every_row_then_writes_them_in_one_transaction(
+    dsn: str, stubbed: bootstrap.Inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[str, object]] = []
+    real_prepare, real_load = store.prepare_bootstrap, store.load_bootstrap
+
+    def prepare(cur: "psycopg.Cursor[tuple[object, ...]]", *args: object) -> object:
+        seen.append(("prepare", cur.connection.info.transaction_status))
+        return real_prepare(cur, *args)  # type: ignore[arg-type]
+
+    def load(cur: "psycopg.Cursor[tuple[object, ...]]", *args: object, **kwargs: object) -> int:
+        seen.append(("load", cur.connection.info.transaction_status))
+        return real_load(cur, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "prepare_bootstrap", prepare)
+    monkeypatch.setattr(store, "load_bootstrap", load)
+    report = bootstrap.run_bootstrap(CFG, dsn, SECRET, False, stubbed, say=lambda _: None)
+    status = psycopg.pq.TransactionStatus
+    assert seen == [("prepare", status.IDLE), ("load", status.INTRANS)]
+    assert report["counts"]["scored"] == 4
+    assert report["next"] == bootstrap.DISPLAY_NEXT
+    assert _runs(dsn) == [("bootstrap", "succeeded", None)]
+    with psycopg.connect(dsn) as con:
+        counts = _counts(con)
+    assert counts["serving.trial_scores_latest"] == 4
+    assert counts["live.trial_state"] == report["counts"]["wides"] > 0
+
+
+def test_a_failed_write_records_its_stage_type_and_sqlstate_and_writes_nothing(
+    dsn: str, stubbed: bootstrap.Inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_prepare = store.prepare_bootstrap
+
+    def broken(cur: object, *args: object) -> object:
+        rows = real_prepare(cur, *args)  # type: ignore[arg-type]
+        bad = dataclasses.replace(rows.copies[-1], data=rows.copies[-1].data + b"secret words\n")
+        return dataclasses.replace(rows, copies=(*rows.copies[:-1], bad))
+
+    monkeypatch.setattr(store, "prepare_bootstrap", broken)
+    with pytest.raises(daily.JobFailedError) as failed:
+        bootstrap.run_bootstrap(CFG, dsn, SECRET, False, stubbed, say=lambda _: None)
+    assert "secret" not in str(failed.value)
+    [(job, state, error)] = _runs(dsn)
+    assert (job, state) == ("bootstrap", "failed")
+    # The stage, the exception's type and the SQLSTATE, and nothing of the row.
+    assert re.fullmatch(r"write: [A-Za-z]+ [0-9A-Z]{5}", str(error)), error
+    assert "secret" not in str(error)
+    with psycopg.connect(dsn) as con:
+        assert set(_counts(con).values()) == {0}
+
+
+def test_the_command_refuses_before_computing_or_taking_a_lease(
+    dsn: str, stubbed: bootstrap.Inputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with psycopg.connect(dsn, autocommit=True) as con:
+        con.execute("INSERT INTO serving.trials_not_scored (nct_id, as_of_date, "
+                    "true_landmark_index, reason) VALUES ('NCT99999999', %s, 21, "
+                    "'beyond_120_months')", (RELEASE,))  # fmt: skip
+    computed = score_module.score
+    monkeypatch.setattr(score_module, "score", lambda *a, **k: pytest.fail("it computed"))
+    with pytest.raises(RefusedError, match="--rebuild"):
+        bootstrap.run_bootstrap(CFG, dsn, SECRET, False, stubbed, say=lambda _: None)
+    assert _runs(dsn) == []
+    monkeypatch.setattr(score_module, "score", computed)
+    moved = pd.read_parquet(stubbed.scores_dir / f"scores_{RELEASE}.parquet")
+    moved.loc[0, "risk_12m"] += 0.01
+    moved.to_parquet(stubbed.scores_dir / f"scores_{RELEASE}.parquet")
+    with pytest.raises(RefusedError, match="differ from Step 13"):
+        bootstrap.run_bootstrap(CFG, dsn, SECRET, True, stubbed, say=lambda _: None)
+    assert _runs(dsn) == []  # held to Step 13's files before any lease
