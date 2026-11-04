@@ -73,6 +73,10 @@ TEMP_DIR = REPO_ROOT / "data" / "duckdb_tmp"
 # submitted status (ADR 0066), and versions carry their intervention types (ADR 0067).
 SCHEMA_VERSION = "4"
 INTERVENTIONS_CONFIG = "interventions"
+# DuckDB takes 80% of RAM by default, and the build also holds the whole stage as one Arrow
+# table: with the intervention lists (ADR 0067) the process reached 15.7 GB of 16. Capped,
+# DuckDB spills to the temporary directory instead; the output is the same.
+MEMORY_LIMIT = "4GB"
 TABLES: tuple[str, ...] = (
     "raw_versions",
     "texts",
@@ -629,6 +633,7 @@ def build(
     stats: dict[str, Any] = {}
     with duckdb.connect(str(building)) as con:
         con.execute(f"SET temp_directory = '{temp_dir.as_posix()}'")
+        con.execute(f"SET memory_limit = '{MEMORY_LIMIT}'")
         stats["parquet.files"] = len(
             con.execute(
                 f"SELECT DISTINCT filename FROM {_source(glob, ', filename=true')}"
