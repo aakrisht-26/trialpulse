@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+import psycopg
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
@@ -131,9 +132,11 @@ def unreachable(exc: BaseException) -> bool:
         return state.startswith("08") or state in UNREACHABLE_STATES
     # No SQLSTATE and no refusal: the server never answered (refused, reset, DNS, timeout),
     # or the connection was lost. A client-side error without one is a bug, not a wake-up.
-    return bool(exc.connection_invalidated) or type(exc.orig).__name__ in {
-        "OperationalError", "InterfaceError",
-    }  # fmt: skip
+    # isinstance, not the class name: psycopg raises subclasses, such as ConnectionTimeout
+    # when the connect timeout fires before a refusal arrives (about 2 s on Windows).
+    return bool(exc.connection_invalidated) or isinstance(
+        exc.orig, (psycopg.OperationalError, psycopg.InterfaceError)
+    )
 
 
 def refused(exc: BaseException) -> DatabaseRefused:

@@ -379,3 +379,27 @@ def test_connect_errors_are_told_apart_by_the_servers_answer(
     exc = OperationalError("connect", {}, psycopg.OperationalError(text))
     assert sqlstate(exc) == state
     assert unreachable(exc) is waking
+
+
+@pytest.mark.parametrize(
+    ("error", "waking"),
+    [
+        (psycopg.errors.ConnectionTimeout, True),
+        (psycopg.OperationalError, True),
+        (psycopg.InterfaceError, True),
+        (psycopg.ProgrammingError, False),
+    ],
+)
+def test_driver_errors_without_a_sqlstate_are_classed_by_kind_not_by_name(
+    error: type[psycopg.Error], waking: bool
+) -> None:
+    """psycopg raises ConnectionTimeout, a subclass of OperationalError, when the connect
+    timeout fires before the server's refusal arrives (about 2 s on Windows). It must answer
+    503 "waking up" like its parent class, whatever the timing of the machine running this."""
+    from sqlalchemy.exc import OperationalError
+
+    from trialpulse.api.db import sqlstate, unreachable
+
+    exc = OperationalError("connect", {}, error("connection timeout expired"))
+    assert sqlstate(exc) == ""
+    assert unreachable(exc) is waking

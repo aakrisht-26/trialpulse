@@ -67,7 +67,9 @@ def download_config(
             token=token,
         )
     except Exception as exc:
-        if type(exc).__name__ == "GatedRepoError":
+        from huggingface_hub.errors import GatedRepoError
+
+        if isinstance(exc, GatedRepoError):
             raise RefusedError(
                 "access to the gated dataset has not been granted to this Hugging Face "
                 "account, or HF_TOKEN is not set"

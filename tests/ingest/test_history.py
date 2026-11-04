@@ -3,15 +3,13 @@
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from huggingface_hub.errors import GatedRepoError
 
 from trialpulse.cli import RefusedError
 from trialpulse.config import load_project_config
 from trialpulse.ingest import history
-
-
-class GatedRepoError(Exception):
-    """Stands in for huggingface_hub's error of the same name."""
 
 
 def test_a_config_is_downloaded_to_its_own_folder_at_the_pinned_revision(tmp_path: Path) -> None:
@@ -54,7 +52,8 @@ def test_refusals(tmp_path: Path) -> None:
         history.download_config(cfg, "interventions", tmp_path, None, lambda **_: None)
 
     def gated(**_: Any) -> None:
-        raise GatedRepoError("403")
+        request = httpx.Request("GET", "https://huggingface.co/api/datasets/x")
+        raise GatedRepoError("403", response=httpx.Response(403, request=request))
 
     with pytest.raises(RefusedError, match="access to the gated dataset"):
         history.download_config(cfg, "interventions", tmp_path, None, gated)
