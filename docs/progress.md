@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. The review of Steps 14 to 16 and its fixes were merged on 2026-11-01 (see "Review of Steps 14 to 16, and its fixes"); where the API runs (finding 2) is Aakrisht's decision. **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started.
+Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. The review of Steps 14 to 16 and its fixes were merged on 2026-11-01 (see "Review of Steps 14 to 16, and its fixes"); Aakrisht approved its nine decisions and chose Render's free web service for the API on 2026-11-04 (ADR 0065). **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2568,6 +2568,11 @@ The bootstrap command is still to be written on the laptop. It must:
 - **keep every transaction short**: compute with no transaction open, and write in transactions that never wait on computation, so none is idle for Neon's 5 minutes (ADR 0058). `store.load_bootstrap` writes the seeded state in the caller's one transaction, so the caller must have everything computed before it opens it, and must check that the write itself stays well under the limit at the cutoff's size (measured first, under the one-hour rule);
 - **take the lease** before writing (it does, through `load_bootstrap`), and use `rebuild=True` only to start the live state again; a rebuild now clears every table the daily job writes.
 
+### Aakrisht's decisions (2026-11-04)
+
+- **The nine decisions made without asking** in the fixes session (pull request aakrisht-26/trialpulse#10, listed below) are approved.
+- **Finding 2: the API runs on Render's free web service** (ADR 0065, amending Section 13 and Step 15), because Hugging Face Spaces block outbound connections to port 5432 (their Spaces overview page) and a Docker Space needs a paid plan. Render's X-Forwarded-For behaviour is measured once the API is deployed, before the per-client rate limit is relied on.
+
 ### Finding 2: where the API can run (research only, no code)
 
 What the API needs: a container (`Dockerfile.api`) or a Python ASGI app; outbound TCP to Neon on port 5432; no payment card; a wake that the dashboard's 3-minute budget covers; terms that allow a non-commercial research demo. Read on each host's own pages on 2026-11-01.
@@ -2600,7 +2605,7 @@ What the API needs: a container (`Dockerfile.api`) or a Python ASGI app; outboun
 
 | Item | Why not here |
 | --- | --- |
-| Finding 2: choosing the API's host, its ADR and the deployment | Aakrisht's decision; research above |
+| Finding 2: the deployment to Render (decided on 2026-11-04, ADR 0065) | Needs Aakrisht's Render account and Neon |
 | Finding 6: disabling `daily.yml` until go-live (`gh workflow disable daily.yml`) | Aakrisht handles it |
 | Writing the bootstrap command under the rule above, and measuring it at the cutoff's size | Needs `data/` |
 | Migrating Neon to 0006 (`uv run python -m trialpulse.live.migrate`), then the API role (`uv run python -m trialpulse.live.api_role --target neon`) | Needs Neon |

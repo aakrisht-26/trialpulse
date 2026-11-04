@@ -108,6 +108,6 @@ api:
   retry_wait_seconds: 2             # one retry for a compute that is waking up
   unavailable_retry_after_seconds: 30
   rate_limit_per_minute: 60         # per client address
-  trusted_proxies: 1                # Hugging Face Spaces appends the client's address
+  trusted_proxies: 1                # Render: measured on the deployed service (ADR 0065)
   cache_entries: 20000
   page_size_max: 200
