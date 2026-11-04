@@ -57,6 +57,7 @@ import secrets
 import time as clock
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -93,7 +94,10 @@ from trialpulse.live.pull import live_fields
 from trialpulse.warehouse.build import TEMP_DIR, WAREHOUSE_PATH, dataset_glob, interventions_glob
 
 PER_MINUTE = 30  # under the project's limit of 40 (CLAUDE.md Section 7)
-REFETCH_IDS = 500  # ids per request when the differing records are read again
+REFETCH_IDS = 200  # ids per request when the differing records are read again (the
+# census of 2026-11-01 used 200; a read of 500 ended the first run with an HTTP error)
+WORKERS = 6  # processes converting the pulled pages, so the pull waits on the API only
+PROGRESS_PAGES = 20
 SAMPLE_SIZE = 50
 OUT_DIR = REPO_ROOT / "data" / "census"
 POPULATION_STUDY_TYPE = "AREA[StudyType]INTERVENTIONAL"
@@ -450,44 +454,88 @@ def _identity(study: Mapping[str, Any]) -> tuple[str | None, dt.date | None]:
             parse_partial_date(posted).value if isinstance(posted, str) else None)  # fmt: skip
 
 
-def pull_population(api: JsonApi, cfg: ProjectConfig) -> Pulled:
-    """Every record of the population, converted as the live path converts it."""
+Converted = list[
+    tuple[
+        str | None,
+        dt.date | None,
+        dict[str, Any] | None,
+        tuple[str | None, str | None] | None,
+        str | None,
+    ]
+]
+
+
+def convert_page(studies: list[dict[str, Any]]) -> Converted:
+    """Each record of a page as the live path converts it: (trial, post date, canonical
+    row, the two titles' texts, None), or (trial, post date, None, None, the reason it
+    fails). Run in a worker process by the command."""
+    out: Converted = []
+    for study in studies:
+        nct, posted = _identity(study)
+        try:
+            row, texts = canonical_from_api_v2(study)
+        except FieldTypeError as exc:
+            out.append((nct, posted, None, None, f"{exc.field}: wrong JSON type"))
+        except Exception as exc:  # one bad record never stops the census
+            out.append((nct, posted, None, None,
+                        f"record: conversion failed ({type(exc).__name__})"))  # fmt: skip
+        else:
+            titles = (texts.get(row["official_title_hash"] or ""),
+                      texts.get(row["brief_title_hash"] or ""))  # fmt: skip
+            out.append((nct, posted, row, titles, None))
+    return out
+
+
+def _worker_start() -> None:
+    from trialpulse.cli import opt_out_of_throttling
+
+    opt_out_of_throttling()  # ADR 0036, in every worker
+
+
+def pull_population(api: JsonApi, cfg: ProjectConfig, workers: int = 0, say: Any = None) -> Pulled:
+    """Every record of the population, converted as the live path converts it: in
+    `workers` processes while the pull goes on (the command uses WORKERS), or in this
+    one when `workers` is 0 (the tests)."""
     out = Pulled()
     params = population_params(cfg)
     token_: str | None = None
-    while True:
-        request = dict(params)
-        if token_:
-            request["pageToken"] = token_
-        else:
-            request["countTotal"] = "true"
-        data = api.get_json(STUDIES_URL, request)
-        out.pages += 1
-        if not token_:
-            out.total = int(data.get("totalCount") or 0)
-        for study in scrub_personal_data(data.get("studies", [])):
-            out.records += 1
-            nct, posted = _identity(study)
-            try:
-                row, texts = canonical_from_api_v2(study)
-            except FieldTypeError as exc:
-                reason = f"{exc.field}: wrong JSON type"
-            except Exception as exc:  # one bad record never stops the census
-                reason = f"record: conversion failed ({type(exc).__name__})"
+    pool = ProcessPoolExecutor(workers, initializer=_worker_start) if workers else None
+    pages: list[Future[Converted] | Converted] = []
+    try:
+        while True:
+            request = dict(params)
+            if token_:
+                request["pageToken"] = token_
             else:
-                key = str(row["nct_id"])
-                out.repeated += key in out.rows
-                out.rows[key] = row
-                out.titles[key] = (texts.get(row["official_title_hash"] or ""),
-                                   texts.get(row["brief_title_hash"] or ""))  # fmt: skip
-                continue
-            if nct is None:
-                out.unreadable[reason] += 1
-            else:
-                out.quarantined[nct] = (posted, reason)
-        token_ = data.get("nextPageToken")
-        if not token_:
-            break
+                request["countTotal"] = "true"
+            data = api.get_json(STUDIES_URL, request)
+            out.pages += 1
+            if not token_:
+                out.total = int(data.get("totalCount") or 0)
+            studies = scrub_personal_data(data.get("studies", []))
+            out.records += len(studies)
+            pages.append(pool.submit(convert_page, studies) if pool else convert_page(studies))
+            if say is not None and out.pages % PROGRESS_PAGES == 0:
+                say(f"pulled {out.pages} pages, {out.records:,} of {out.total:,} records")
+            token_ = data.get("nextPageToken")
+            if not token_:
+                break
+        for page in pages:
+            for nct, posted, row, titles, reason in (
+                page.result() if isinstance(page, Future) else page
+            ):
+                if row is not None and titles is not None:
+                    key = str(row["nct_id"])
+                    out.repeated += key in out.rows
+                    out.rows[key] = row
+                    out.titles[key] = titles
+                elif nct is None:
+                    out.unreadable[str(reason)] += 1
+                else:
+                    out.quarantined[nct] = (posted, str(reason))
+    finally:
+        if pool is not None:
+            pool.shutdown(cancel_futures=True)
     if out.records != out.total:
         raise StoppedEarlyError(f"the pull returned {out.records} records; API v2 counted "
                                 f"{out.total}")  # fmt: skip
@@ -617,12 +665,16 @@ def run_census(
     secret: bytes,
     memory_limit: str = "3GB",
     temp_dir: Path = TEMP_DIR,
+    workers: int = 0,
+    say: Any = None,
 ) -> dict[str, Any]:
     """The census (see the module text): the counts, with the verdict."""
     started = clock.monotonic()
     rules = CohortRules.from_config(cfg)
     stamp = api.get_json(VERSION_URL).get("dataTimestamp")
-    pulled = pull_population(api, cfg)
+    pulled = pull_population(api, cfg, workers, say)
+    if say is not None:
+        say(f"pulled {pulled.records:,} records in {pulled.pages} pages")
     pulled_seconds = clock.monotonic() - started
     temp_dir.mkdir(parents=True, exist_ok=True)
     with duckdb.connect() as con:
@@ -770,9 +822,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         with httpx.Client(timeout=180.0, follow_redirects=True) as client:
             result = run_census(ApiClient(client, per_minute=PER_MINUTE), inputs, cfg, secret,
-                                memory_limit=args.memory_limit)  # fmt: skip
-    except httpx.HTTPError as error:
-        raise StoppedEarlyError(f"API v2 request failed: {type(error).__name__}") from error
+                                memory_limit=args.memory_limit, workers=WORKERS,
+                                say=lambda line: print(line, flush=True))  # fmt: skip
+    except httpx.HTTPError as error:  # the status and the path, never the query (it holds ids)
+        status = (
+            f" {error.response.status_code}" if isinstance(error, httpx.HTTPStatusError) else ""
+        )
+        path = error.request.url.path if error.request is not None else ""
+        raise StoppedEarlyError(
+            f"API v2 request failed: {type(error).__name__}{status} on {path}"
+        ) from error
     args.out_dir.mkdir(parents=True, exist_ok=True)
     day = str(result["data_timestamp"] or dt.date.today().isoformat())[:10]
     out = args.out_dir / f"census_{day}.json"

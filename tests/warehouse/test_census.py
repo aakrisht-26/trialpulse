@@ -311,6 +311,20 @@ def test_the_seeded_50_is_a_fixed_draw_reported_apart(
     assert result["seeded_50"]["columns"] == result["every_unchanged_trial"]["columns"]
 
 
+@pytest.mark.slow  # it starts worker processes; CI runs every test
+def test_the_pull_converts_in_worker_processes_as_it_does_in_one(cfg: ProjectConfig) -> None:
+    pages = [nct5(), nct6(masking="SEXTUPLE"), study("NCT00000009", "2020-01-01")]
+    said: list[str] = []
+    inline = census.pull_population(FakeApi(pages), cfg)
+    pooled = census.pull_population(FakeApi(pages), cfg, workers=2, say=said.append)
+    assert pooled.rows == inline.rows
+    assert pooled.titles == inline.titles
+    assert pooled.quarantined == inline.quarantined
+    assert (pooled.pages, pooled.records, pooled.total) == (2, 3, 3)
+    assert len(inline.rows) == 2
+    assert said == []  # a progress line every 20 pages
+
+
 def test_a_pull_that_misses_records_stops(
     inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path
 ) -> None:
