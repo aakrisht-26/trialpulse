@@ -2590,18 +2590,18 @@ The second build must print "Identical to the previous build: yes", the guard "D
 
 **The rehearsal, measured** (2026-11-05, from `c2c47a1`, into the local Postgres at migration head 0006 with `--rebuild`, charger in, Windows throttling opted out; log `data/logs/bootstrap_rehearsal_20261105.log`). `SPONSOR_ID_KEY` is not set in `.env`, so the rehearsal used a throwaway key (32 random bytes) in that process's environment only, never written to a file; the local sponsor ids are therefore a rehearsal's, and the real bootstrap needs Aakrisht's key (ADR 0044).
 
-| Stage | Seconds | Process memory after the stage (MB): private, peak private, peak working set |
+| Stage | Seconds | Process memory after the stage (MiB): private, peak private, peak working set |
 | --- | --- | --- |
 | The cutoff's scores and drivers regenerated through Step 13's `score()` and held to Step 13's files | 307.7 | 1,945; 7,946; 5,672 |
 | The streamed seed (4,444,542 versions in 89 batches, 604,583 trials, 4,430,501 daily states) | 289.4 | 3,267; 7,946; 5,672 |
-| The scores' hashes onto the wide rows | 0.6 | 3,413; 7,946; 5,672 |
+| The wide rows' feature hashes onto the scores, and the reason counts | 0.6 | 3,413; 7,946; 5,672 |
 | Every row prepared, no transaction open | 29.2 | 2,542; 7,946; 5,672 |
 | **The write, one transaction** | **6.4** | 2,558; 7,946; 5,672 |
-| **Total** | **633.9** (10.6 minutes) | **Peak: 7,946 MB private (commit), 5,672 MB working set**, both reached in the scores stage (the process's own counters, `GetProcessMemoryInfo`) |
+| **Total** | **633.9** (10.6 minutes) | **Peak: 7,946 MiB private (commit; 8.3 GB), 5,672 MiB working set**, both reached in the scores stage (the process's own counters, `GetProcessMemoryInfo`) |
 
 Held to Step 13's files before anything was written: 88,895 scored trials on both sides, none on one side only, every column equal (as-of date, true and served landmark index, flag, both risks with a largest difference of 0.0, model name and version, drivers); 2,704 unscored trials, all equal with their reasons. Only the content hashes differ, by design (Step 13's are canonical schema-3 hashes, the bootstrap's the feature hashes of ADR 0037).
 
-Written: 222,706 wide rows (the trials that can still be scored or counted), 222,706 marker rows, 88,895 latest scores, 88,895 history rows (`first_score`), 2,704 unscored trials, the sponsor file (51,785 sponsor keys over 604,352 trials, 1,369 states queued past the cutoff), 3,942 reason-count rows (32,144 labeled early stops) and one succeeded bootstrap run.
+Written: 222,706 wide rows (the trials that can still be scored or counted), 222,706 marker rows, 88,895 latest scores, 88,895 history rows (`first_score`), 2,704 unscored trials, the sponsor file (51,785 sponsor keys over 604,352 trials, 1,369 states posted on the cutoff date and queued for the first daily run; 231 trials appear only in that queue), 3,942 reason-count rows (32,144 labeled early stops) and one succeeded bootstrap run.
 
 | Table | Rows | Sent (COPY bytes) | Stored (`pg_total_relation_size`) |
 | --- | --- | --- | --- |
@@ -2614,7 +2614,7 @@ Written: 222,706 wide rows (the trials that can still be scored or counted), 222
 | `serving.reason_counts` | 3,942 | not counted (plain inserts) | 434,176 |
 | **Total** | | **167,596,761** | **216,186,880** |
 
-**The write to Neon passes about 2 minutes: Aakrisht's decision, and no switch to W2.** At 167.6 MB on the wire, the transfer alone takes 134 s at 10 Mbps (140.5 s with the local write's 6.4 s) and 670 s at 2 Mbps (676.8 s). My estimate of 2026-11-04 (about 90 MB, about 1.5 minutes) left out the scores (45.6 MB) and underestimated the wide rows (94 MB, not 61). Per his decision 2, the bootstrap stays W1 and I did not start W2. Nothing in the rest of phase A writes to Neon, so items 3 and 4 went ahead. Options for his decision, which the Neon phase needs:
+**The write to Neon passes about 2 minutes: Aakrisht's decision, and no switch to W2.** At 167.6 MB on the wire, the transfer alone takes 134 s at 10 Mbps (140.5 s with the local write's 6.4 s) and 670 s at 2 Mbps (676.8 s). These are lower bounds: a Free-plan Neon compute does the server's work more slowly than the laptop, and TLS, the protocol and the reason-count inserts are outside the 167.6 MB. Any uplink under about 11 Mbps passes 2 minutes. My estimate of 2026-11-04 (about 90 MB, about 1.5 minutes) left out the scores (45.6 MB) and underestimated the wide rows (94 MB, not 61). Per his decision 2, the bootstrap stays W1 and I did not start W2. Nothing in the rest of phase A writes to Neon, so items 3 and 4 went ahead. Options for his decision, which the Neon phase needs:
 
 | | A. W1 as built | B. Measure the real uplink first, then A or C | C. W2: chunked transactions |
 | --- | --- | --- | --- |
@@ -2622,7 +2622,7 @@ Written: 222,706 wide rows (the trials that can still be scored or counted), 222
 | Risk | A dropped connection rolls everything back and the bootstrap reruns (10.6 minutes here plus the write). Neon's 5-minute limit ends sessions idle in a transaction, not a running COPY (ADR 0058) | One small write to Neon before the bootstrap, which needs his approval | New code and a partly written state between transactions, which the lease and `--rebuild` must handle |
 | Cost | None | About a minute, plus his approval to touch Neon | About a day with tests |
 
-Recommendation: B, then A unless the measured uplink makes the write pass about 5 minutes.
+Recommendation: B, then A unless the measured uplink makes the write pass about 5 minutes. B's timed COPY measures the uplink and Neon's server work together.
 
 **The day-0 check** (`uv run python -m trialpulse.live.dayzero --target local`, from `c2c47a1`, 281 s, log `data/logs/dayzero_local_20261105.log`): the daily job's own scoring stage (`daily.score_day`, a full run, nothing published) on the live state the bootstrap wrote, against Step 13's stored files (never the bootstrap's regenerated rows): 88,895 scored and 2,704 unscored trials on both sides, none on one side only; every column equal, both risks with a largest difference of 0.0, all drivers equal, all reasons equal. The live path's 91,599 content hashes equal the served rows the bootstrap wrote. "day-0 check: the live path equals Step 13 on every trial, risk and driver", exit code 0.
 
@@ -2634,7 +2634,7 @@ Recommendation: B, then A unless the measured uplink makes the write pass about 
 | `serving.amendment_markers` | 12 MB | 152.1 B | 33.9 MB now, more as the arrays grow |
 | `serving.trial_score_history` | 153.2 to 174.9 MB for 879,000 to 1,058,000 rows | 268.3 B (184 B of row, 72 B for its two indexes) | 235.8 to 283.9 MB |
 
-Together these add about 157 to 183 MB to the 12-month estimate of 551 to 573 MB, which would put it at about 708 to 756 MB: past the 700 MB line of 30% headroom, though under the 1 GB cap. This is a rough scaling, not a new sizing. The sizing must be redone with the measured rows before any Neon work; if it confirms the overrun, the choices are his (for example a narrower history row or index, an earlier retention, or a different headroom through an ADR). I changed nothing.
+Together these add about 155 to 181 MB to the 12-month estimate of 551 to 573 MB, which would put it at about 706 to 754 MB (corrected after the check: I had written 157 to 183 and 708 to 756). The check found more inputs that move it both ways: the scaled history already holds the first live run's rows, which the sizing also counts as a separate 10 MB part, and the 1.4 MB of columns the sized row left out are now in the measured row; but the sponsor file is 13.2 MB a copy (the sizing allows about 6 MB a copy for up to two), the latest table is 446.7 B a row fresh against the 382 B the sizing doubles, the markers are not scaled to the year-end row count, and update bloat on the state and markers is not counted. Its net figure is about 717 to 769 MB: past the 700 MB line of 30% headroom, though under the 1 GB cap. This is a rough scaling, not a new sizing. The sizing must be redone with the measured rows before any Neon work; if it confirms the overrun, the choices are his (for example a narrower history row or index, an earlier retention, or a different headroom through an ADR). I changed nothing.
 
 **Decisions made without asking (flagged).**
 
@@ -2645,7 +2645,7 @@ Together these add about 157 to 183 MB to the 12-month estimate of 551 to 573 MB
 
 **Files touched.** `970cf9e..c2c47a1`, 13 files: `src/trialpulse/live/bootstrap.py`, `src/trialpulse/live/dayzero.py` (new); `src/trialpulse/live/daily.py`, `src/trialpulse/live/reasons.py`, `src/trialpulse/live/seed.py`, `src/trialpulse/live/store.py`, `src/trialpulse/scoring/serving.py`; `tests/live/test_bootstrap.py`, `tests/live/test_bootstrap_sample.py`, `tests/live/test_bootstrap_write.py`, `tests/live/test_dayzero.py`, `tests/live/test_seed.py` (new); `tests/live/test_daily.py`.
 
-**Blocked or deferred.** Blocked on Aakrisht: the choice of write for Neon (above), and `SPONSOR_ID_KEY`, which he must create before the real bootstrap (ADR 0044). Deferred to the Neon phase: the sizing, redone with the measured rows. The local Postgres now holds the rehearsal's state (bootstrap run 1), not Step 13's serving rows.
+**Blocked or deferred.** Blocked on Aakrisht: the choice of write for Neon (above), and `SPONSOR_ID_KEY`, which he must create before the real bootstrap (ADR 0044). Deferred to the Neon phase: the sizing, redone with the measured rows and the inputs above; the bulk display pull after the bootstrap (a rebuild empties `serving.trial_display` and `serving.sponsors`, which only `trialpulse.live.display` fills, so the local tables are empty now and need it before any dashboard work); and the decisions file of ADR 0034 with the bundle: the daily job reads `data/scoring/champion/step13_checks.json`, which does not exist yet, and the bundle's registration for the runner must copy Step 13's result file, `data/results/checks/step13_checks.json` (SHA-256 `dae12abb...cbe9a928`, the file the day-0 check validated), byte for byte. The local Postgres now holds the rehearsal's state (bootstrap run 1), not Step 13's serving rows.
 
 **Verify (PowerShell).** The bootstrap needs `SPONSOR_ID_KEY` in `.env` (32 random bytes as hex) and the charger in (about 11 minutes, about 8 GB at its peak).
 
@@ -2657,6 +2657,21 @@ uv run python -m trialpulse.live.dayzero --target local
 ```
 
 The bootstrap must print the held-to-Step-13 counts with no difference but the content hashes, and the day-0 check must end with "day-0 check: the live path equals Step 13 on every trial, risk and driver".
+
+**The check of this item** (an independent agent, read-only, with mutation testing on a scratch clone; 8 findings, none fatal; each verified before acting):
+
+| Finding | What was done |
+| --- | --- |
+| No test ran the command's own flow (the lease, prepare before the transaction, the one transaction, the failure line, the refusals) | Fixed (`d6e9e84`): Postgres tests of `run_bootstrap` with Step 13's scoring stood in for; the 7 mutants the check named fail them (my own run) |
+| Three mutants survived: no renewal first in the write, a rebuild that keeps other runs' rows, a rebuild that keeps the data-status columns | Fixed (`d6e9e84`): the rebuild test checks both, and a write whose lease was taken over must stop before its first row |
+| A rebuild empties the display tables and nothing said so | The module text and the command's last line now say the display pull follows every bootstrap (`d6e9e84`); deferred above |
+| The day-0 test missed a dropped `flagged` column and an empty unscored side, and made its expected unscored rows with the function under test | Fixed (`2439c00`) |
+| The sizing finding's sum was off, and it missed inputs both ways | Corrected above; the conclusion holds and is firmer |
+| The decisions file the runner will read does not exist, and nothing ties it to the one the day-0 check validated | Deferred above, with the file's SHA-256 |
+| Wording: the hashes stage, MiB, the queued states | Corrected above |
+| The Neon figures are lower bounds | Said above |
+
+One risk the check named but could not test without Neon, a connection left silent for the 5 minutes of the scores stage, is removed: the bootstrap now checks first on a short connection, computes the scores with none held, then takes the lease (`d6e9e84`). Since that changed the command after its rehearsal, the rehearsal and the day-0 check run again on the final commit of phase A.
 
 ## Laptop work before the deployments (2026-11-04)
 
