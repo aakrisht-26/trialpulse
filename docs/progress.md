@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): item 1 (the contract changes of guidance items 10 and 13 and the rebuild) is done; items 2 to 4 follow (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
+Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): items 1 (the contract changes of guidance items 10 and 13 and the rebuild) and 2 (the bootstrap, its rehearsal and the day-0 check) are done; items 3 and 4 follow (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2513,25 +2513,25 @@ Aakrisht's phase A, item by item, on this laptop and the local Postgres only (no
 - The canonical row gains `intervention_types`: one type per distinct (name, type) pair on exact strings, sorted, empty when none, from the interventions config on the dataset path and from `armsInterventionsModule.interventions` on API v2, validated against the registry's 11 types and covered by the hash; warehouse schema version 4 (`0a8b0db`).
 - The guard, `trialpulse.warehouse.compare`: two warehouse files compared table by table and column by column, rows matched by key, with an allowlist, printing counts only (`1a2cc13`).
 - `trialpulse.nlp.distill --load-table` writes Step 6's `stop_reasons` table back after a rebuild from the labels on disk, labeling nothing: a build replaces the whole file (`2fe7fa1`).
-- The build caps DuckDB at 10 GB and 8 threads (`acb3182`, `4ca9351`): uncapped, the main process reached 15.7 GB of private memory on this 16 GB laptop; a 4 GB cap failed in the texts step.
+- The build caps DuckDB at 10 GB and 8 threads (`acb3182`, `4ca9351`): uncapped, a spot reading of the main process's private bytes (Get-Process, during the first attempt) found 15.7 GB on this 16 GB laptop; a 4 GB cap failed in the texts step.
 
 **The rebuild, measured** (charger in, Windows throttling opted out; logs in `data/logs/rebuild_schema4_*.log`):
 
 | Step | Result |
 | --- | --- |
 | Copy of the old warehouse | `data/warehouse_schema3.duckdb`, 4,099,682,304 bytes |
-| Build 1 | 408.4 s; "Identical to the previous build: NO", as expected after a schema change; the python processes together peaked at 22.6 GB committed (the main process and its 8 workers), so the page file took part of it |
+| Build 1 | 408.4 s; "Identical to the previous build: NO", as expected after a schema change; the python processes together peaked at 22.6 GB committed (the main process and its 8 workers), so the page file took part of it. Measured by a scratch sampler that summed the private bytes of every python.exe process every 10 s; its reading of the main process alone failed and is not used |
 | Build 2 | 400.5 s; "Identical to the previous build: yes" |
 | `stop_reasons` written back | 35,198 rows, as before |
-| Guard, old against new | No difference outside the allowlist. `versions.content_hash` differs on 4,444,542 of 4,444,542 rows (allowed: its input changed) and `intervention_types` is new. Every other column is identical in every matched row: 40 in `versions`, 36 in `raw_versions`, 9 in `trials`, 6 in `stop_reasons`, and all 2,889,754 `texts`, so no dataset text changed under ADR 0042's comment-line rule. `build_info`: the schema version and three new keys for the interventions config |
-| Cohort, cohort (UNKNOWN variant), features, features (UNKNOWN variant) | Each "Identical to the previous build: yes" (31.1, 28.2, 201.8 and 211.6 s). All 93 output files of the cohort, feature and scoring folders are byte-identical to a snapshot taken before the rebuild, except the variant's generated `features.md`, whose header names the warehouse's schema version and checksum |
-| Registered numbers and the suite | The full suite (`-m "slow or not slow"`): 1,414 passed, 22 skipped, and 2 failed: the EDA report's reproduction test, because `docs/eda.md`'s source line names the warehouse's schema version and checksum. Regenerated through its command, only that line changed and every figure came out identical; the EDA tests then pass (22). Every test that holds a registered number to its record (docs/results.md, docs/results_dev.md, the model card, docs/model_statement.json) passes. The Postgres-backed suites with Postgres required (live, API, dashboard, warehouse, scoring): 406 passed |
+| Guard, old against new | No difference outside the allowlist. `versions.content_hash` differs on 4,444,542 of 4,444,542 rows (allowed: its input changed) and `intervention_types` is new. Every other column is identical in every matched row: 40 in `versions`, 36 in `raw_versions`, 9 in `trials`, 6 in `stop_reasons`, and all 2,889,754 `texts`, so no dataset text changed under ADR 0042's comment-line rule. `build_info`: the schema version and three new keys for the interventions config. Since the check of this item the guard judges `build_info` by key (only `schema_version` and `interventions.*` may change); rerun with that guard (`e9491a5`), the result is the same (`data/logs/rebuild_schema4_guard_bykey.log`) |
+| Cohort, cohort (UNKNOWN variant), features, features (UNKNOWN variant) | Each "Identical to the previous build: yes" (31.1, 28.2, 201.8 and 211.6 s). All 93 output files of the cohort, feature and scoring folders are byte-identical to a snapshot taken before the rebuild, except the variant's generated `features.md`, of which only the source line changed: the schema version (3 to 4), and the ClinicalTrials.gov attribution of ADR 0008, which the generator gained in `1438e75` (2026-10-26) after the variant was last built (2026-10-22). With the old source line put back, the file reproduces the snapshot's SHA-256 |
+| Registered numbers and the suite | The full suite (`-m "slow or not slow"`): 1,414 passed, 22 skipped, and 2 failed: the EDA report's reproduction test, because `docs/eda.md`'s source line names the warehouse's schema version and checksum. Regenerated through its command, only that line changed and every figure came out identical; the EDA tests then pass (22). Every test that holds a registered number to its record (docs/results.md, docs/results_dev.md, the model card, docs/model_statement.json) passes. The Postgres-backed suites with Postgres required (live, API, dashboard, warehouse, scoring): 406 passed. This full run came before the EDA regeneration, after which only the EDA tests ran; the full suite runs again on the final commit of phase A |
 
 **Everything else the rebuild changes.**
 
 - `docs/data_audit.md`: the source line (schema version 4, the new checksum), a line for the interventions config (19 files, 9,401,447 rows, a list for 3,843,841 versions), `build_info` 34 to 37 rows, and "versions identical to the previous version but for their own dates" 878,496 to 858,638 (19.77% to 19.32%): intervention types are now a loaded column, so 19,858 versions that changed only their interventions no longer count as unchanged.
 - `docs/features.md`, the variant's `features.md` and `docs/eda.md`: the source line.
-- Every content hash stored outside the warehouse is now a schema-3 hash: every row of Step 13's score files (for example 88,898 of 88,898 at the cutoff and 64,099 of 64,099 on 2019-06-30) and every row of the local serving tables (88,898 latest, 88,898 history, 2,704 not scored). The bootstrap regenerates the cutoff's scores with schema-4 hashes (item 2), and Neon starts empty.
+- Every content hash stored outside the warehouse is now a schema-3 hash: every row of Step 13's score files (for example 88,895 of 88,895 at the cutoff and 64,098 of 64,098 on 2019-06-30) and every row of the local serving tables (88,895 latest, 88,895 history, 2,704 not scored). Each stored hash was found among the old warehouse's hashes of that trial. (A first count, joined to the old warehouse's versions, read 88,898 and 64,099: versions of one trial that differ only in their dates share a hash, so the join counted a few rows twice. The figures here are the files' and tables' own row counts.) The bootstrap regenerates the cutoff's scores, dated the cutoff, with the feature hash of ADR 0037 (decision 2) as content_hash (item 2), and Neon starts empty.
 
 **Decisions made without asking (flagged).**
 
@@ -2539,6 +2539,24 @@ Aakrisht's phase A, item by item, on this laptop and the local Postgres only (no
 2. `distill --load-table` is a new option rather than `--label-all`, which would relabel through the API cache and could rewrite the labels file whose SHA-256 the registered H3 analysis names.
 3. The DuckDB cap of 10 GB and 8 threads in the build: a resource setting that does not change the output (the guard and the second build show it).
 4. **Docker Desktop was repaired.** After the laptop restarted at 19:36, Docker Desktop's backend crashed on start: it could not move aside a dead socket file from 31 October in `%LOCALAPPDATA%\docker-secrets-engine`, which Windows reports as inaccessible (error 1920), and it offered only Quit or Reset to factory defaults. A reset would have deleted the local Postgres volume, so instead I quit it and renamed that folder to `docker-secrets-engine.stale-20261104` (reversible). Docker Desktop then started, and the local Postgres came up healthy with its data. The renamed folder can be deleted once Windows lets go of the file.
+
+**Files touched.** `b7edd2a..970cf9e`, 25 files: `CLAUDE.md` (two Amendments lines); `docs/adr/0066-the-content-hash-covers-the-submitted-status.md` and `docs/adr/0067-intervention-types-join-the-canonical-version-schema.md` (new); `docs/data_audit.md`, `docs/eda.md`, `docs/features.md`, `docs/progress.md`; `src/trialpulse/contracts/versions.py`, `src/trialpulse/features/registry.py`, `src/trialpulse/live/contract.py`, `src/trialpulse/live/export.py`, `src/trialpulse/live/pull.py`, `src/trialpulse/nlp/distill.py`, `src/trialpulse/warehouse/audit.py`, `src/trialpulse/warehouse/build.py`, `src/trialpulse/warehouse/compare.py` (new); `tests/contracts/test_versions.py`, `tests/features/conftest.py`, `tests/live/test_contract.py`, `tests/nlp/test_distill.py`, `tests/warehouse/conftest.py`, `tests/warehouse/test_build.py`, `tests/warehouse/test_compare.py` (new), `tests/warehouse/test_migrations.py`, `tests/warehouse/test_parity.py`. After the check (`e9491a5`, `6baa094`, `893776f`): `src/trialpulse/warehouse/compare.py`, `src/trialpulse/contracts/versions.py`, `docs/adr/0067-...`, `tests/warehouse/test_compare.py`, `tests/contracts/test_versions.py`, `tests/features/test_intervention_lists_on_the_warehouse.py` (new).
+
+**The check of this item** (an independent agent, read-only, with mutation testing on a scratch clone; 7 findings, none fatal; each verified before acting):
+
+| Finding | What was done |
+| --- | --- |
+| The guard allowlisted the whole `build_info` table, so a change in any other key (the dataset revision, a row count) would have passed unseen | Fixed (`e9491a5`): the allowlist names keys of a statistics table as `table[pattern]`; the default allows `schema_version` and `interventions.*` only, and any other key that differs, appears or disappears is outside it. Guard rerun: the same result |
+| Three mutations of the guard survived its tests (`<>` for `IS DISTINCT FROM`, `EXCEPT` for `EXCEPT ALL`, a whole-row comparison of no column) | Fixed (`e9491a5`): tests for a NULL that becomes a value and for a changed and a repeated row; 8 of 8 mutants of the guard now fail its tests (my own run, scratch) |
+| ADR 0067 claimed a dataset-to-API parity test of the 13 features that no test computed | Reworded to say what is tested, and a slow laptop test now holds the canonical lists equal to the lists the feature build reads, for all 4,444,542 versions (3 s; a perturbed copy of 5 lists is caught) (`893776f`) |
+| A tab or a line break around an enum was trimmed on the API v2 path (Python's `strip`) but not on the dataset path (DuckDB's `trim`) | Fixed (`6baa094`): the Python rule strips exactly what DuckDB's `trim` strips, the Unicode space separators, tested on every code point of the Basic Multilingual Plane. The warehouse build, which uses the SQL rule, is unchanged, so no rebuild; no row of the pinned revision was affected |
+| This record lacked its files, its deferred items and how the memory peak was measured | Added |
+| The variant's `features.md` change was misdescribed | Corrected above |
+| "Schema-4 hashes" for the bootstrap's scores contradicted ADRs 0066 and 0037 | Corrected above |
+
+One more error, mine, which the check repeated by rerunning the same scratch script: the row counts of the stale hashes (88,898 and 64,099), corrected above.
+
+**Blocked or deferred.** Nothing is blocked. Left as they are: Step 13's score files keep their schema-3 hashes (they are Step 13's record; the bootstrap rewrote the local serving tables in item 2); `data/warehouse_schema3.duckdb` (4.1 GB) stays until Aakrisht's review as the guard's old side; the renamed Docker folder is still to delete.
 
 **Verify (PowerShell).**
 
@@ -2555,6 +2573,90 @@ uv run pytest -q -m "slow or not slow"
 ```
 
 The second build must print "Identical to the previous build: yes", the guard "Differences outside the allowlist: none", and each cohort and feature build "Identical to the previous build: yes".
+
+### Item 2: the bootstrap command, its rehearsal at the cutoff and the day-0 check
+
+**What was built.**
+
+- **`seed` in two parts** (`7727b49`): `seed_trial` makes one trial's wide row, markers and daily states from its own versions, and `sponsor_pass` runs the sponsor file over every trial's daily states one calendar month at a time, from the five fields the pass reads. `seed` is now a wrapper over the two, so its tests keep their meaning. A new test holds the monthly pass to one `advance` call over every state, at four dates of the synthetic registry.
+- **The W1 write** (`e5b3084`): `store.start_bootstrap` takes the lease in a transaction of its own; `store.prepare_bootstrap` makes every row with no transaction open (the wide rows, the amendment markers and the cutoff's scores as COPY text made by psycopg's `FileWriter` and sent nowhere, the sponsor file's bytes, the reason counts); `store.load_bootstrap` renews the lease and sends those prepared rows in one transaction, then ends the run as succeeded. `serving.first_rows` gives the rows `publish` writes into empty tables, and `reasons.counts_from_files` lets the bootstrap load the reason counts in its transaction.
+- **`daily.score_day`** (`2978284`): what a run scores on its date, publishing nothing; `publish_day` calls it and publishes as before. `champion_model` can read the ADR 0034 decisions from Step 13's result file.
+- **The command `trialpulse.live.bootstrap`** (`9c595f5`), streamed as planned: one DuckDB query (2 GB, 4 threads, spilling to `data/duckdb_tmp`) streams the versions in (trial, post date, version) order with their titles and the warehouse's `intervention_types`, 50,000 rows a fetch; each row becomes a compact row (`contract.compact_row`); each trial goes through `seed_trial` as soon as its last version is read; its daily states are kept as tuples of shared values; `sponsor_pass` then runs month by month. Before that it regenerates the cutoff's scores and drivers through Step 13's `score()` on the rebuilt warehouse and refuses to write if any trial, risk, driver or reason differs from Step 13's files of that date (ADR 0040, item 2); after it, the scores' content hashes become the wide rows' feature hashes. It refuses on a GitHub runner, without `SPONSOR_ID_KEY`, at another migration head, and over any live row unless `--rebuild`. A failure is reported by stage, type and SQLSTATE only, as for the daily job.
+- **The day-0 check `trialpulse.live.dayzero`** (`c2c47a1`), below.
+
+**Tests.** In CI: the streamed seed equals `seed` on the synthetic registry (batches of 1, 37 and 100,000 rows, so batches end inside trials; and on a chosen subset of trials); the refusal under `GITHUB_ACTIONS` and without `SPONSOR_ID_KEY`; on Postgres, the write receives bytes and plain values only and succeeds with every preparing function (`_wide_values`, `file_values`, `copy_payload`, `SponsorFile.to_bytes`, `serving.first_rows`, `compact_drivers`, `history_rows`, `feature_hash`, `compact_row`, `seed_trial`, `sponsor_pass`, `predict`) replaced by one that fails; a broken copy rolls the whole write back and the same prepared rows succeed on a retry; a bootstrap refuses over a served row unless it rebuilds; the copied scores equal what `publish` writes into empty tables; the day-0 check finds no difference against the in-memory engine's scores and finds a moved risk, a changed driver and a missing trial.
+
+**The laptop check of the stream.** `tests/live/test_bootstrap_sample.py` (slow, skipped without `data/`): on the seeded 5% sample (`hash(nct_id || ':bootstrap-sample-2026-11-04') % 20 = 0`: 30,087 trials, 224,871 versions), the streamed result equals `seed` on the same versions read at once by a query of its own (wide rows, markers, and the sponsor file byte for byte), and its sponsor file equals the file of one `advance` call over every state. Passed in 53 s.
+
+**The rehearsal, measured** (2026-11-05, from `c2c47a1`, into the local Postgres at migration head 0006 with `--rebuild`, charger in, Windows throttling opted out; log `data/logs/bootstrap_rehearsal_20261105.log`). `SPONSOR_ID_KEY` is not set in `.env`, so the rehearsal used a throwaway key (32 random bytes) in that process's environment only, never written to a file; the local sponsor ids are therefore a rehearsal's, and the real bootstrap needs Aakrisht's key (ADR 0044).
+
+| Stage | Seconds | Process memory after the stage (MB): private, peak private, peak working set |
+| --- | --- | --- |
+| The cutoff's scores and drivers regenerated through Step 13's `score()` and held to Step 13's files | 307.7 | 1,945; 7,946; 5,672 |
+| The streamed seed (4,444,542 versions in 89 batches, 604,583 trials, 4,430,501 daily states) | 289.4 | 3,267; 7,946; 5,672 |
+| The scores' hashes onto the wide rows | 0.6 | 3,413; 7,946; 5,672 |
+| Every row prepared, no transaction open | 29.2 | 2,542; 7,946; 5,672 |
+| **The write, one transaction** | **6.4** | 2,558; 7,946; 5,672 |
+| **Total** | **633.9** (10.6 minutes) | **Peak: 7,946 MB private (commit), 5,672 MB working set**, both reached in the scores stage (the process's own counters, `GetProcessMemoryInfo`) |
+
+Held to Step 13's files before anything was written: 88,895 scored trials on both sides, none on one side only, every column equal (as-of date, true and served landmark index, flag, both risks with a largest difference of 0.0, model name and version, drivers); 2,704 unscored trials, all equal with their reasons. Only the content hashes differ, by design (Step 13's are canonical schema-3 hashes, the bootstrap's the feature hashes of ADR 0037).
+
+Written: 222,706 wide rows (the trials that can still be scored or counted), 222,706 marker rows, 88,895 latest scores, 88,895 history rows (`first_score`), 2,704 unscored trials, the sponsor file (51,785 sponsor keys over 604,352 trials, 1,369 states queued past the cutoff), 3,942 reason-count rows (32,144 labeled early stops) and one succeeded bootstrap run.
+
+| Table | Rows | Sent (COPY bytes) | Stored (`pg_total_relation_size`) |
+| --- | --- | --- | --- |
+| `live.trial_state` | 222,706 | 94,201,091 | 104,570,880 |
+| `serving.amendment_markers` | 222,706 | 15,172,038 | 33,849,344 |
+| `serving.trial_scores_latest` | 88,895 | 30,117,701 | 39,665,664 |
+| `serving.trial_score_history` | 88,895 | 15,138,395 | 23,814,144 |
+| `serving.trials_not_scored` | 2,704 | 298,010 | 638,976 |
+| `live.sponsor_file` | 1 | 12,669,526 | 13,213,696 |
+| `serving.reason_counts` | 3,942 | not counted (plain inserts) | 434,176 |
+| **Total** | | **167,596,761** | **216,186,880** |
+
+**The write to Neon passes about 2 minutes: Aakrisht's decision, and no switch to W2.** At 167.6 MB on the wire, the transfer alone takes 134 s at 10 Mbps (140.5 s with the local write's 6.4 s) and 670 s at 2 Mbps (676.8 s). My estimate of 2026-11-04 (about 90 MB, about 1.5 minutes) left out the scores (45.6 MB) and underestimated the wide rows (94 MB, not 61). Per his decision 2, the bootstrap stays W1 and I did not start W2. Nothing in the rest of phase A writes to Neon, so items 3 and 4 went ahead. Options for his decision, which the Neon phase needs:
+
+| | A. W1 as built | B. Measure the real uplink first, then A or C | C. W2: chunked transactions |
+| --- | --- | --- | --- |
+| What | One transaction, 167.6 MB | Before the Neon bootstrap, one timed COPY of about 10 MB of the prepared rows into a temporary table on Neon, rolled back; A if the full write would stay under about 5 minutes, else C | Wide rows and markers in transactions of about 20,000 rows, the lease renewed in each (ADR 0060); the scores, the sponsor file and the succeeded run last, in one short transaction |
+| Risk | A dropped connection rolls everything back and the bootstrap reruns (10.6 minutes here plus the write). Neon's 5-minute limit ends sessions idle in a transaction, not a running COPY (ADR 0058) | One small write to Neon before the bootstrap, which needs his approval | New code and a partly written state between transactions, which the lease and `--rebuild` must handle |
+| Cost | None | About a minute, plus his approval to touch Neon | About a day with tests |
+
+Recommendation: B, then A unless the measured uplink makes the write pass about 5 minutes.
+
+**The day-0 check** (`uv run python -m trialpulse.live.dayzero --target local`, from `c2c47a1`, 281 s, log `data/logs/dayzero_local_20261105.log`): the daily job's own scoring stage (`daily.score_day`, a full run, nothing published) on the live state the bootstrap wrote, against Step 13's stored files (never the bootstrap's regenerated rows): 88,895 scored and 2,704 unscored trials on both sides, none on one side only; every column equal, both risks with a largest difference of 0.0, all drivers equal, all reasons equal. The live path's 91,599 content hashes equal the served rows the bootstrap wrote. "day-0 check: the live path equals Step 13 on every trial, risk and driver", exit code 0.
+
+**Found by the rehearsal: the Neon sizing of Step 14 used smaller rows than the built tables.** These are fresh tables at the cutoff on local Postgres 16, so no bloat yet:
+
+| Part | Step 14 sizing (12 months) | Measured per row | Measured rows, scaled to the sizing's row counts |
+| --- | --- | --- | --- |
+| `live.trial_state` | 61.0 MB | 469.8 B (420 B of row, 32 B of index) | 111.1 MB at the sizing's 236,565 rows after a year |
+| `serving.amendment_markers` | 12 MB | 152.1 B | 33.9 MB now, more as the arrays grow |
+| `serving.trial_score_history` | 153.2 to 174.9 MB for 879,000 to 1,058,000 rows | 268.3 B (184 B of row, 72 B for its two indexes) | 235.8 to 283.9 MB |
+
+Together these add about 157 to 183 MB to the 12-month estimate of 551 to 573 MB, which would put it at about 708 to 756 MB: past the 700 MB line of 30% headroom, though under the 1 GB cap. This is a rough scaling, not a new sizing. The sizing must be redone with the measured rows before any Neon work; if it confirms the overrun, the choices are his (for example a narrower history row or index, an earlier retention, or a different headroom through an ADR). I changed nothing.
+
+**Decisions made without asking (flagged).**
+
+1. The day-0 check compares the live path with Step 13's stored files, not with the rows the bootstrap regenerated, so it is not circular.
+2. The stream's DuckDB runs at 2 GB and 4 threads with 50,000-row fetches; resource settings that do not change the result (the sample test holds the stream to `seed`).
+3. The rehearsal used a throwaway `SPONSOR_ID_KEY`, as the phase's rules allow, because none is set.
+4. The reason counts are inserted as plain rows, so their bytes are not in the sent total (about 0.4 MB stored).
+
+**Files touched.** `970cf9e..c2c47a1`, 13 files: `src/trialpulse/live/bootstrap.py`, `src/trialpulse/live/dayzero.py` (new); `src/trialpulse/live/daily.py`, `src/trialpulse/live/reasons.py`, `src/trialpulse/live/seed.py`, `src/trialpulse/live/store.py`, `src/trialpulse/scoring/serving.py`; `tests/live/test_bootstrap.py`, `tests/live/test_bootstrap_sample.py`, `tests/live/test_bootstrap_write.py`, `tests/live/test_dayzero.py`, `tests/live/test_seed.py` (new); `tests/live/test_daily.py`.
+
+**Blocked or deferred.** Blocked on Aakrisht: the choice of write for Neon (above), and `SPONSOR_ID_KEY`, which he must create before the real bootstrap (ADR 0044). Deferred to the Neon phase: the sizing, redone with the measured rows. The local Postgres now holds the rehearsal's state (bootstrap run 1), not Step 13's serving rows.
+
+**Verify (PowerShell).** The bootstrap needs `SPONSOR_ID_KEY` in `.env` (32 random bytes as hex) and the charger in (about 11 minutes, about 8 GB at its peak).
+
+```powershell
+uv run pytest -q tests/live
+uv run pytest -q -m slow tests/live/test_bootstrap_sample.py
+uv run python -m trialpulse.live.bootstrap --target local --rebuild
+uv run python -m trialpulse.live.dayzero --target local
+```
+
+The bootstrap must print the held-to-Step-13 counts with no difference but the content hashes, and the day-0 check must end with "day-0 check: the live path equals Step 13 on every trial, risk and driver".
 
 ## Laptop work before the deployments (2026-11-04)
 
