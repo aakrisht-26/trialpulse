@@ -8,9 +8,10 @@
 - **It fails** on zero records (a date the API has not reached answers 200 with
   `totalCount` 0) and on a record count that differs from `totalCount`.
 - **Each record** becomes a compact row or a quarantined one. A record that fails the
-  canonical contract, has an intervention type outside the contract, or lacks a trial id,
-  a status or a post date is quarantined by its payload hash with the failed checks only:
-  never a value, because a message with values could leak a row into a log (ADR 0040).
+  canonical contract (an intervention type outside it included, ADR 0067), or lacks a
+  trial id, a status or a post date, is quarantined by its payload hash with the failed
+  checks only: never a value, because a message with values could leak a row into a log
+  (ADR 0040).
 
 Personal-data keys are removed from every page before anything reads it.
 """
@@ -28,7 +29,6 @@ from trialpulse.cohort.rules import CohortRules
 from trialpulse.contracts.versions import (
     FieldTypeError,
     api_v2_fields,
-    canonical_enum,
     canonical_from_api_v2,
     parse_partial_date,
     split_valid,
@@ -41,13 +41,7 @@ from trialpulse.ingest.ctgov_api import (
     get_path,
     scrub_personal_data,
 )
-from trialpulse.live.contract import (
-    compact_row,
-    distinct_intervention_types,
-    unknown_intervention_types,
-)
-
-INTERVENTIONS_PATH = "protocolSection.armsInterventionsModule.interventions"
+from trialpulse.live.contract import compact_row
 
 
 class PullError(RuntimeError):
@@ -55,8 +49,9 @@ class PullError(RuntimeError):
 
 
 def live_fields() -> str:
-    """The `fields` parameter: the canonical fields plus each intervention's name and type."""
-    return ",".join([api_v2_fields(), f"{INTERVENTIONS_PATH}.name", f"{INTERVENTIONS_PATH}.type"])
+    """The `fields` parameter: the canonical fields, each intervention's name and type
+    among them (ADR 0067)."""
+    return api_v2_fields()
 
 
 def delta_filter(since: dt.date, day: dt.date) -> str:
@@ -120,25 +115,6 @@ class Converted:
     quarantined: list[dict[str, Any]] = field(default_factory=list)  # payload hash, reasons
 
 
-def interventions_of(study: Mapping[str, Any]) -> list[str]:
-    """The intervention types of a record (distinct name and type pairs). A name or type that
-    is not a JSON string fails the record's contract."""
-    items = get_path(study, INTERVENTIONS_PATH) or []
-    if not isinstance(items, list):
-        raise FieldTypeError("interventions")
-    pairs = []
-    for item in items:
-        if not isinstance(item, dict):
-            raise FieldTypeError("interventions")
-        name, kind = item.get("name"), item.get("type")
-        if name is not None and not isinstance(name, str):
-            raise FieldTypeError("intervention_name")
-        if kind is not None and not isinstance(kind, str):
-            raise FieldTypeError("intervention_type")
-        pairs.append((name, canonical_enum(kind)))
-    return distinct_intervention_types(pairs)
-
-
 def _identity(study: Mapping[str, Any]) -> tuple[str | None, dt.date | None]:
     """The trial id and post date of a record that could not be converted, where readable."""
     nct = get_path(study, "protocolSection.identificationModule.nctId")
@@ -153,17 +129,16 @@ def convert(studies: Sequence[Mapping[str, Any]], rules: CohortRules, secret: by
     failure) is quarantined with the field's name, or the exception's type, and the others
     go on: one bad record never stops a run (review finding 2)."""
     out = Converted()
-    converted: list[tuple[Mapping[str, Any], dict[str, Any], dict[str, str], list[str]]] = []
+    converted: list[tuple[Mapping[str, Any], dict[str, Any], dict[str, str]]] = []
     for study in studies:
         try:
             row, text = canonical_from_api_v2(study)
-            types = interventions_of(study)
         except FieldTypeError as exc:
             reason = f"{exc.field}: wrong JSON type"
         except Exception as exc:
             reason = f"record: conversion failed ({type(exc).__name__})"
         else:
-            converted.append((study, row, text, types))
+            converted.append((study, row, text))
             continue
         nct, posted = _identity(study)
         out.quarantined.append(
@@ -172,18 +147,16 @@ def convert(studies: Sequence[Mapping[str, Any]], rules: CohortRules, secret: by
         )  # fmt: skip
     if not converted:
         return out
-    frame = typed_frame(pd.DataFrame([row for _, row, _, _ in converted]))
+    frame = typed_frame(pd.DataFrame([row for _, row, _ in converted]))
     _, failing = split_valid(frame)
     reasons = dict(zip(failing.index, failing["reasons"], strict=True))
-    for i, (study, row, text, types) in enumerate(converted):
+    for i, (study, row, text) in enumerate(converted):
         problems = [reasons[i]] if i in reasons else []
-        unknown = unknown_intervention_types(types)
-        if unknown:
-            problems.append(f"intervention_type: {len(unknown)} value(s) outside the contract")
         if not problems:
             try:
                 official = text.get(row["official_title_hash"] or "")
                 brief = text.get(row["brief_title_hash"] or "")
+                types = row["intervention_types"]
                 out.rows.append(compact_row(row, official, brief, types, rules, secret))
                 continue
             except Exception as exc:

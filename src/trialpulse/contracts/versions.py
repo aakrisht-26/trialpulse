@@ -13,6 +13,12 @@ the offline history dataset and live API v2 records, so downstream code is sourc
 - `last_known_status` is the submitted status behind the registry's UNKNOWN: when the
   registry shows UNKNOWN (a status it computes, never one a sponsor submits), both sources
   keep the submitted status in this column (API v2 `lastKnownStatus`). It is empty otherwise.
+- `intervention_types` lists the version's interventions as one type per distinct (name,
+  type) pair, sorted (ADR 0067): names and types compared as exact strings, each type in the
+  canonical form of an enum, a pair without a type left out, an empty list when none is
+  listed. The dataset's `interventions` config gives the pairs on the offline path, and API
+  v2's `armsInterventionsModule.interventions` on the live path. Every type must be one of
+  the registry's (`features.registry.INTERVENTION_TYPES`).
 - `content_hash` is a SHA-256 of the canonical content: every column except the version
   number, the source and the hash itself, with the submitted status (ADR 0014) read in the
   place of `overall_status` and `last_known_status` (ADR 0066). Both columns stay in the row;
@@ -24,15 +30,17 @@ the offline history dataset and live API v2 records, so downstream code is sourc
 import datetime as dt
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 
 from trialpulse.contracts.sponsor import opens_with_personal_title, sponsor
 from trialpulse.contracts.text import EMAIL_PATTERN, normalize_text, text_hash
+from trialpulse.features.registry import INTERVENTION_TYPES
 
 STATUSES: tuple[str, ...] = (
     "NOT_YET_RECRUITING",
@@ -143,6 +151,7 @@ COLUMN_TYPES: dict[str, str] = {
     "lead_sponsor_name": "VARCHAR",
     "sponsor_key": "VARCHAR",
     "sponsor_is_individual": "BOOLEAN",
+    "intervention_types": "VARCHAR[]",
     **{f"{field}_hash": "VARCHAR" for field in TEXT_FIELDS},
     "content_hash": "VARCHAR",
 }
@@ -223,6 +232,8 @@ def _render(values: pd.Series, kind: str) -> pd.Series:
         rendered = kept.map(lambda v: str(int(v)))
     elif kind == "DOUBLE":
         rendered = kept.map(lambda v: repr(float(v)))
+    elif kind == "VARCHAR[]":  # as the compact row's feature hash renders a list
+        rendered = kept.map(lambda v: "|".join(str(item) for item in v))
     else:
         rendered = kept.astype(str)
     out[present] = rendered
@@ -325,12 +336,18 @@ _PLAIN_ENUMS = (
 )
 
 
+# The interventions of a record (ADR 0067): a list of objects, of which the contract reads
+# each one's name and type.
+API_V2_INTERVENTIONS = "armsInterventionsModule.interventions"
+API_V2_INTERVENTION_KEYS: tuple[str, ...] = ("name", "type")
+
 # The JSON type each API v2 field must have; every field not listed is a string. A value of
 # another type fails the record's contract (`FieldTypeError`): the text "false" is not the
 # boolean false, and "about 40" is not a count.
 API_V2_JSON_TYPES: dict[str, type | tuple[type, ...]] = {
     "healthy_volunteers": bool,
     "enrollment_count": int,
+    "interventions": list,
 }
 
 
@@ -345,7 +362,7 @@ class FieldTypeError(ValueError):
         self.field = field
 
 
-_JSON_NAMES = {"bool": "boolean", "int": "integer", "str": "string"}
+_JSON_NAMES = {"bool": "boolean", "int": "integer", "str": "string", "list": "array"}
 
 
 def _json_type_ok(name: str, value: Any) -> bool:
@@ -357,13 +374,45 @@ def _json_type_ok(name: str, value: Any) -> bool:
 
 def api_v2_fields() -> str:
     """The `fields` parameter that requests exactly what canonical_from_api_v2 reads."""
-    return ",".join(f"protocolSection.{path}" for path in API_V2_PATHS.values())
+    paths = [*API_V2_PATHS.values()]
+    paths += [f"{API_V2_INTERVENTIONS}.{key}" for key in API_V2_INTERVENTION_KEYS]
+    return ",".join(f"protocolSection.{path}" for path in paths)
+
+
+def distinct_intervention_types(pairs: Iterable[tuple[str | None, str | None]]) -> list[str]:
+    """The type of each distinct (name, type) pair, on exact strings, sorted (ADR 0067): what
+    the dataset's interventions config gives per version. API v2 repeats pairs on some
+    records. A pair without a type is left out."""
+    return sorted(kind for _, kind in {(name, kind) for name, kind in pairs if kind is not None})
+
+
+def api_v2_intervention_types(study: Mapping[str, Any]) -> list[str]:
+    """The intervention types of an API v2 record, by `distinct_intervention_types` with each
+    type in canonical form. A list that is not a JSON array, an item that is not an object, or
+    a name or type that is not a JSON string fails the record's contract (`FieldTypeError`)."""
+    node: Any = study.get("protocolSection", {})
+    for key in API_V2_INTERVENTIONS.split("."):
+        node = node.get(key) if isinstance(node, Mapping) else None
+    items = node or []
+    if not isinstance(items, list):
+        raise FieldTypeError("interventions")
+    pairs = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise FieldTypeError("interventions")
+        name, kind = item.get("name"), item.get("type")
+        if name is not None and not isinstance(name, str):
+            raise FieldTypeError("intervention_name")
+        if kind is not None and not isinstance(kind, str):
+            raise FieldTypeError("intervention_type")
+        pairs.append((name, canonical_enum(kind)))
+    return distinct_intervention_types(pairs)
 
 
 def canonical_from_api_v2(study: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """One API v2 study record as a canonical row (source api_v2, no version number), plus
     its normalized texts keyed by hash. A field of the wrong JSON type raises
-    `FieldTypeError` (strict booleans and counts)."""
+    `FieldTypeError` (strict booleans, counts and interventions)."""
 
     def get(name: str) -> Any:
         node: Any = study.get("protocolSection", {})
@@ -397,6 +446,7 @@ def canonical_from_api_v2(study: Mapping[str, Any]) -> tuple[dict[str, Any], dic
         row[f"{field}_hash"] = key
         if clean and key:
             texts[key] = clean
+    row["intervention_types"] = api_v2_intervention_types(study)
     row = {column: row.get(column) for column in CANONICAL_COLUMNS}
     row["content_hash"] = content_hash(row)
     return row, texts
@@ -449,6 +499,31 @@ def _precision_matches_date(df: pd.DataFrame) -> pd.Series:
     return ok
 
 
+def _type_list(value: Any) -> list[Any] | None:
+    """A list cell as a list (Arrow hands lists over as numpy arrays), or None."""
+    return list(value) if isinstance(value, list | tuple | np.ndarray) else None
+
+
+def _known_intervention_types(series: pd.Series) -> pd.Series:
+    allowed = frozenset(INTERVENTION_TYPES)
+
+    def ok(value: Any) -> bool:
+        items = _type_list(value)
+        return items is not None and all(isinstance(t, str) and t in allowed for t in items)
+
+    return series.map(ok).astype(bool)
+
+
+def _sorted_intervention_types(series: pd.Series) -> pd.Series:
+    def ok(value: Any) -> bool:
+        items = _type_list(value)
+        if items is None or not all(isinstance(t, str) for t in items):
+            return False
+        return items == sorted(items)
+
+    return series.map(ok).astype(bool)
+
+
 VERSION_SCHEMA = pa.DataFrameSchema(
     {
         "nct_id": pa.Column(str, pa.Check.str_matches(r"^NCT\d{8}$")),
@@ -488,6 +563,14 @@ VERSION_SCHEMA = pa.DataFrameSchema(
         "lead_sponsor_name": pa.Column(str, nullable=True),
         "sponsor_key": pa.Column(str, nullable=True),
         "sponsor_is_individual": pa.Column(bool, coerce=True),
+        "intervention_types": pa.Column(
+            object,
+            [
+                pa.Check(_known_intervention_types, name="known_intervention_types"),
+                pa.Check(_sorted_intervention_types, name="sorted_intervention_types"),
+            ],
+            nullable=False,
+        ),
         **{f"{field}_hash": _hash() for field in TEXT_FIELDS},
         "content_hash": _hash(nullable=False),
     },
@@ -521,8 +604,14 @@ TEXT_SCHEMA = pa.DataFrameSchema(
 
 def typed_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """Canonical columns in order, as pandas types that keep missing values missing (nullable
-    integers, floats and booleans), with a fresh index."""
-    kinds = {"BIGINT": "Int64", "DOUBLE": "Float64", "BOOLEAN": "boolean", "VARCHAR": object}
+    integers, floats and booleans; lists as objects), with a fresh index."""
+    kinds = {
+        "BIGINT": "Int64",
+        "DOUBLE": "Float64",
+        "BOOLEAN": "boolean",
+        "VARCHAR": object,
+        "VARCHAR[]": object,
+    }
     out = pd.DataFrame(index=range(len(frame)))
     for column, kind in COLUMN_TYPES.items():
         values = (

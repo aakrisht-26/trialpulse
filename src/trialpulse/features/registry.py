@@ -23,6 +23,9 @@ read by accident. Left out on purpose:
 - `start_date_precision` and `completion_date_type`: no feature reads them. Date precision
   must not be a feature (ADR 0021), and a field joins the whitelist only with a feature
   that names it as a source. A test requires every whitelisted field to be so named;
+- `intervention_types`: the canonical copy of the interventions config (ADR 0067). The
+  design features read the config itself, joined by version (`intervention_type`, below),
+  so no feature names the copy as a source, and one source feeds those features;
 - `source` and `content_hash`: bookkeeping of the pipeline, not registry content.
 
 The view the queries read also shows the submitted status in `overall_status` and nothing in
@@ -102,6 +105,7 @@ FORBIDDEN_VERSION_FIELDS: tuple[str, ...] = (
     "content_hash",
     "submitted_date",
     "study_first_submit_date",
+    "intervention_types",
 )
 # Per-version fields of the `interventions` config (ADR 0020).
 INTERVENTION_FIELDS: tuple[str, ...] = ("intervention_type",)

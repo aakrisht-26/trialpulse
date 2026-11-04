@@ -37,6 +37,14 @@ STUDY = {
             "studyType": "OBSERVATIONAL",
             "designInfo": {"interventionModel": "PARALLEL", "primaryPurpose": "TREATMENT"},
         },
+        "armsInterventionsModule": {  # as the synthetic interventions config holds them
+            "interventions": [
+                {"name": "Aspirin", "type": "DRUG"},
+                {"name": "aspirin", "type": "DRUG"},
+                {"name": "Saline", "type": "OTHER"},
+                {"name": "Placebo", "type": "DRUG"},
+            ]
+        },
         "eligibilityModule": {
             "eligibilityCriteria": (
                 "Inclusion Criteria:\n\n* Age \\>= 18\n"

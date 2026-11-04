@@ -19,19 +19,21 @@ from trialpulse.contracts.versions import (
     HASHED_FIELDS,
     STATUSES,
     SUBMITTED_STATUS,
+    FieldTypeError,
     age_in_years,
     api_v2_fields,
     canonical_enum,
     canonical_from_api_v2,
     content_hash,
     content_hashes,
+    distinct_intervention_types,
     parse_partial_date,
     split_valid,
     submitted_statuses,
     typed_frame,
     valid_date,
 )
-from trialpulse.warehouse.build import _sql_enum, _sql_valid
+from trialpulse.warehouse.build import _sql_enum, _sql_valid, intervention_lists_sql
 
 
 @pytest.mark.parametrize(
@@ -221,6 +223,88 @@ def test_the_contract_and_the_cohort_agree_on_the_submitted_status() -> None:
     frame = pd.DataFrame(pairs, columns=["overall_status", "last_known_status"], dtype=object)
     shown = submitted_statuses(frame["overall_status"], frame["last_known_status"])
     assert shown.tolist() == [submitted_status(rules, o, k) for o, k in pairs]
+
+
+def _with_interventions(study: dict[str, Any], interventions: Any) -> dict[str, Any]:
+    study["protocolSection"]["armsInterventionsModule"] = {"interventions": interventions}
+    return study
+
+
+def test_api_v2_interventions_become_one_type_per_distinct_pair() -> None:
+    """ADR 0067: exact strings, a repeated pair once, the type in canonical form, a pair
+    without a type left out, sorted; an empty list when none is listed."""
+    interventions = [
+        {"name": "Aspirin", "type": "DRUG"},
+        {"name": "Aspirin", "type": "DRUG"},  # a repeated pair counts once
+        {"name": "aspirin", "type": "DRUG"},  # another name on exact strings
+        {"name": "Walk", "type": " behavioral "},
+        {"name": "Unnamed", "type": None},  # no type: left out
+        {"type": "DEVICE"},  # no name: still an intervention
+    ]
+    row, _ = canonical_from_api_v2(_with_interventions(_study(), interventions))
+    assert row["intervention_types"] == ["BEHAVIORAL", "DEVICE", "DRUG", "DRUG"]
+    valid, failing = split_valid(typed_frame(pd.DataFrame([row])))
+    assert len(valid) == 1
+    assert failing.empty
+    none, _ = canonical_from_api_v2(_study())
+    assert none["intervention_types"] == []
+    assert none["content_hash"] != row["content_hash"]  # the hash covers the types
+    fields = api_v2_fields().split(",")
+    for key in ("name", "type"):
+        assert f"protocolSection.armsInterventionsModule.interventions.{key}" in fields
+
+
+@pytest.mark.parametrize(
+    ("value", "field"),
+    [
+        ({"name": "A"}, "interventions"),
+        (["A"], "interventions"),
+        ([{"name": ["A"], "type": "DRUG"}], "intervention_name"),
+        ([{"name": "A", "type": 3}], "intervention_type"),
+    ],
+)
+def test_interventions_of_the_wrong_json_type_fail_the_record(value: Any, field: str) -> None:
+    with pytest.raises(FieldTypeError) as caught:
+        canonical_from_api_v2(_with_interventions(_study(), value))
+    assert caught.value.field == field
+    assert str(value) not in str(caught.value)
+
+
+def test_intervention_types_outside_the_contract_or_unsorted_are_quarantined() -> None:
+    row, _ = canonical_from_api_v2(_study())
+    rows = [
+        {**row, "intervention_types": ["DEVICE", "DRUG"]},
+        {**row, "nct_id": "NCT07654321", "intervention_types": ["GENE_EDIT"]},
+        {**row, "nct_id": "NCT07654322", "intervention_types": ["DRUG", "DEVICE"]},
+        {**row, "nct_id": "NCT07654323", "intervention_types": None},
+        # Arrow hands lists over as numpy arrays.
+        {**row, "nct_id": "NCT07654324", "intervention_types": np.array(["DRUG"], dtype=object)},
+    ]
+    valid, failing = split_valid(typed_frame(pd.DataFrame(rows)))
+    assert list(valid["nct_id"]) == ["NCT01234567", "NCT07654324"]
+    assert dict(zip(failing["nct_id"], failing["reasons"], strict=True)) == {
+        "NCT07654321": "intervention_types: known_intervention_types",
+        "NCT07654322": "intervention_types: sorted_intervention_types",
+        "NCT07654323": "intervention_types: not_nullable",
+    }
+
+
+def test_the_sql_rule_for_intervention_types_matches_the_python_rule() -> None:
+    pairs = [
+        ("A", "DRUG"), ("A", "DRUG"), ("a", "DRUG"), ("B", " device "), ("C", None),
+        (None, "OTHER"), (None, "OTHER"), ("D", ""), ("E", "drug"),
+    ]  # fmt: skip
+    with duckdb.connect() as con:
+        con.execute(
+            "CREATE TABLE config (nct_id VARCHAR, nct_version BIGINT, intervention_name VARCHAR, "
+            "intervention_type VARCHAR)"
+        )
+        con.executemany("INSERT INTO config VALUES ('NCT00000001', 0, ?, ?)", pairs)
+        con.execute("INSERT INTO config VALUES ('NCT00000002', 0, 'X', NULL)")  # no type at all
+        got = {(n, v): t for n, v, t in con.execute(intervention_lists_sql("config")).fetchall()}
+    expected = distinct_intervention_types((name, canonical_enum(kind)) for name, kind in pairs)
+    assert expected == ["DEVICE", "DRUG", "DRUG", "DRUG", "OTHER"]
+    assert got == {("NCT00000001", 0): expected}  # the warehouse gives the other an empty list
 
 
 def _history_rows() -> pd.DataFrame:

@@ -118,6 +118,43 @@ TYPES = {**{c: kind for c, (kind, _) in RAW_COLUMNS.items()}}
 TYPES.update(dict.fromkeys((*TEXT_FIELDS, "lead_sponsor_name", *PERSONAL_COLUMNS), "VARCHAR"))
 TYPES["detailed_description"] = "VARCHAR"
 
+# The interventions config's layout: one row per (version, name, type), as the dataset holds
+# it (names that differ only in letter case are separate rows; no row repeats a pair).
+INTERVENTION_TYPES_RAW = {
+    "nct_id": "VARCHAR",
+    "nct_version": "BIGINT",
+    "intervention_name": "VARCHAR",
+    "intervention_type": "VARCHAR",
+    "description": "VARCHAR",
+}
+INTERVENTION_ROWS: list[tuple[str, int, str, str]] = [
+    ("NCT00000001", 0, "Walking program", "BEHAVIORAL"),
+    ("NCT00000001", 1, "Walking program", "BEHAVIORAL"),
+    ("NCT00000001", 1, "Diet advice", " dietary_supplement "),  # canonical form: trimmed, upper
+    ("NCT00000005", 0, "Aspirin", "DRUG"),
+    ("NCT00000005", 0, "aspirin", "DRUG"),  # another name on exact strings
+    ("NCT00000005", 0, "Saline", "OTHER"),
+    ("NCT00000005", 0, "Placebo", "DRUG"),
+]
+
+
+def write_interventions(
+    folder: Path, rows: list[tuple[str, int, str, str]] = INTERVENTION_ROWS
+) -> str:
+    """The interventions config: one Parquet file, with a description column that the build
+    never reads."""
+    folder.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame(
+        [(*row, "Not read.") for row in rows], columns=list(INTERVENTION_TYPES_RAW)
+    ).astype(object)
+    with duckdb.connect() as con:
+        con.register("part", frame)
+        columns = ", ".join(f"CAST({c} AS {k}) AS {c}" for c, k in INTERVENTION_TYPES_RAW.items())
+        target = (folder / "part-00000-of-00001.parquet").as_posix()
+        con.execute(f"COPY (SELECT {columns} FROM part) TO '{target}'")
+        con.unregister("part")
+    return (folder / "*.parquet").as_posix()
+
 
 def write_dataset(folder: Path, rows: list[dict[str, Any]] = ROWS) -> str:
     """Two Parquet files; the second types the drifting columns as INTEGER, as in the real
@@ -147,14 +184,26 @@ def cfg() -> ProjectConfig:
 
 
 @pytest.fixture(scope="session")
-def dataset(tmp_path_factory: pytest.TempPathFactory) -> str:
-    return write_dataset(tmp_path_factory.mktemp("raw") / "core")
+def raw_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("raw")
 
 
 @pytest.fixture(scope="session")
-def warehouse(tmp_path_factory: pytest.TempPathFactory, dataset: str, cfg: ProjectConfig) -> Path:
+def dataset(raw_dir: Path) -> str:
+    return write_dataset(raw_dir / "core")
+
+
+@pytest.fixture(scope="session")
+def interventions(raw_dir: Path) -> str:
+    return write_interventions(raw_dir / "interventions")
+
+
+@pytest.fixture(scope="session")
+def warehouse(
+    tmp_path_factory: pytest.TempPathFactory, dataset: str, interventions: str, cfg: ProjectConfig
+) -> Path:
     """One synthetic warehouse for the whole session: the tests only read it."""
     folder = tmp_path_factory.mktemp("warehouse")
     path = folder / "warehouse.duckdb"
-    build(dataset, cfg, path, workers=1, temp_dir=folder / "tmp")
+    build(dataset, cfg, path, workers=1, temp_dir=folder / "tmp", interventions=interventions)
     return path

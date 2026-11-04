@@ -75,6 +75,7 @@ VERSION_TYPES: dict[str, str] = {
     "lead_sponsor_name": "VARCHAR",
     "sponsor_key": "VARCHAR",
     "sponsor_is_individual": "BOOLEAN",
+    "intervention_types": "VARCHAR[]",
     "brief_title_hash": "VARCHAR",
     "official_title_hash": "VARCHAR",
     "brief_summary_hash": "VARCHAR",
@@ -415,6 +416,7 @@ def registry(n_trials: int = 300, seed: int = 7) -> Registry:
                     lead_sponsor_name=None if shown is None else shown.title(),
                     sponsor_key=shown,
                     sponsor_is_individual=individual,
+                    intervention_types=sorted(kinds),  # the canonical copy (ADR 0067)
                     brief_title_hash=keep(title),
                     official_title_hash=None if i % 13 == 0 else keep("Official: " + title),
                     brief_summary_hash=keep(summary),

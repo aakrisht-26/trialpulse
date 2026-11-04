@@ -7,10 +7,11 @@ silently blank 14 of the 54 features. `register_export` gives that code:
 
 - `live_export_versions`: canonical version rows with the whitelisted fields, the sponsor id
   in `sponsor_key` (an id without an identity is NULL, and `sponsor_is_individual` says
-  so), the submitted status in `overall_status`, version numbers continuing each trial's
-  history, and the feature hash in `content_hash`;
+  so), the submitted status in `overall_status`, the intervention types (ADR 0067), version
+  numbers continuing each trial's history, and the feature hash in `content_hash`;
 - `texts`: one stand-in title per phase, whose stated phase is that phase;
-- `intervention_versions`: the types per version;
+- `intervention_versions`: the types per version, which is where the features read them
+  (ADR 0020);
 - the `versions` view over them.
 
 So layer 5a of ADR 0038 and the laptop retrain of ADR 0040 run the offline path on live
@@ -81,11 +82,11 @@ def export_frame(rows: Iterable[Mapping[str, Any]]) -> pd.DataFrame:
             sponsor_key=r.get("sponsor_id"),
             sponsor_is_individual=r.get("sponsor_id") is None,
             official_title_hash=title_hash(r["title_phase"]),
+            intervention_types=list(r.get("intervention_types") or []),
             content_hash=r["feature_hash"],
         )
-        row["_types"] = list(r.get("intervention_types") or [])
         out.append(row)
-    return pd.DataFrame(out, columns=[*COLUMN_TYPES, "_types"])
+    return pd.DataFrame(out, columns=list(COLUMN_TYPES))
 
 
 def register_export(
@@ -93,7 +94,7 @@ def register_export(
 ) -> None:
     """Create the export tables and the `versions` view in `con` (see the module text)."""
     frame = export_frame(rows)
-    types = frame.pop("_types")
+    types = frame["intervention_types"]
     source = frame.astype(object)  # noqa: F841 (read by DuckDB)
     columns = ", ".join(f"CAST({c} AS {t}) AS {c}" for c, t in COLUMN_TYPES.items())
     con.execute(f"CREATE OR REPLACE TABLE {EXPORT_TABLE} AS SELECT {columns} FROM source")

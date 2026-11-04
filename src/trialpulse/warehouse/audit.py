@@ -104,6 +104,17 @@ def _source_section(con: duckdb.DuckDBPyConnection, glob: str, info: dict[str, s
         + ".",
         f"- Not loaded: {len(not_loaded)} columns, including the {len(personal)} personal-data "
         "columns (" + ", ".join(f"`{c}`" for c in personal) + "), which the build never reads.",
+    ]
+    if "interventions.rows" in info:
+        lines.append(
+            f"- Intervention types (ADR 0067) from the config `interventions` of the same "
+            f"revision: {_n(info['interventions.files'])} Parquet files, "
+            f"{_n(info['interventions.rows'])} rows, giving a list for "
+            f"{_n(info['interventions.versions'])} versions (one type per distinct name and "
+            "type; every other version has an empty list). Intervention names are read to tell "
+            "interventions apart and never stored."
+        )
+    lines += [
         "",
         *_table(
             ["Column", "Type", "Planned use"],

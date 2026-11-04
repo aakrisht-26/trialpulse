@@ -19,13 +19,17 @@ the dataset path (the bootstrap) and the API v2 path share one function.
 
 import hashlib
 import hmac
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from trialpulse.cohort.rules import CohortRules, submitted_status
 from trialpulse.contracts.sponsor import has_identity, sponsor_key
+
+# The canonical rule for intervention types (ADR 0067), kept importable from here.
+from trialpulse.contracts.versions import (
+    distinct_intervention_types as distinct_intervention_types,
+)
 from trialpulse.features.design import resolved_title_phase
-from trialpulse.features.registry import INTERVENTION_TYPES
 from trialpulse.live import organization_words
 
 # Column name -> storage type, in the order of the compact row. The same names and types are
@@ -130,17 +134,6 @@ def display_name(name: str | None, sponsor_class: str | None, trials_led: int) -
     return None
 
 
-def distinct_intervention_types(pairs: Iterable[tuple[str | None, str | None]]) -> list[str]:
-    """The type of each distinct (name, type) pair, on exact strings, sorted: what the
-    dataset's interventions config gives per version. API v2 repeats pairs on some records.
-    A pair without a type is left out."""
-    return sorted(kind for _, kind in {(name, kind) for name, kind in pairs if kind is not None})
-
-
-def unknown_intervention_types(types: Sequence[str]) -> list[str]:
-    return sorted(set(types) - set(INTERVENTION_TYPES))
-
-
 def compact_row(
     canonical: Mapping[str, Any],
     official_title: str | None,
@@ -150,7 +143,8 @@ def compact_row(
     secret: bytes,
 ) -> dict[str, Any]:
     """The compact row of one canonical version row (either source), with `nct_id` and its
-    `feature_hash`. Titles are the normalized texts; types as `distinct_intervention_types`."""
+    `feature_hash`. Titles are the normalized texts; types as `distinct_intervention_types`,
+    which is how the canonical row's `intervention_types` holds them (ADR 0067)."""
     row: dict[str, Any] = {"nct_id": canonical["nct_id"]}
     for name in COPIED:
         row[name] = canonical.get(name)

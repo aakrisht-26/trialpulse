@@ -89,7 +89,8 @@ def test_the_live_versions_of_revision_0001_matched_the_canonical_schema(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The columns of revisions 0001 and 0002 (created, then added) equal the canonical
-    contract; revision 0004 replaced them with compact rows."""
+    contract of their time; revision 0004 replaced them with compact rows, so a column that
+    joined the contract later (schema version 4, ADR 0067) has no Postgres column."""
     sql = _render(capsys, "head")
     sql = sql[: sql.index("-- Running upgrade 0003 -> 0004")]
     columns = _create_table(sql, "live.study_versions")
@@ -97,7 +98,8 @@ def test_the_live_versions_of_revision_0001_matched_the_canonical_schema(
         r"ALTER TABLE live\.study_versions ADD COLUMN ([a-z_0-9]+) ([A-Z][A-Z ]*?);", sql
     ):
         columns[name] = kind
-    expected = {c: POSTGRES[kind] for c, kind in COLUMN_TYPES.items()}
+    later = {"intervention_types"}
+    expected = {c: POSTGRES[kind] for c, kind in COLUMN_TYPES.items() if c not in later}
     expected.update({"ingested_at": "TIMESTAMP WITH TIME ZONE", "run_id": "BIGINT"})
     assert columns == expected
 

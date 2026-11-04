@@ -20,6 +20,7 @@ from trialpulse.warehouse.build import (
     build,
     compare_with_previous,
     dataset_glob,
+    interventions_glob,
     table_checksums,
 )
 
@@ -99,6 +100,35 @@ def test_versions_are_canonical(warehouse: Path) -> None:
 
 
 @pytest.mark.slow  # over half a second; CI runs every test
+def test_versions_carry_their_intervention_types(warehouse: Path) -> None:
+    """ADR 0067: one type per distinct (name, type) pair, sorted, the type in canonical form;
+    names that differ only in case are two interventions; no list is NULL."""
+    types = {
+        (nct, version): kinds
+        for nct, version, kinds in _query(
+            warehouse, "SELECT nct_id, nct_version, intervention_types FROM versions"
+        )
+    }
+    assert types[("NCT00000001", 0)] == ["BEHAVIORAL"]
+    assert types[("NCT00000001", 1)] == ["BEHAVIORAL", "DIETARY_SUPPLEMENT"]
+    assert types[("NCT00000005", 0)] == ["DRUG", "DRUG", "DRUG", "OTHER"]
+    listed = {("NCT00000001", 0), ("NCT00000001", 1), ("NCT00000005", 0)}
+    assert all(kinds == [] for key, kinds in types.items() if key not in listed)
+    described = dict(_query(warehouse, "SELECT column_name, column_type FROM (DESCRIBE versions)"))
+    assert described["intervention_types"] == "VARCHAR[]"
+    info = dict(_query(warehouse, "SELECT key, value FROM build_info"))
+    assert (info["interventions.rows"], info["interventions.versions"]) == ("7", "3")
+    # Names are read to tell interventions apart and never stored.
+    with duckdb.connect(str(warehouse), read_only=True) as con:
+        for table in TABLES:
+            text = con.execute(f"SELECT string_agg(CAST(t AS VARCHAR), '|') FROM {table} t")
+            stored = text.fetchone()
+            assert stored is not None
+            for name in ("Walking program", "Diet advice", "Aspirin", "Saline", "Placebo"):
+                assert name.lower() not in str(stored[0]).lower(), (table, name)
+
+
+@pytest.mark.slow  # over half a second; CI runs every test
 def test_texts_are_normalized_once_and_shared_across_forms(warehouse: Path) -> None:
     html_hash, markdown_hash = (
         _query(
@@ -145,11 +175,11 @@ def test_quarantine_and_trials(warehouse: Path) -> None:
 
 @pytest.mark.slow  # a second build, with a pool of worker processes
 def test_building_twice_gives_identical_tables(
-    tmp_path: Path, dataset: str, cfg: ProjectConfig, warehouse: Path
+    tmp_path: Path, dataset: str, interventions: str, cfg: ProjectConfig, warehouse: Path
 ) -> None:
     first = table_checksums(warehouse)
     again = tmp_path / "again.duckdb"
-    build(dataset, cfg, again, workers=2, temp_dir=tmp_path / "tmp")
+    build(dataset, cfg, again, workers=2, temp_dir=tmp_path / "tmp", interventions=interventions)
     assert table_checksums(again) == first
     log = tmp_path / "build.json"
     assert compare_with_previous(first, log) is None
@@ -161,7 +191,9 @@ def test_building_twice_gives_identical_tables(
 
 @pytest.mark.slow  # over half a second; CI runs every test
 def test_the_api_v2_path_gives_the_same_canonical_row(warehouse: Path) -> None:
-    """NCT00000005 as API v2 would return it maps to the warehouse row, hash included."""
+    """NCT00000005 as API v2 would return it maps to the warehouse row, hash included. Its
+    interventions repeat a pair, differ from another only in the name's case and spell a type
+    in lower case: the types agree with the interventions config's (ADR 0067)."""
     with duckdb.connect(str(warehouse), read_only=True) as con:
         cursor = con.execute("SELECT * FROM versions WHERE nct_id = 'NCT00000005'")
         names = [d[0] for d in cursor.description]
@@ -193,6 +225,15 @@ def test_the_api_v2_path_gives_the_same_canonical_row(warehouse: Path) -> None:
                 "studyType": "OBSERVATIONAL",
                 "designInfo": {"interventionModel": "PARALLEL", "primaryPurpose": "TREATMENT"},
             },
+            "armsInterventionsModule": {
+                "interventions": [
+                    {"name": "Aspirin", "type": "DRUG"},
+                    {"name": "Aspirin", "type": "DRUG"},
+                    {"name": "aspirin", "type": "DRUG"},
+                    {"name": "Placebo", "type": "drug"},
+                    {"name": "Saline", "type": "OTHER"},
+                ]
+            },
             "eligibilityModule": {
                 "eligibilityCriteria": (
                     "Inclusion Criteria:\n\n* Age \\>= 18\n"
@@ -207,6 +248,12 @@ def test_the_api_v2_path_gives_the_same_canonical_row(warehouse: Path) -> None:
     row, _ = canonical_from_api_v2(study)
     compared = [c for c in CANONICAL_COLUMNS if c not in ("nct_version", "source")]
     assert {c: row[c] for c in compared} == {c: stored[c] for c in compared}
+    assert row["intervention_types"] == ["DRUG", "DRUG", "DRUG", "OTHER"]
+    assert {"content_hash", "intervention_types"} <= set(compared)
+    # One intervention fewer is another record.
+    study["protocolSection"]["armsInterventionsModule"]["interventions"].pop()
+    fewer, _ = canonical_from_api_v2(study)
+    assert fewer["content_hash"] != stored["content_hash"]
 
 
 @pytest.mark.slow  # over half a second; CI runs every test
@@ -230,6 +277,7 @@ def test_audit_reports_counts_without_names(
     for secret in (INVESTIGATOR, INDIVIDUAL, PERSON_LIKE, EMAIL, "Acme"):
         assert secret not in text
     assert "| `is_ppsd` | BOOLEAN in 1; INTEGER in 1 | 5 | BOOLEAN |" in text
+    assert "config `interventions` of the same revision: 1 Parquet files, 7 rows, giving a " in text
     assert "Duplicate (nct_id, nct_version) keys in the source: 1 (2 rows)." in text
     assert "| COMPLETED | 1 | 1 | 0 | 0 |" in text  # the reopened trial
     assert "| Posted on the same day as the previous version | 1 | 1 |" in text
@@ -357,7 +405,7 @@ def test_a_missing_and_an_empty_sponsor_name_do_not_duplicate_versions(
 ) -> None:
     """Both normalize to no name: the sponsor lookup must hold one row for them, or the
     join would stage each of these versions twice and quarantine them as duplicates."""
-    from .conftest import _version, write_dataset
+    from .conftest import _version, write_dataset, write_interventions
 
     rows = [
         _version("NCT00000021", 0, "2016-01-01", lead_sponsor_name=None),
@@ -365,11 +413,40 @@ def test_a_missing_and_an_empty_sponsor_name_do_not_duplicate_versions(
         _version("NCT00000023", 0, "2016-01-01"),
     ]
     glob = write_dataset(tmp_path / "raw" / "core", rows)
+    interventions = write_interventions(tmp_path / "raw" / "interventions", [])
     path = tmp_path / "w.duckdb"
-    build(glob, cfg, path, workers=1, temp_dir=tmp_path / "tmp")
+    build(glob, cfg, path, workers=1, temp_dir=tmp_path / "tmp", interventions=interventions)
     assert _query(path, "SELECT count(*) FROM versions") == [(3,)]
     assert _query(path, "SELECT count(*) FROM versions_quarantine") == [(0,)]
     assert _query(path, "SELECT count(*) FROM versions WHERE sponsor_key IS NULL") == [(2,)]
+
+
+@pytest.mark.slow  # builds a third warehouse
+def test_an_intervention_type_outside_the_contract_quarantines_its_version(
+    tmp_path: Path, cfg: ProjectConfig
+) -> None:
+    """ADR 0067: the registry's 11 types only, on the dataset path as on API v2's."""
+    from .conftest import _version, write_dataset, write_interventions
+
+    rows = [_version("NCT00000031", 0, "2016-01-01"), _version("NCT00000032", 0, "2016-01-01")]
+    glob = write_dataset(tmp_path / "raw" / "core", rows)
+    interventions = write_interventions(
+        tmp_path / "raw" / "interventions",
+        [("NCT00000031", 0, "Gene therapy", "GENE_EDIT"), ("NCT00000032", 0, "Drug", "DRUG")],
+    )
+    path = tmp_path / "w.duckdb"
+    build(glob, cfg, path, workers=1, temp_dir=tmp_path / "tmp", interventions=interventions)
+    assert _query(path, "SELECT nct_id, intervention_types FROM versions") == [
+        ("NCT00000032", ["DRUG"])
+    ]
+    assert _query(path, "SELECT nct_id, reasons FROM versions_quarantine") == [
+        ("NCT00000031", "intervention_types: known_intervention_types")
+    ]
+
+
+def test_a_missing_interventions_download_is_refused(tmp_path: Path, cfg: ProjectConfig) -> None:
+    with pytest.raises(RefusedError, match="interventions config"):
+        interventions_glob(cfg, raw_dir=tmp_path)
 
 
 def test_large_integers_survive_the_chunk_conversion() -> None:

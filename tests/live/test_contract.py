@@ -188,7 +188,6 @@ def test_interventions_count_distinct_pairs_on_exact_strings() -> None:
     pairs = [("Drug A", "DRUG"), ("Drug A", "DRUG"), ("drug a", "DRUG"), ("Device", "DEVICE"),
              ("Nameless", None)]  # fmt: skip
     assert contract.distinct_intervention_types(pairs) == ["DEVICE", "DRUG", "DRUG"]
-    assert contract.unknown_intervention_types(["DRUG", "NEW_KIND"]) == ["NEW_KIND"]
 
 
 def test_a_marker_says_what_changed() -> None:

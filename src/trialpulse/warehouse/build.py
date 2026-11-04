@@ -9,7 +9,10 @@ Tables:
   planned feature, label or audit needs are loaded; no personal-data column, no free text and
   no sponsor name is written.
 - texts: every distinct normalized text (trialpulse.contracts.text), keyed by its SHA-256.
-- versions: the canonical version rows (trialpulse.contracts.versions) that pass validation.
+- versions: the canonical version rows (trialpulse.contracts.versions) that pass validation,
+  with each version's intervention types from the dataset's `interventions` config of the
+  same revision (ADR 0067). Intervention names are read to tell interventions apart and are
+  never written.
 - versions_quarantine: the rows that fail it, with the reasons. Not used downstream.
 - trials: one row per trial: time zero, first and last version, latest status.
 - build_info: the dataset revision and the build's counts.
@@ -67,8 +70,9 @@ RAW_DIR = REPO_ROOT / "data" / "raw" / "history"
 TEMP_DIR = REPO_ROOT / "data" / "duckdb_tmp"
 # 2: last_known_status (ADR 0014). 3: no name or key for a sponsor whose name opens with a
 # personal title and holds no organization word (ADR 0022). 4: the content hash reads the
-# submitted status (ADR 0066).
+# submitted status (ADR 0066), and versions carry their intervention types (ADR 0067).
 SCHEMA_VERSION = "4"
+INTERVENTIONS_CONFIG = "interventions"
 TABLES: tuple[str, ...] = (
     "raw_versions",
     "texts",
@@ -144,6 +148,20 @@ def dataset_glob(cfg: ProjectConfig, raw_dir: Path = RAW_DIR) -> str:
         raise RefusedError(
             f"the pinned revision {revision} is not downloaded to {folder}; "
             "run: uv run python -m trialpulse.feasibility.spike --part a"
+        )
+    return (folder / "*.parquet").as_posix()
+
+
+def interventions_glob(cfg: ProjectConfig, raw_dir: Path = RAW_DIR) -> str:
+    """The interventions config of the pinned revision (ADR 0067)."""
+    revision = cfg.dataset.revision
+    if not revision:
+        raise RefusedError("no dataset revision is pinned in config/project.yaml")
+    folder = raw_dir / revision / INTERVENTIONS_CONFIG
+    if not any(folder.glob("*.parquet")):
+        raise RefusedError(
+            f"the interventions config of {revision} is not downloaded to {folder}; "
+            "run: uv run python -m trialpulse.ingest.history --config interventions"
         )
     return (folder / "*.parquet").as_posix()
 
@@ -327,6 +345,32 @@ def _validate_texts(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int
     log.info("texts: validated")
 
 
+# Interventions ---------------------------------------------------------------------------
+
+
+def intervention_lists_sql(source: str) -> str:
+    """SQL twin of contracts.versions.distinct_intervention_types (tested against it): from a
+    relation of (nct_id, nct_version, intervention_name, intervention_type) rows, one list per
+    version holding the type of each distinct (name, type) pair, sorted, with the type in
+    canonical form and pairs without a type left out."""
+    kind = _sql_enum("intervention_type")
+    return f"""SELECT nct_id, nct_version, list(kind ORDER BY kind) AS intervention_types
+        FROM (SELECT DISTINCT nct_id, nct_version, intervention_name, {kind} AS kind
+              FROM {source})
+        WHERE kind IS NOT NULL
+        GROUP BY nct_id, nct_version"""
+
+
+def load_interventions(con: duckdb.DuckDBPyConnection, glob: str) -> dict[str, int]:
+    """The temporary intervention_lists: each version's intervention types (ADR 0067)."""
+    con.execute(f"CREATE TEMP TABLE intervention_lists AS {intervention_lists_sql(_source(glob))}")
+    return {
+        "interventions.files": len(list(Path(glob).parent.glob(Path(glob).name))),
+        "interventions.rows": _scalar(con, f"SELECT count(*) FROM {_source(glob)}"),
+        "interventions.versions": _scalar(con, "SELECT count(*) FROM intervention_lists"),
+    }
+
+
 # Sponsors and ages -----------------------------------------------------------------------
 
 
@@ -407,6 +451,7 @@ def _stage_sql() -> str:
         "s.name AS lead_sponsor_name",
         "s.key AS sponsor_key",
         "coalesce(s.is_individual, false) AS sponsor_is_individual",
+        "coalesce(il.intervention_types, CAST([] AS VARCHAR[])) AS intervention_types",
     ]
     joins = [
         "JOIN trial_chunks c ON c.nct_id = r.nct_id",
@@ -415,6 +460,8 @@ def _stage_sql() -> str:
         "LEFT JOIN age_map amax ON amax.raw = r.maximum_age",
         "LEFT JOIN sponsor_map s ON s.name_key = coalesce(k.raw_sponsor_name, '') "
         "AND s.class_key = coalesce(k.raw_sponsor_class, '')",
+        "LEFT JOIN intervention_lists il ON il.nct_id = r.nct_id "
+        "AND il.nct_version = r.nct_version",
     ]
     for field in TEXT_FIELDS:
         select.append(f"t_{field}.text_hash AS {field}_hash")
@@ -458,16 +505,27 @@ _NULLABLE = {
 }
 
 
+LIST_OF_TEXT = pa.list_(pa.string())
+
+
+def _to_arrow(frame: pd.DataFrame) -> pa.Table:
+    """Arrow from pandas, the list column typed as a list of text: a chunk whose lists are all
+    empty would otherwise come out as a list of nulls."""
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    index = table.schema.get_field_index("intervention_types")
+    if index < 0:
+        return table
+    column = table.column(index).cast(LIST_OF_TEXT)
+    return table.set_column(index, pa.field("intervention_types", LIST_OF_TEXT), column)
+
+
 def prepare_chunk(raw: pa.Table) -> tuple[pa.Table, pa.Table]:
     """Typed canonical rows with content hashes, split into valid and quarantined rows. Runs
     in a worker: Arrow in and out, so the main process never converts rows to pandas."""
     frame = typed_frame(raw.to_pandas(date_as_object=False, types_mapper=_NULLABLE.get))
     frame["content_hash"] = content_hashes(frame)
     valid, failing = split_valid(frame)
-    return (
-        pa.Table.from_pandas(valid, preserve_index=False),
-        pa.Table.from_pandas(failing, preserve_index=False),
-    )
+    return _to_arrow(valid), _to_arrow(failing)
 
 
 def build_versions(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int) -> dict[str, int]:
@@ -502,7 +560,7 @@ def build_versions(con: duckdb.DuckDBPyConnection, pool: Executor, workers: int)
         _insert(con, "versions_quarantine", failing)
         log.info("versions: chunk %d of %d", done, chunks)
     del ordered, body
-    for table in ("trial_chunks", "row_keys", "text_keys"):
+    for table in ("trial_chunks", "row_keys", "text_keys", "intervention_lists"):
         con.execute(f"DROP TABLE {table}")
     return {
         "versions.rows": _scalar(con, "SELECT count(*) FROM versions"),
@@ -553,9 +611,16 @@ def _scalar(con: duckdb.DuckDBPyConnection, sql: str) -> int:
 
 
 def build(
-    glob: str, cfg: ProjectConfig, out_path: Path, workers: int, temp_dir: Path = TEMP_DIR
+    glob: str,
+    cfg: ProjectConfig,
+    out_path: Path,
+    workers: int,
+    temp_dir: Path = TEMP_DIR,
+    *,
+    interventions: str,
 ) -> dict[str, Any]:
-    """Build the warehouse into out_path (replaced only when the build completes)."""
+    """Build the warehouse into out_path (replaced only when the build completes) from the
+    core config (`glob`) and the interventions config (`interventions`) of one revision."""
     building = out_path.with_name(out_path.name + ".building")
     for leftover in (building, building.with_name(building.name + ".wal")):
         leftover.unlink(missing_ok=True)  # from an interrupted build
@@ -571,6 +636,8 @@ def build(
         )
         load_raw(con, glob)
         stats["raw.rows"] = _scalar(con, "SELECT count(*) FROM raw_versions")
+        stats.update(load_interventions(con, interventions))
+        log.info("interventions: %s versions", f"{stats['interventions.versions']:,}")
         with _executor(workers) as pool:
             stats.update(build_texts(con, glob, pool, workers))
             stats.update(build_maps(con))
@@ -613,8 +680,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_project_config()
     glob = dataset_glob(cfg)
+    interventions = interventions_glob(cfg)
     started = time.monotonic()
-    stats = build(glob, cfg, WAREHOUSE_PATH, args.workers)
+    stats = build(glob, cfg, WAREHOUSE_PATH, args.workers, interventions=interventions)
     tables = table_checksums(WAREHOUSE_PATH)
     identical = compare_with_previous(tables, BUILD_LOG_PATH)
     if not args.no_audit:
