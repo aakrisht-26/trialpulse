@@ -3,18 +3,31 @@
 Every function takes an open psycopg cursor; the caller owns the transaction, so a stage of
 the daily job writes in one transaction and commits once. Feature hashes are hex strings in
 memory and 32 bytes in the tables. Nothing here logs a row: failures carry their type only.
+
+The bootstrap writes in three steps (ADRs 0045, 0058, 0060): `start_bootstrap` takes the
+lease in a short transaction of its own, `prepare_bootstrap` makes every row with no
+transaction open (COPY data made by the connection's own adapters and sent nowhere, and the
+sponsor file's bytes), and `load_bootstrap` sends those prepared rows in one transaction,
+computing nothing while it is open.
 """
 
 import datetime as dt
 import hashlib
+import io
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+from trialpulse.live import reasons as reason_counts
 from trialpulse.live.contract import LIVE_FIELDS
 from trialpulse.live.engine import Ingested
 from trialpulse.live.sponsors import FORMAT, SponsorFile
 from trialpulse.live.state import FIRST_FIELDS, Event, Wide
+from trialpulse.scoring import serving
+
+if TYPE_CHECKING:
+    from trialpulse.scoring.predict import Scored
 
 HEAD = "0006"
 WIDE_COLUMNS: tuple[str, ...] = (
@@ -265,8 +278,15 @@ def load_markers(cur: Any, trials: Iterable[str]) -> dict[str, list[tuple[dt.dat
     return {r[0]: list(zip(r[1], r[2], strict=True)) for r in rows}
 
 
+MARKER_COLUMNS: tuple[str, ...] = ("nct_id", "post_dates", "kinds")
+
+
+def _marker_values(markers: Mapping[str, Sequence[tuple[dt.date, int]]]) -> list[tuple[Any, ...]]:
+    return [(n, [d for d, _ in m], [k for _, k in m]) for n, m in markers.items()]
+
+
 def save_markers(cur: Any, markers: Mapping[str, Sequence[tuple[dt.date, int]]]) -> int:
-    rows = [(n, [d for d, _ in m], [k for _, k in m]) for n, m in markers.items()]
+    rows = _marker_values(markers)
     cur.executemany(
         """INSERT INTO serving.amendment_markers (nct_id, post_dates, kinds) VALUES (%s, %s, %s)
         ON CONFLICT (nct_id) DO UPDATE SET post_dates = EXCLUDED.post_dates,
@@ -301,9 +321,15 @@ def save_ingest(cur: Any, done: Ingested, run_id: int | None) -> None:
 # The sponsor file ---------------------------------------------------------------------------
 
 
-def save_file(cur: Any, sponsors: SponsorFile) -> str:
+def file_values(sponsors: SponsorFile) -> tuple[Any, ...]:
+    """The values of the sponsor file's row (format, content, sha256, through day, last run,
+    trials, keys): the file is serialized here, once."""
     content = sponsors.to_bytes()
-    digest = hashlib.sha256(content).hexdigest()
+    return (FORMAT, content, hashlib.sha256(content).hexdigest(), sponsors.through_day,
+            sponsors.last_run_id, len(sponsors.thin), len(sponsors.key_numbers))  # fmt: skip
+
+
+def _write_file(cur: Any, values: Sequence[Any]) -> None:
     cur.execute(
         """INSERT INTO live.sponsor_file
           (file_id, format, content, sha256, through_day, last_run_id, trials, keys)
@@ -312,10 +338,14 @@ def save_file(cur: Any, sponsors: SponsorFile) -> str:
           content = EXCLUDED.content, sha256 = EXCLUDED.sha256,
           through_day = EXCLUDED.through_day, last_run_id = EXCLUDED.last_run_id,
           trials = EXCLUDED.trials, keys = EXCLUDED.keys, written_at = now()""",
-        (FORMAT, content, digest, sponsors.through_day, sponsors.last_run_id,
-         len(sponsors.thin), len(sponsors.key_numbers)),
-    )  # fmt: skip
-    return digest
+        tuple(values),
+    )
+
+
+def save_file(cur: Any, sponsors: SponsorFile) -> str:
+    values = file_values(sponsors)
+    _write_file(cur, values)
+    return str(values[2])
 
 
 def load_file(cur: Any) -> SponsorFile:
@@ -420,39 +450,138 @@ REBUILT_TABLES: tuple[str, ...] = (
 )  # fmt: skip
 
 
-def load_bootstrap(
+@dataclass(frozen=True)
+class Payload:
+    """The rows of one table in COPY's text format, made before a write opens its
+    transaction (`copy_payload`)."""
+
+    table: str
+    columns: tuple[str, ...]
+    data: bytes
+    rows: int
+
+
+@dataclass(frozen=True)
+class BootstrapRows:
+    """Everything the bootstrap writes, prepared before its one transaction opens
+    (`prepare_bootstrap`): COPY data for the tables, the sponsor file's row and the reason
+    counts. It holds bytes and plain values only, so the write can compute nothing."""
+
+    run_id: int
+    release: dt.date
+    copies: tuple[Payload, ...]
+    file: tuple[Any, ...]  # the values of the sponsor file's row (`file_values`)
+    reasons: tuple[tuple[dt.date, str, str, int], ...] | None
+    trials: int
+
+    def sizes(self) -> dict[str, dict[str, int]]:
+        """Rows and bytes sent for each table (the sponsor file as its row's content)."""
+        out = {p.table: {"rows": p.rows, "bytes": len(p.data)} for p in self.copies}
+        out["live.sponsor_file"] = {"rows": 1, "bytes": len(self.file[1])}
+        if self.reasons is not None:
+            out["serving.reason_counts"] = {"rows": len(self.reasons), "bytes": 0}
+        return out
+
+
+def copy_payload(
+    cur: Any, table: str, columns: Sequence[str], rows: Iterable[Sequence[Any]]
+) -> Payload:
+    """The rows of `table` in COPY's text format, made by the connection's own adapters and
+    sent nowhere (psycopg's FileWriter, on a cursor of `cur`'s connection that has run
+    nothing)."""
+    from psycopg.copy import Copy, FileWriter
+
+    buffer = io.BytesIO()
+    count = 0
+    with cur.connection.cursor() as fresh, Copy(fresh, writer=FileWriter(buffer)) as copy:
+        for row in rows:
+            copy.write_row(row)
+            count += 1
+    return Payload(table, tuple(columns), buffer.getvalue(), count)
+
+
+def occupied_tables(cur: Any) -> list[str]:
+    """The tables a rebuild clears that hold a row: a bootstrap without `rebuild` refuses
+    over any of them."""
+    return [t for t in REBUILT_TABLES
+            if cur.execute(f"SELECT EXISTS (SELECT 1 FROM {t})").fetchone()[0]]  # fmt: skip
+
+
+def start_bootstrap(cur: Any, release: dt.date, stale_minutes: int) -> int:
+    """Take the lease for a bootstrap: its running row in `monitoring.pipeline_runs`, dated
+    the release (LeaseError when another job runs). The caller commits it at once, in a
+    transaction of its own, so the lease holds while the bootstrap computes."""
+    return start_run(cur, "bootstrap", "bootstrap", release, stale_minutes)
+
+
+def prepare_bootstrap(
     cur: Any,
+    run_id: int,
+    release: dt.date,
     wides: Mapping[str, Wide],
     sponsors: SponsorFile,
     markers: Mapping[str, Sequence[tuple[dt.date, int]]],
-    release: dt.date,
-    rebuild: bool = False,
-) -> int:
-    """Load seeded state (`live.seed`) in the caller's one transaction, with a succeeded
-    `bootstrap` run whose watermark is the release date (ADR 0045). Refuses over live rows
-    unless `rebuild`. A rebuild takes the lease first, then clears every table the daily job
-    writes (`REBUILT_TABLES`), every other run's row, and the daily job's columns of
-    `serving.data_status` (the reason counts' `labeled_through` is the laptop's and stays), so
-    the next daily run is a first run on the new state. The bootstrap command itself runs on
-    the laptop (ADR 0040)."""
-    present = cur.execute("SELECT count(*) FROM live.trial_state").fetchone()[0]
-    if present and not rebuild:
-        raise RuntimeError("live state exists: the bootstrap refuses to load over it")
-    run_id = start_run(cur, "bootstrap", "bootstrap", release, 120)  # the lease, first
+    scored: "Scored | None" = None,
+    reasons: Sequence[tuple[dt.date, str, str, int]] | None = None,
+) -> BootstrapRows:
+    """Every row of the bootstrap's write, made with no transaction open (ADR 0058): the wide
+    rows, the amendment markers and, with `scored`, the release date's scores as first
+    scores (`serving.first_rows`) as COPY data; the sponsor file, consumed through the run
+    `run_id`, as its row's values; the reason counts as they are."""
+    sponsors.last_run_id = run_id
+    copies = [
+        copy_payload(cur, "live.trial_state", WIDE_COLUMNS,
+                     (_wide_values(w, run_id) for w in wides.values())),
+        copy_payload(cur, "serving.amendment_markers", MARKER_COLUMNS, _marker_values(markers)),
+    ]  # fmt: skip
+    if scored is not None:
+        latest, history, not_scored = serving.first_rows(scored, run_id)
+        copies += [
+            copy_payload(cur, "serving.trial_scores_latest", serving.LATEST_COLUMNS, latest),
+            copy_payload(cur, "serving.trial_score_history", serving.HISTORY_COLUMNS, history),
+            copy_payload(cur, "serving.trials_not_scored", serving.NOT_SCORED_COLUMNS,
+                         not_scored),
+        ]  # fmt: skip
+    return BootstrapRows(
+        run_id=run_id,
+        release=release,
+        copies=tuple(copies),
+        file=file_values(sponsors),
+        reasons=None if reasons is None else tuple(reasons),
+        trials=len(wides),
+    )
+
+
+def load_bootstrap(cur: Any, rows: BootstrapRows, rebuild: bool = False) -> int:
+    """Write the prepared rows of a bootstrap in the caller's one transaction, and end its
+    run as succeeded with the release date as its watermark (ADR 0045); returns the run id.
+    Nothing is computed here: every row arrives as COPY data or a plain value.
+
+    The lease is renewed first (ADR 0060). Without `rebuild` the write refuses over any row
+    in the tables a rebuild clears. A rebuild clears every table the daily job writes
+    (`REBUILT_TABLES`), every other run's row, and the daily job's columns of
+    `serving.data_status` (the reason counts' `labeled_through` stays, unless new counts
+    come with the rows), so the next daily run is a first run on the new state. The
+    bootstrap command itself runs on the laptop (ADR 0040)."""
+    renew(cur, rows.run_id)  # the lease, first in the write
     if rebuild:
         cur.execute(f"TRUNCATE {', '.join(REBUILT_TABLES)}")
-        cur.execute("DELETE FROM monitoring.pipeline_runs WHERE run_id <> %s", (run_id,))
+        cur.execute("DELETE FROM monitoring.pipeline_runs WHERE run_id <> %s", (rows.run_id,))
         cur.execute(
             """UPDATE serving.data_status SET data_as_of = NULL, model_version = NULL,
               early_stops_after_labels = NULL, updated_at = now()"""
         )
-    sponsors.last_run_id = run_id
-    save_wides(cur, wides.values(), run_id)
-    save_file(cur, sponsors)
-    save_markers(cur, markers)
-    finish_run(cur, run_id, "succeeded", {"watermark_to": release,
-                                          "details": {"trials": len(wides)}})  # fmt: skip
-    return run_id
+    elif occupied_tables(cur):
+        raise RuntimeError("live state exists: the bootstrap refuses to load over it")
+    for payload in rows.copies:
+        with cur.copy(f"COPY {payload.table} ({', '.join(payload.columns)}) FROM STDIN") as copy:
+            copy.write(payload.data)
+    _write_file(cur, rows.file)
+    if rows.reasons is not None:
+        reason_counts.load(cur, rows.reasons, rows.release)
+    details = {"trials": rows.trials, "rows": {p.table: p.rows for p in rows.copies}}
+    finish_run(cur, rows.run_id, "succeeded", {"watermark_to": rows.release, "details": details})
+    return rows.run_id
 
 
 def set_data_status(cur: Any, day: dt.date, model_version: str, early_stop: Sequence[str]) -> None:

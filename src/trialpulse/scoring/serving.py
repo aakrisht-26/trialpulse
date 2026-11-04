@@ -183,6 +183,36 @@ def latest_frame(scored: Scored) -> pd.DataFrame:
     return frame
 
 
+def unscored_frame(scored: Scored) -> pd.DataFrame:
+    frame = scored.unscored.rename(columns={"true_index": "true_landmark_index"}).copy()
+    frame["as_of_date"] = pd.to_datetime(frame["as_of_date"]).dt.date
+    frame["content_hash"] = _hash_bytes(frame["content_hash"])
+    return frame
+
+
+def first_rows(
+    scored: Scored, run_id: int | None
+) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]], list[tuple[Any, ...]]]:
+    """The rows `publish` writes for `scored` into empty serving tables, where every score is
+    a first score: tuples in the columns of LATEST_COLUMNS, HISTORY_COLUMNS and
+    NOT_SCORED_COLUMNS. The bootstrap makes them before its one transaction opens and copies
+    them in (ADR 0045); a test holds them to what `publish` writes."""
+    new = latest_frame(scored)
+    new["run_id"] = run_id
+    unscored = unscored_frame(scored)
+    days = set(new["as_of_date"]) | set(unscored["as_of_date"])
+    if len(days) != 1:
+        raise ValueError(f"a run publishes one date, not {len(days)}")
+    previous = pd.DataFrame(columns=["nct_id", "risk_12m", "risk_24m", "model_version",
+                                     "true_landmark_index", "content_hash"])  # fmt: skip
+    history = history_rows(new, previous)
+    return (
+        _rows(new, LATEST_COLUMNS),
+        _rows(history, HISTORY_COLUMNS),
+        _rows(unscored, NOT_SCORED_COLUMNS),
+    )
+
+
 def publish(
     scored: Scored,
     cfg: ProjectConfig,
@@ -200,9 +230,7 @@ def publish(
 
     new = latest_frame(scored)
     new["run_id"] = run_id
-    unscored = scored.unscored.rename(columns={"true_index": "true_landmark_index"}).copy()
-    unscored["as_of_date"] = pd.to_datetime(unscored["as_of_date"]).dt.date
-    unscored["content_hash"] = _hash_bytes(unscored["content_hash"])
+    unscored = unscored_frame(scored)
     if scope is not None:
         outside = (set(new["nct_id"]) | set(unscored["nct_id"])) - scope
         if outside:

@@ -12,6 +12,7 @@ cutoff, and the daily job counts the early stops recorded after it.
 import argparse
 import datetime as dt
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -45,6 +46,19 @@ def reason_counts(con: duckdb.DuckDBPyConnection) -> list[tuple[dt.date, str, st
     return [(r[0], str(r[1]), str(r[2]), int(r[3])) for r in rows]
 
 
+def counts_from_files(warehouse: Path, outcomes: Path) -> list[tuple[dt.date, str, str, int]]:
+    """The counts from the warehouse's `stop_reasons` and `versions` (opened read-only) and
+    the cohort's outcomes file."""
+    if not warehouse.is_file() or not outcomes.is_file():
+        raise RefusedError("the warehouse or the cohort's outcomes are not on this machine")
+    with duckdb.connect() as con:
+        con.execute(f"ATTACH '{warehouse.as_posix()}' AS wh (READ_ONLY)")
+        con.execute("CREATE VIEW stop_reasons AS SELECT * FROM wh.stop_reasons")
+        con.execute("CREATE VIEW versions AS SELECT * FROM wh.versions")
+        con.execute(f"CREATE VIEW outcomes AS SELECT * FROM read_parquet('{outcomes.as_posix()}')")
+        return reason_counts(con)
+
+
 def load(cur: Any, counts: Sequence[tuple[dt.date, str, str, int]], through: dt.date) -> None:
     """Replace the counts in `serving.reason_counts`, in the caller's transaction."""
     cur.execute("DELETE FROM serving.reason_counts")
@@ -68,16 +82,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     from trialpulse.warehouse.build import WAREHOUSE_PATH
 
     cfg = load_project_config()
-    if not WAREHOUSE_PATH.is_file() or not OUTCOMES_PATH.is_file():
-        raise RefusedError("the warehouse or the cohort's outcomes are not on this machine")
     if cfg.dataset.cutoff is None:
         raise RefusedError("config/project.yaml has no data cutoff")
-    with duckdb.connect() as con:
-        con.execute(f"ATTACH '{WAREHOUSE_PATH.as_posix()}' AS wh (READ_ONLY)")
-        con.execute("CREATE VIEW stop_reasons AS SELECT * FROM wh.stop_reasons")
-        con.execute("CREATE VIEW versions AS SELECT * FROM wh.versions")
-        con.execute(f"CREATE VIEW outcomes AS SELECT * FROM read_parquet('{OUTCOMES_PATH}')")
-        counts = reason_counts(con)
+    counts = counts_from_files(WAREHOUSE_PATH, OUTCOMES_PATH)
     with psycopg.connect(_dsn(args.target), connect_timeout=10) as pg, pg.cursor() as cur:
         load(cur, counts, cfg.dataset.cutoff)
         pg.commit()

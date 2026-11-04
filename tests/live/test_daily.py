@@ -34,12 +34,18 @@ def dsn(scratch: str) -> str:
     return scratch.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
-def _bootstrap(dsn: str) -> None:
+def _bootstrap(dsn: str, rebuild: bool = False) -> None:
+    """The bootstrap's three steps (`store`): the lease in its own transaction, the rows
+    prepared with no transaction open, and the one-transaction write."""
     aliases = (CFG.features.sponsor_alias_min_trials, CFG.features.sponsor_alias_wait_days)
     seeded = seed(compact_history(120), RELEASE, RULES, KEEP, *aliases)
-    with psycopg.connect(dsn) as con, con.cursor() as cur:
-        store.load_bootstrap(cur, seeded.wides, seeded.sponsors, seeded.markers, RELEASE)
-        con.commit()
+    with psycopg.connect(dsn, autocommit=True) as con, con.cursor() as cur:
+        with con.transaction():
+            run_id = store.start_bootstrap(cur, RELEASE, 120)
+        rows = store.prepare_bootstrap(cur, run_id, RELEASE, seeded.wides, seeded.sponsors,
+                                       seeded.markers)  # fmt: skip
+        with con.transaction():
+            store.load_bootstrap(cur, rows, rebuild=rebuild)
 
 
 def _scorer(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
@@ -763,12 +769,7 @@ def test_a_run_that_lost_its_lease_cannot_renew_or_finish(dsn: str) -> None:
 
 
 def _rebuild(dsn: str) -> None:
-    aliases = (CFG.features.sponsor_alias_min_trials, CFG.features.sponsor_alias_wait_days)
-    seeded = seed(compact_history(120), RELEASE, RULES, KEEP, *aliases)
-    with psycopg.connect(dsn) as con, con.cursor() as cur:
-        store.load_bootstrap(cur, seeded.wides, seeded.sponsors, seeded.markers, RELEASE,
-                             rebuild=True)  # fmt: skip
-        con.commit()
+    _bootstrap(dsn, rebuild=True)
 
 
 @respx.mock
