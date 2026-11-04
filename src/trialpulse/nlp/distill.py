@@ -15,11 +15,14 @@ production, and it labels every early stop in the cohort.
     uv run python -m trialpulse.nlp.distill --dev
     uv run python -m trialpulse.nlp.distill --predict-test
     uv run python -m trialpulse.nlp.distill --label-all
+    uv run python -m trialpulse.nlp.distill --load-table
 
 `--label-all` writes the labels of every early stop as CSV and Parquet, and as the table
 `stop_reasons` of the warehouse (data/warehouse.duckdb, CLAUDE.md Step 6), with how many of
 the cohort's early stops it covers. A warehouse build replaces the whole file, so after a
-rebuild `--label-all` is run again.
+rebuild `--load-table` writes the table again from the labels on disk, without labeling
+anything: the labels file stays as it is, byte for byte, which the registered H3 analysis
+requires (it names the file's SHA-256).
 
 Expected refusals (a provisional model sent to test prediction, a missing model or input, a
 gold text in the training set) print one "refused:" line and exit with code 2.
@@ -275,6 +278,29 @@ def write_reasons(rows: Sequence[Mapping[str, str]], folder: Path) -> tuple[Path
     return csv_path, parquet_path
 
 
+def load_table() -> int:
+    """`--load-table`: the warehouse table from the labels on disk, after a warehouse rebuild.
+    Nothing is labeled and the labels file is not written."""
+    from trialpulse.cohort.build import OUTCOMES_PATH
+    from trialpulse.warehouse.build import WAREHOUSE_PATH
+
+    parquet_path = REASONS_DIR / "early_stop_reasons.parquet"
+    if not parquet_path.is_file():
+        raise RefusedError(
+            f"no labels at {parquet_path}; label the early stops first with: "
+            "uv run python -m trialpulse.nlp.distill --label-all"
+        )
+    coverage = write_warehouse_table(parquet_path, WAREHOUSE_PATH, OUTCOMES_PATH)
+    if coverage is None:
+        raise RefusedError(
+            f"no warehouse at {WAREHOUSE_PATH}; build it with: "
+            "uv run python -m trialpulse.warehouse.build"
+        )
+    print(f"wrote the warehouse table {STOP_REASONS_TABLE} from {parquet_path.name}: "
+          f"{json.dumps(coverage)}")  # fmt: skip
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     from trialpulse.nlp.llm_labeler import (
         FINAL_PROMPT,
@@ -287,12 +313,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="The distilled reason classifier")
     group = parser.add_mutually_exclusive_group()
-    for flag in ("train", "dev", "predict-test", "label-all"):
+    for flag in ("train", "dev", "predict-test", "label-all", "load-table"):
         group.add_argument(f"--{flag}", action="store_true")
     args = parser.parse_args(argv)
     cfg = load_project_config()
     seed = cfg.seeds.default
 
+    if args.load_table:
+        return load_table()
     if args.train or not (args.dev or args.predict_test or args.label_all):
         labels_path = LABELS_DIR / f"sample_{prompt_stem(FINAL_PROMPT)}.csv"
         if not LLM_SAMPLE_PATH.is_file() or not labels_path.is_file():

@@ -164,3 +164,39 @@ def test_the_reasons_become_a_warehouse_table_with_their_coverage(tmp_path: Path
     with duckdb.connect(str(warehouse)) as con:
         names = con.execute(f"SELECT nct_id FROM {STOP_REASONS_TABLE} ORDER BY 1").fetchall()
     assert names == [("NCT1",), ("NCT2",)]
+
+
+def test_load_table_writes_the_labels_on_disk_and_labels_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """After a warehouse rebuild the table comes back from the labels file as it is: no model
+    is loaded and the file, whose SHA-256 the registered H3 analysis names, is not written."""
+    from trialpulse.cli import RefusedError
+    from trialpulse.cohort import build as cohort_build
+    from trialpulse.nlp import distill
+    from trialpulse.warehouse import build as warehouse_build
+
+    rows = [
+        {"nct_id": nct, "status": "TERMINATED", "text_sha256": "a", "label": "accrual",
+         "reason_group": "operational", "confidence": "0.9", "model": "m"}
+        for nct in ("NCT1", "NCT2")
+    ]  # fmt: skip
+    _, parquet_path = write_reasons(rows, tmp_path / "reasons")
+    before = parquet_path.read_bytes()
+    warehouse = tmp_path / "warehouse.duckdb"
+    monkeypatch.setattr(distill, "REASONS_DIR", tmp_path / "reasons")
+    monkeypatch.setattr(warehouse_build, "WAREHOUSE_PATH", warehouse)
+    monkeypatch.setattr(cohort_build, "OUTCOMES_PATH", tmp_path / "no_outcomes.parquet")
+    monkeypatch.setattr(distill, "load_model", lambda *_: pytest.fail("no model is loaded"))
+    with pytest.raises(RefusedError, match="no warehouse"):
+        distill.main(["--load-table"])
+    duckdb.connect(str(warehouse)).close()
+    assert distill.main(["--load-table"]) == 0
+    with duckdb.connect(str(warehouse)) as con:
+        names = con.execute("SELECT nct_id FROM stop_reasons ORDER BY 1").fetchall()
+    assert names == [("NCT1",), ("NCT2",)]
+    assert parquet_path.read_bytes() == before
+    assert 'from early_stop_reasons.parquet: {"rows": 2}' in capsys.readouterr().out
+    monkeypatch.setattr(distill, "REASONS_DIR", tmp_path / "nothing")
+    with pytest.raises(RefusedError, match="no labels"):
+        distill.main(["--load-table"])
