@@ -14,7 +14,10 @@ the offline history dataset and live API v2 records, so downstream code is sourc
   registry shows UNKNOWN (a status it computes, never one a sponsor submits), both sources
   keep the submitted status in this column (API v2 `lastKnownStatus`). It is empty otherwise.
 - `content_hash` is a SHA-256 of the canonical content: every column except the version
-  number, the source and the hash itself. The same function serves both paths, so an
+  number, the source and the hash itself, with the submitted status (ADR 0014) read in the
+  place of `overall_status` and `last_known_status` (ADR 0066). Both columns stay in the row;
+  only the hash reads the submitted status, so a record the registry relabels UNKNOWN
+  without a new version keeps its hash. The same function serves both paths, so an
   unchanged record gives the same hash from either source.
 """
 
@@ -144,9 +147,19 @@ COLUMN_TYPES: dict[str, str] = {
     "content_hash": "VARCHAR",
 }
 CANONICAL_COLUMNS: tuple[str, ...] = tuple(COLUMN_TYPES)
-# Everything that describes the version's content; the content hash covers exactly these.
+# Everything that describes the version's content.
 CONTENT_COLUMNS: tuple[str, ...] = tuple(
     c for c in CANONICAL_COLUMNS if c not in ("nct_version", "source", "content_hash")
+)
+# The status the registry computes and shows over the submitted one (ADR 0014).
+REGISTRY_UNKNOWN = "UNKNOWN"
+# What the content hash reads: the content columns, with the submitted status in the place of
+# the registry's two status columns (ADR 0066).
+SUBMITTED_STATUS = "submitted_status"
+HASHED_FIELDS: tuple[str, ...] = tuple(
+    SUBMITTED_STATUS if c == "overall_status" else c
+    for c in CONTENT_COLUMNS
+    if c != "last_known_status"
 )
 
 
@@ -216,12 +229,24 @@ def _render(values: pd.Series, kind: str) -> pd.Series:
     return out
 
 
+def submitted_statuses(overall: pd.Series, last_known: pd.Series) -> pd.Series:
+    """The submitted status of each row (ADR 0014): `last_known_status` where the registry
+    shows UNKNOWN over one, else `overall_status`. The rule of `cohort.rules.submitted_status`
+    under config/project.yaml (held equal by a test)."""
+    behind = overall.eq(REGISTRY_UNKNOWN).fillna(False).astype(bool) & last_known.notna()
+    return overall.where(~behind, last_known)
+
+
 def content_hashes(frame: pd.DataFrame) -> list[str]:
-    """The content hash of every row: a SHA-256 over the content columns, rendered by type and
-    joined with a unit separator."""
+    """The content hash of every row: a SHA-256 over the fields of `HASHED_FIELDS`, rendered
+    by type and joined with a unit separator."""
     if frame.empty:
         return []
-    columns = [_render(frame[c], COLUMN_TYPES[c]) for c in CONTENT_COLUMNS]
+    status = submitted_statuses(frame["overall_status"], frame["last_known_status"])
+    columns = [
+        _render(status, "VARCHAR") if c == SUBMITTED_STATUS else _render(frame[c], COLUMN_TYPES[c])
+        for c in HASHED_FIELDS
+    ]
     joined = columns[0].str.cat(columns[1:], sep="\x1f")
     return [hashlib.sha256(text.encode("utf-8")).hexdigest() for text in joined]
 
@@ -413,7 +438,7 @@ def _no_personal_title_key(df: pd.DataFrame) -> pd.Series:
 
 
 def _last_known_status_only_behind_unknown(df: pd.DataFrame) -> pd.Series:
-    return df["last_known_status"].isna() | df["overall_status"].eq("UNKNOWN")
+    return df["last_known_status"].isna() | df["overall_status"].eq(REGISTRY_UNKNOWN)
 
 
 def _precision_matches_date(df: pd.DataFrame) -> pd.Series:

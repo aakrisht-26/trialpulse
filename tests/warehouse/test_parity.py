@@ -74,7 +74,10 @@ def test_parity_compares_unchanged_trials_column_by_column(
     assert params["fields"] == parity.api_v2_fields()
     result = json.loads(out.read_text(encoding="utf-8"))
     assert (result["compared"], result["changed_since_dataset"]) == (1, 1)
-    assert result["identical_rows"] == 0
+    # The registry's UNKNOWN over the same submitted status keeps the hash (ADR 0066); the
+    # two status columns still differ, with their cause.
+    assert result["identical_rows"] == 1
+    assert result["per_column"]["content_hash"] == {"agree": 1, "total": 1}
     assert result["per_column"]["overall_status"] == {"agree": 0, "total": 1}
     assert result["per_column"]["eligibility_criteria_hash"] == {"agree": 1, "total": 1}
     assert result["mismatches"] == [

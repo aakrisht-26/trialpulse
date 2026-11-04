@@ -9,11 +9,16 @@ import pandas as pd
 import pytest
 from pandera.errors import SchemaErrors
 
+from trialpulse.cohort.rules import CohortRules, submitted_status
+from trialpulse.config import load_project_config
 from trialpulse.contracts.text import EMAIL_MARKER, text_hash
 from trialpulse.contracts.versions import (
     API_V2_PATHS,
     CANONICAL_COLUMNS,
     CONTENT_COLUMNS,
+    HASHED_FIELDS,
+    STATUSES,
+    SUBMITTED_STATUS,
     age_in_years,
     api_v2_fields,
     canonical_enum,
@@ -22,6 +27,7 @@ from trialpulse.contracts.versions import (
     content_hashes,
     parse_partial_date,
     split_valid,
+    submitted_statuses,
     typed_frame,
     valid_date,
 )
@@ -173,9 +179,48 @@ def test_content_hash_ignores_value_types_but_not_values() -> None:
     assert content_hashes(typed_frame(pd.DataFrame([row]))) == [row["content_hash"]]
     # The version number and the source are not content.
     assert content_hash({**row, "nct_version": 7, "source": "history"}) == row["content_hash"]
-    for column, other in (("enrollment_count", 41), ("healthy_volunteers", False)):
+    for column, other in (
+        ("enrollment_count", 41),
+        ("healthy_volunteers", False),
+        ("overall_status", "ACTIVE_NOT_RECRUITING"),
+    ):
         assert content_hash({**row, column: other}) != row["content_hash"]
     assert "content_hash" not in CONTENT_COLUMNS
+
+
+def test_the_hash_reads_the_submitted_status_not_the_registrys_label() -> None:
+    """ADR 0066: a record the registry relabels UNKNOWN without a new version, with the same
+    submitted status, hashes as before; both status columns stay in the row."""
+    recruiting, _ = canonical_from_api_v2(_study())
+    relabeled, _ = canonical_from_api_v2(
+        _study(overall_status="UNKNOWN", last_known_status="RECRUITING")
+    )
+    assert (relabeled["overall_status"], relabeled["last_known_status"]) == (
+        "UNKNOWN",
+        "RECRUITING",
+    )
+    assert relabeled["content_hash"] == recruiting["content_hash"]
+    other, _ = canonical_from_api_v2(
+        _study(overall_status="UNKNOWN", last_known_status="ACTIVE_NOT_RECRUITING")
+    )
+    assert other["content_hash"] != recruiting["content_hash"]
+    bare, _ = canonical_from_api_v2(_study(overall_status="UNKNOWN"))  # no submitted status left
+    assert bare["content_hash"] not in (recruiting["content_hash"], other["content_hash"])
+    frame = typed_frame(pd.DataFrame([recruiting, relabeled, other, bare]))
+    hashes = content_hashes(frame)
+    assert hashes == [r["content_hash"] for r in (recruiting, relabeled, other, bare)]
+    assert SUBMITTED_STATUS in HASHED_FIELDS
+    assert not {"overall_status", "last_known_status"} & set(HASHED_FIELDS)
+    assert {"overall_status", "last_known_status"} <= set(CONTENT_COLUMNS)
+
+
+def test_the_contract_and_the_cohort_agree_on_the_submitted_status() -> None:
+    """The hash's rule is the one ADR 0014 sets and the cohort and the features apply."""
+    rules = CohortRules.from_config(load_project_config())
+    pairs = [(o, k) for o in STATUSES for k in (None, *STATUSES)]
+    frame = pd.DataFrame(pairs, columns=["overall_status", "last_known_status"], dtype=object)
+    shown = submitted_statuses(frame["overall_status"], frame["last_known_status"])
+    assert shown.tolist() == [submitted_status(rules, o, k) for o, k in pairs]
 
 
 def _history_rows() -> pd.DataFrame:

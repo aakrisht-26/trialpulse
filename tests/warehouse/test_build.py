@@ -341,6 +341,14 @@ def test_the_api_v2_path_matches_a_version_shown_as_unknown(warehouse: Path) -> 
     assert (row["overall_status"], row["last_known_status"]) == ("UNKNOWN", "RECRUITING")
     compared = [c for c in CANONICAL_COLUMNS if c not in ("nct_version", "source")]
     assert {c: row[c] for c in compared} == {c: stored[c] for c in compared}
+    # The same record before the registry's relabel, from API v2: the submitted status is the
+    # same, so the hash is the dataset's (ADR 0066), while the status columns differ.
+    status = study["protocolSection"]["statusModule"]
+    status["overallStatus"] = "RECRUITING"
+    del status["lastKnownStatus"]
+    before, _ = canonical_from_api_v2(study)
+    assert (before["overall_status"], before["last_known_status"]) == ("RECRUITING", None)
+    assert before["content_hash"] == stored["content_hash"]
 
 
 @pytest.mark.slow  # builds a second warehouse
