@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. The review of Steps 14 to 16 and its fixes were merged on 2026-11-01 (see "Review of Steps 14 to 16, and its fixes"); Aakrisht approved its nine decisions and chose Render's free web service for the API on 2026-11-04 (ADR 0065). **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started.
+Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. The review of Steps 14 to 16 and its fixes were merged on 2026-11-01 (see "Review of Steps 14 to 16, and its fixes"); Aakrisht approved its nine decisions and chose Render's free web service for the API on 2026-11-04 (ADR 0065). **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started. On 2026-11-04 the API's error classification was fixed, the leftover branches deleted and the bootstrap measured on real data (see "Laptop work before the deployments"); two decisions wait for Aakrisht there.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2499,6 +2499,66 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Laptop work before the deployments (2026-11-04)
+
+Aakrisht's four items, in his order, each committed and pushed on its own.
+
+### 1. The API's error classification (`34ba2af`)
+
+`api/db.py`'s `unreachable()` compared the exact class name of the driver's error with `OperationalError` and `InterfaceError`, so psycopg's `ConnectionTimeout`, a subclass, was answered 500 instead of 503. On Windows a refused connection takes about 2 seconds, so the 2-second connect timeout fires first. It now uses `isinstance`, and a new test builds `ConnectionTimeout`, `OperationalError`, `InterfaceError` and `ProgrammingError` directly, so CI checks it without depending on timing. The search for other checks on an exception's exact class name found one more: `ingest/history.py` matched `GatedRepoError` by name. It now uses `isinstance`, and its test raises the real class. The other uses of `type(exc).__name__` only write messages.
+
+On this laptop `test_a_database_that_does_not_wake_answers_503_with_the_notice` now passes. `test_the_stubs_are_the_apis_answers` still fails here, for a second cause: `tests/api/seed.py` draws risks with `random.betavariate`, which goes through the platform's maths library, so five values differ in their last digit between Windows and Linux (for example 0.04200977414275519 in the stubs against 0.04200977414275518 here, in two area landscapes). The stubs were not re-recorded, as instructed; this needs Aakrisht's decision (below). The API, dashboard and ingest suites: 131 passed, 1 failed (that test).
+
+### 2. Approvals recorded (`af81cb3`)
+
+The nine decisions of the fixes session are approved, and the API runs on Render's free web service (ADR 0065, amending Section 13 and Step 15), recorded under "Review of Steps 14 to 16, and its fixes" below.
+
+### 3. Leftover remote branches deleted
+
+Each was an ancestor of `origin/main` before deletion: step-14-cloud `8ec67d8`, step-14-fixes `8905c07`, step-14-last `5ceb3d4`, step-14-16-fixes `17d89db`, step-15-cloud `542d2e3`, step-16-cloud `047ecb3`, readme-cloud `dd9d38a`, readme-fixes `ed710b7`. Only `main` remains on origin.
+
+### 4. The bootstrap measured on real data (nothing built, nothing written to any database)
+
+A seeded 5% sample of trials (`hash(nct_id || ':bootstrap-sample-2026-11-04') % 20 = 0`: 30,087 of 604,583 trials, 224,871 versions, a scale of 19.76 to all 4,444,542 versions), read from the warehouse, converted with the project's own `contract.compact_row`, and seeded at the cutoff with `live.seed.seed`. Charger in, Windows throttling opted out. Scripts in the session scratchpad.
+
+| Phase | Time on the sample | Extrapolated to all versions | Python heap on the sample | Extrapolated |
+| --- | --- | --- | --- | --- |
+| Read versions, titles and intervention types into dicts | 23.8 s | about 470 s (an upper bound: the text join scans every text whatever the sample) | 972 MB, 4.3 KB a version | about 19 GB |
+| Convert to compact rows | 8.3 s (0.037 ms a version) | about 165 s | 465 MB, 2.1 KB a row; 1,225 MB while both are held | about 9.2 GB; about 24 GB while both are held |
+| `seed` | 3.3 s (0.015 ms a version) | about 66 s | 26 MB more for its output: 11,084 wide rows, their markers, a 938 KB sponsor file | about 0.5 GB |
+
+The process's peak working set, 4.4 GB, came from DuckDB's 4 GB memory limit during the read, not from `seed`.
+
+**Against the review's estimate of about 6 GB:** the compact rows alone come to about 9.2 GB, because real rows are about 2.1 KB each in Python, and holding the canonical rows while converting them all at once would pass 20 GB. As written, the bootstrap cannot run on this 16 GB laptop. The time is not a problem: about 12 minutes in all.
+
+**Two checks behind the plan, on the same sample:**
+
+- The sponsor pass fed month by month (256 calls of `SponsorFile.advance`, 3.6 s) gives the same sponsor file, byte for byte, as the single call `seed` makes (digest `d77713c1fd1a` both ways, the same 75 states queued for the cutoff day). The pass therefore does not need all states at once in sort order.
+- The five fields the pass reads, kept per state as a tuple, cost 88 bytes a state beyond the values they share, about 0.4 GB for the 4.43 million states with repeated strings interned (a dict of the same fields costs 192 bytes, about 0.85 GB).
+
+**The streaming plan.** Compute with no transaction open, then write:
+
+1. One DuckDB query (memory limit 2 GB) streams the versions in `(nct_id, post date, version)` order with the titles and the intervention types joined, fetched 50,000 rows at a time and converted as they come. A trial is finished before the next one starts (the longest has 1,506 versions), so no more than one batch and one trial are held.
+2. Each trial goes through the per-trial part of `seed`, unchanged: its wide row (if it keeps one) and its markers are kept, about 0.5 GB for about 222,000 trials; its daily states are kept as interned tuples of the five fields, about 0.4 GB.
+3. The sponsor pass then runs month by month over the states in date order, as measured.
+4. `seed` becomes a wrapper over the two parts, so its tests keep their meaning, and a new test holds the streamed result equal to `seed` on the synthetic registry. The sample above is the laptop check.
+
+Estimated peak about 3 to 4 GB (2 GB of it DuckDB's limit), and about 13 to 15 minutes. The write is the open question, because nothing may be written to Neon yet. The seeded state is about 90 MB on the wire: about 61 MB of wide rows, 12 MB of markers and about 19 MB of sponsor file (scaled from the sample's 938 KB).
+
+| | W1: one transaction, as ADR 0045 says now | W2: transactions of 20,000 rows |
+| --- | --- | --- |
+| What | `load_bootstrap` as it is: every row and the file in one transaction, all computed first | Wide rows and markers in transactions of 20,000 rows each (about 6 MB, seconds each at 10 Mbps, under 30 s at 2 Mbps), the lease renewed in each (ADR 0060); the sponsor file and the succeeded bootstrap row last, in one short transaction |
+| Atomic | Yes: a failure rolls back and the write is retried from the computed state | No: a partial load is possible, but the daily job refuses to run without the succeeded bootstrap row, and a rerun starts with `rebuild` |
+| Duration | About 90 MB in one transaction: about 1.5 minutes at 10 Mbps, about 6 at 2 Mbps. The session is busy, not idle, so the 5-minute idle limit applies only if the client stalls | Every transaction seconds long |
+| Cost | No change | An amendment to ADR 0045's "loads in one transaction", and a few dozen lines |
+
+**Recommendation: W1, measured first.** It keeps ADR 0045 and atomicity, and the idle limit is not at risk while the client only sends. Before Neon, the write is timed on the local Postgres at the cutoff's size (with `data/` only), and the laptop's upload to Neon is estimated from it. If the load could pass about 2 minutes, W2 is the fallback. That is Aakrisht's call (decision 2 below).
+
+### Decisions for Aakrisht
+
+1. **The stub test on Windows.** (a) Round the seeded risks in `tests/api/seed.py` (for example to 6 decimals) so the seeded database is the same on every platform, and re-record the stubs once (recommended: the check stays exact). (b) Compare floats in the stub test within a relative tolerance of 1e-12 (no re-recording, but it loosens an exact check). (c) Leave it: CI on Linux passes, and the test fails on Windows only.
+2. **The bootstrap's write.** W1 measured first (recommended), or W2.
 
 ## Review of Steps 14 to 16, and its fixes (2026-11-01, branch `step-14-16-fixes`)
 
