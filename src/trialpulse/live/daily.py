@@ -343,7 +343,19 @@ def record_failure(dsn: str, run_id: int, counts: Mapping[str, Any], error: str)
     return True
 
 
-def publish_day(
+@dataclass
+class DayScores:
+    """What a run scores on its date: the classified population, the scope, the scores of
+    the rescored trials (drivers included) and the unscored trials in the scope."""
+
+    people: pd.DataFrame
+    chosen: runs.Scope
+    scores: pd.DataFrame
+    unscored: pd.DataFrame
+    rescored: int  # the scored trials of the scope
+
+
+def score_day(
     cur: Any,
     cfg: ProjectConfig,
     rules: CohortRules,
@@ -351,13 +363,11 @@ def publish_day(
     sponsors: Any,
     model: Model,
     full: bool,
-    dsn: str,
-    run_id: int,
-) -> tuple[int, tuple[bytes, int] | None]:
-    """Score the run's scope on `day` and publish it; returns the trials rescored and, on a
-    full run, the month's score file and its row count for the caller to store. `cur` must
-    be in autocommit: the reads here are single statements, and the scoring that follows
-    them runs with no transaction open (ADR 0058)."""
+) -> DayScores:
+    """The scores of the run's scope on `day`, from the live tables and the sponsor file,
+    publishing nothing (the day-0 check of ADR 0038 calls it as the job does). `cur` must be
+    in autocommit: the reads here are single statements, and the scoring that follows them
+    runs with no transaction open (ADR 0058)."""
     rows = store.population_rows(cur, day, rules.open_statuses, rules.study_type,
                                  rules.min_first_post_date)  # fmt: skip
     people = pd.DataFrame(rows, columns=["trial_id", "t0", "reversal", "content_hash",
@@ -380,15 +390,34 @@ def publish_day(
         columns={"trial_id": "nct_id"}
     )
     unscored.insert(1, "as_of_date", np.datetime64(day, "D"))
-    serving.publish(Scored(scores, unscored.reset_index(drop=True), {}), cfg, dsn,
-                    scope=chosen.trials, run_id=run_id, day=day,
+    return DayScores(people, chosen, scores, unscored.reset_index(drop=True), len(scored))
+
+
+def publish_day(
+    cur: Any,
+    cfg: ProjectConfig,
+    rules: CohortRules,
+    day: dt.date,
+    sponsors: Any,
+    model: Model,
+    full: bool,
+    dsn: str,
+    run_id: int,
+) -> tuple[int, tuple[bytes, int] | None]:
+    """Score the run's scope on `day` (`score_day`) and publish it; returns the trials
+    rescored and, on a full run, the month's score file and its row count for the caller to
+    store."""
+    done = score_day(cur, cfg, rules, day, sponsors, model, full)
+    scores, people = done.scores, done.people
+    serving.publish(Scored(scores, done.unscored, {}), cfg, dsn,
+                    scope=done.chosen.trials, run_id=run_id, day=day,
                     lease=lambda c: store.renew(c, run_id))  # fmt: skip
     file = None
     if full and len(scores):
         classes = dict(zip(people["trial_id"], people["sponsor_class"], strict=True))
         with_class = scores.assign(sponsor_class=scores["nct_id"].map(classes))
         file = (score_file(with_class), len(scores))
-    return len(scored), file
+    return done.rescored, file
 
 
 def _empty_scores() -> pd.DataFrame:
@@ -417,15 +446,16 @@ def _vacuum(dsn: str) -> None:
         return
 
 
-def champion_model(cfg: ProjectConfig, folder: Path) -> Model:
-    """The champion from a bundle folder, with the decisions of ADR 0034 saved beside it."""
+def champion_model(cfg: ProjectConfig, folder: Path, decisions_path: Path | None = None) -> Model:
+    """The champion from a bundle folder, with the decisions of ADR 0034 saved beside it (or
+    at `decisions_path`: on the laptop they are Step 13's result file)."""
     import json
 
     from trialpulse.scoring.bundle import load_bundle
     from trialpulse.scoring.predict import predict
 
     bundle = load_bundle(cfg, folder)
-    path = folder / "step13_checks.json"
+    path = decisions_path or folder / "step13_checks.json"
     if not path.is_file():
         raise RefusedError(
             f"{path} is missing: register the ADR 0034 decisions with the champion (laptop)"
