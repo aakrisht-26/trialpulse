@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 18, README only**, started on 2026-11-01 with Aakrisht's approval (see "Step 18 (README only)"); the rest of Step 18 waits for the deployments. The review of Steps 14 to 16 and its fixes were merged on 2026-11-01 (see "Review of Steps 14 to 16, and its fixes"); Aakrisht approved its nine decisions and chose Render's free web service for the API on 2026-11-04 (ADR 0065). **Step 16** was approved on 2026-11-01, **Step 15** on 2026-11-01; their deployments, and Step 14's laptop and Neon parts, remain for the laptop. Step 17 is not started. On 2026-11-04 the API's error classification was fixed, the leftover branches deleted and the bootstrap measured on real data (see "Laptop work before the deployments"); two decisions wait for Aakrisht there.
+Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): item 1 (the contract changes of guidance items 10 and 13 and the rebuild) is done; items 2 to 4 follow (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2499,6 +2499,62 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 14, phase A on the laptop (2026-11-04)
+
+Aakrisht's phase A, item by item, on this laptop and the local Postgres only (nothing on Neon). His two decisions came first: the seeded test database draws its risks from integers, and the stubs were recorded again once (`b7edd2a`; the stub test passes here and in CI, 1,410 passed on Linux); the bootstrap writes in one transaction with every row prepared first (W1), timed on the local Postgres first, and if the write to Neon would take more than about 2 minutes, the work stops for him before any switch to W2.
+
+### Item 1: the warehouse contract changes of guidance items 10 and 13, and the rebuild
+
+**What was built.**
+
+- ADRs 0066 (the content hash covers the submitted status) and 0067 (intervention types join the canonical version schema), with their Amendments lines, committed before the code (`e1cbc95`).
+- The content hash reads the submitted status of ADR 0014 in the place of `overall_status` and `last_known_status`, which both stay in the row (`0bf80c6`).
+- The canonical row gains `intervention_types`: one type per distinct (name, type) pair on exact strings, sorted, empty when none, from the interventions config on the dataset path and from `armsInterventionsModule.interventions` on API v2, validated against the registry's 11 types and covered by the hash; warehouse schema version 4 (`0a8b0db`).
+- The guard, `trialpulse.warehouse.compare`: two warehouse files compared table by table and column by column, rows matched by key, with an allowlist, printing counts only (`1a2cc13`).
+- `trialpulse.nlp.distill --load-table` writes Step 6's `stop_reasons` table back after a rebuild from the labels on disk, labeling nothing: a build replaces the whole file (`2fe7fa1`).
+- The build caps DuckDB at 10 GB and 8 threads (`acb3182`, `4ca9351`): uncapped, the main process reached 15.7 GB of private memory on this 16 GB laptop; a 4 GB cap failed in the texts step.
+
+**The rebuild, measured** (charger in, Windows throttling opted out; logs in `data/logs/rebuild_schema4_*.log`):
+
+| Step | Result |
+| --- | --- |
+| Copy of the old warehouse | `data/warehouse_schema3.duckdb`, 4,099,682,304 bytes |
+| Build 1 | 408.4 s; "Identical to the previous build: NO", as expected after a schema change; the python processes together peaked at 22.6 GB committed (the main process and its 8 workers), so the page file took part of it |
+| Build 2 | 400.5 s; "Identical to the previous build: yes" |
+| `stop_reasons` written back | 35,198 rows, as before |
+| Guard, old against new | No difference outside the allowlist. `versions.content_hash` differs on 4,444,542 of 4,444,542 rows (allowed: its input changed) and `intervention_types` is new. Every other column is identical in every matched row: 40 in `versions`, 36 in `raw_versions`, 9 in `trials`, 6 in `stop_reasons`, and all 2,889,754 `texts`, so no dataset text changed under ADR 0042's comment-line rule. `build_info`: the schema version and three new keys for the interventions config |
+| Cohort, cohort (UNKNOWN variant), features, features (UNKNOWN variant) | Each "Identical to the previous build: yes" (31.1, 28.2, 201.8 and 211.6 s). All 93 output files of the cohort, feature and scoring folders are byte-identical to a snapshot taken before the rebuild, except the variant's generated `features.md`, whose header names the warehouse's schema version and checksum |
+| Registered numbers and the suite | The full suite (`-m "slow or not slow"`): 1,414 passed, 22 skipped, and 2 failed: the EDA report's reproduction test, because `docs/eda.md`'s source line names the warehouse's schema version and checksum. Regenerated through its command, only that line changed and every figure came out identical; the EDA tests then pass (22). Every test that holds a registered number to its record (docs/results.md, docs/results_dev.md, the model card, docs/model_statement.json) passes. The Postgres-backed suites with Postgres required (live, API, dashboard, warehouse, scoring): 406 passed |
+
+**Everything else the rebuild changes.**
+
+- `docs/data_audit.md`: the source line (schema version 4, the new checksum), a line for the interventions config (19 files, 9,401,447 rows, a list for 3,843,841 versions), `build_info` 34 to 37 rows, and "versions identical to the previous version but for their own dates" 878,496 to 858,638 (19.77% to 19.32%): intervention types are now a loaded column, so 19,858 versions that changed only their interventions no longer count as unchanged.
+- `docs/features.md`, the variant's `features.md` and `docs/eda.md`: the source line.
+- Every content hash stored outside the warehouse is now a schema-3 hash: every row of Step 13's score files (for example 88,898 of 88,898 at the cutoff and 64,099 of 64,099 on 2019-06-30) and every row of the local serving tables (88,898 latest, 88,898 history, 2,704 not scored). The bootstrap regenerates the cutoff's scores with schema-4 hashes (item 2), and Neon starts empty.
+
+**Decisions made without asking (flagged).**
+
+1. The canonical `intervention_types` stays out of the feature whitelist: the design features keep reading the interventions config itself (ADR 0020), so no feature changes, and no Alembic migration is needed, since no Postgres table holds canonical rows (ADR 0037). Both are written into ADR 0067.
+2. `distill --load-table` is a new option rather than `--label-all`, which would relabel through the API cache and could rewrite the labels file whose SHA-256 the registered H3 analysis names.
+3. The DuckDB cap of 10 GB and 8 threads in the build: a resource setting that does not change the output (the guard and the second build show it).
+4. **Docker Desktop was repaired.** After the laptop restarted at 19:36, Docker Desktop's backend crashed on start: it could not move aside a dead socket file from 31 October in `%LOCALAPPDATA%\docker-secrets-engine`, which Windows reports as inaccessible (error 1920), and it offered only Quit or Reset to factory defaults. A reset would have deleted the local Postgres volume, so instead I quit it and renamed that folder to `docker-secrets-engine.stale-20261104` (reversible). Docker Desktop then started, and the local Postgres came up healthy with its data. The renamed folder can be deleted once Windows lets go of the file.
+
+**Verify (PowerShell).**
+
+```powershell
+uv run python -m trialpulse.warehouse.build
+uv run python -m trialpulse.warehouse.build
+uv run python -m trialpulse.nlp.distill --load-table
+uv run python -m trialpulse.warehouse.compare --old data/warehouse_schema3.duckdb
+uv run python -m trialpulse.cohort.build
+uv run python -m trialpulse.cohort.build --unknown-as-stop
+uv run python -m trialpulse.features.build
+uv run python -m trialpulse.features.build --variant unknown_as_stop
+uv run pytest -q -m "slow or not slow"
+```
+
+The second build must print "Identical to the previous build: yes", the guard "Differences outside the allowlist: none", and each cohort and feature build "Identical to the previous build: yes".
 
 ## Laptop work before the deployments (2026-11-04)
 
