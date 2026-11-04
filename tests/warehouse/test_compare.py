@@ -81,12 +81,15 @@ def test_every_table_and_column_is_counted(files: tuple[Path, Path], tmp_path: P
     )
     assert tables["texts"].problems() == []
     assert tables["trials"].problems() == ["trials.n: type changed"]
-    assert tables["build_info"].allowed
-    assert tables["build_info"].named_keys == {
+    build_info = tables["build_info"]  # judged by key: only the allowed keys changed
+    assert not build_info.allowed
+    assert build_info.allowed_keys == ("interventions.*", "schema_version")
+    assert build_info.named_keys == {
         "differing": ["schema_version"],
         "only in old": [],
         "only in new": ["interventions.rows"],
     }
+    assert build_info.problems() == []
     quarantine = tables["versions_quarantine"]  # a key that repeats: compared as whole rows
     assert (quarantine.status, quarantine.only_old, quarantine.only_new) == (
         "compared as rows",
@@ -109,7 +112,9 @@ def test_the_command_prints_counts_and_never_a_value(
     assert "content_hash: 3 of 3 matched rows differ (allowed)" in printed
     assert "overall_status: 1 of 3 matched rows differ" in printed
     assert "intervention_types: column only in new (allowed)" in printed
-    assert "keys differing: schema_version" in printed
+    assert "keys differing: schema_version (allowed)" in printed
+    assert "keys only in new: interventions.rows (allowed)" in printed
+    assert "value: 1 of 2 matched rows differ (judged by key, below)" in printed
     verdict = printed.splitlines()[-1]
     assert verdict == (
         "Differences outside the allowlist: added: table only in new; gone: table only in old; "
@@ -130,6 +135,101 @@ def test_nothing_outside_the_allowlist_exits_zero(
     assert "Differences outside the allowlist: none" in capsys.readouterr().out
     # The allowlist given on the command line replaces the default one.
     assert compare.main(["--old", str(old), "--new", str(new), "--allow", "trials", *spill]) == 1
+
+
+def test_a_statistics_table_is_judged_by_its_keys(tmp_path: Path) -> None:
+    """Only the allowed keys of build_info may change (ADR 0066): any other key that differs,
+    appears or disappears is a difference outside the allowlist."""
+    table = "CREATE TABLE build_info (key VARCHAR, value VARCHAR)"
+    old = _file(
+        tmp_path / "old.duckdb",
+        [table, "INSERT INTO build_info VALUES ('schema_version', '3'), ('raw.rows', '4'), "
+                "('dataset.revision', 'v1'), ('raw.files', '19')"],
+    )  # fmt: skip
+    new = _file(
+        tmp_path / "new.duckdb",
+        [table, "INSERT INTO build_info VALUES ('schema_version', '4'), ('raw.rows', '5'), "
+                "('dataset.revision', 'v1'), ('interventions.rows', '7'), ('texts.rows', '2')"],
+    )  # fmt: skip
+    result = _by_name(compare.compare_files(old, new, temp_dir=tmp_path / "tmp"))["build_info"]
+    assert result.named_keys == {
+        "differing": ["raw.rows", "schema_version"],
+        "only in old": ["raw.files"],
+        "only in new": ["interventions.rows", "texts.rows"],
+    }
+    assert result.problems() == [
+        "build_info: keys outside the allowlist: raw.files, raw.rows, texts.rows"
+    ]
+    # Allowed keys only: nothing outside, though rows sit on one side and a value differs.
+    allowed = (*compare.DEFAULT_ALLOWED, "build_info[raw.*]", "build_info[texts.rows]")
+    result = _by_name(compare.compare_files(old, new, allowed, temp_dir=tmp_path / "tmp"))
+    assert result["build_info"].problems() == []
+    # The whole table on the allowlist allows every key, as before.
+    whole = _by_name(compare.compare_files(old, new, ["build_info"], temp_dir=tmp_path / "tmp"))
+    assert whole["build_info"].problems() == []
+
+
+def test_a_key_entry_for_another_table_or_a_malformed_entry_is_refused(tmp_path: Path) -> None:
+    old = _file(tmp_path / "old.duckdb", OLD[:2])
+    for entry in ("versions[nct_id]", "build_info[", "build_info.value]"):
+        with pytest.raises(RefusedError):
+            compare.compare_files(old, old, [entry], temp_dir=tmp_path / "tmp")
+
+
+def test_a_value_that_becomes_missing_or_present_is_counted(tmp_path: Path) -> None:
+    """NULL against a value differs (IS DISTINCT FROM), in a table matched by key."""
+    table = "CREATE TABLE trials (nct_id VARCHAR, latest_status VARCHAR, n INTEGER)"
+    old = _file(
+        tmp_path / "old.duckdb",
+        [table, "INSERT INTO trials VALUES ('NCT00000001', NULL, 1), ('NCT00000002', 'X', NULL), "
+                "('NCT00000003', NULL, NULL)"],
+    )  # fmt: skip
+    new = _file(
+        tmp_path / "new.duckdb",
+        [table, "INSERT INTO trials VALUES ('NCT00000001', 'Y', 1), ('NCT00000002', 'X', 2), "
+                "('NCT00000003', NULL, NULL)"],
+    )  # fmt: skip
+    trials = _by_name(compare.compare_files(old, new, temp_dir=tmp_path / "tmp"))["trials"]
+    assert trials.key == ("nct_id",)
+    columns = {c.name: c.differing for c in trials.columns}
+    assert columns == {"latest_status": 1, "n": 1}
+    assert trials.problems() == ["trials.latest_status", "trials.n"]
+
+
+def test_a_table_compared_as_whole_rows_counts_changed_and_repeated_rows(
+    tmp_path: Path,
+) -> None:
+    """Without a usable key the rows are compared as multisets (EXCEPT ALL) over every column
+    outside the allowlist: a changed row and a repeated row are both counted."""
+    table = (
+        "CREATE TABLE versions_quarantine (nct_id VARCHAR, nct_version BIGINT, reasons VARCHAR, "
+        "content_hash VARCHAR)"
+    )
+    old = _file(
+        tmp_path / "old.duckdb",
+        [table, "INSERT INTO versions_quarantine VALUES ('NCT00000009', 1, 'a', 'h1'), "
+                "('NCT00000009', 1, 'a', 'h1'), ('NCT00000009', 2, 'b', 'h2')"],
+    )  # fmt: skip
+    new = _file(
+        tmp_path / "new.duckdb",
+        [table, "INSERT INTO versions_quarantine VALUES ('NCT00000009', 1, 'a', 'k1'), "
+                "('NCT00000009', 2, 'changed', 'k2'), ('NCT00000009', 3, 'c', 'k3')"],
+    )  # fmt: skip
+    result = _by_name(compare.compare_files(old, new, temp_dir=tmp_path / "tmp"))
+    quarantine = result["versions_quarantine"]
+    assert quarantine.status == "compared as rows"
+    # Old less new: the repeated row and the changed row; new less old: the changed row and
+    # the added one. The allowed content_hash is left out, so the first row still matches.
+    assert (quarantine.only_old, quarantine.only_new, quarantine.matched) == (2, 2, 1)
+    assert quarantine.problems() == ["versions_quarantine: rows on one side only"]
+    # Identical rows apart from the allowed column: nothing outside the allowlist.
+    same = _file(
+        tmp_path / "same.duckdb",
+        [table, "INSERT INTO versions_quarantine VALUES ('NCT00000009', 1, 'a', 'x'), "
+                "('NCT00000009', 1, 'a', 'y'), ('NCT00000009', 2, 'b', 'z')"],
+    )  # fmt: skip
+    again = _by_name(compare.compare_files(old, same, temp_dir=tmp_path / "tmp"))
+    assert again["versions_quarantine"].problems() == []
 
 
 def test_the_command_refuses_a_missing_or_the_same_file(files: tuple[Path, Path]) -> None:

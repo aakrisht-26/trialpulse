@@ -10,12 +10,16 @@ one side only, or whose type changed, is reported too. A table without a usable 
 listed, or a key that repeats or is missing in either file) is compared as a multiset of
 whole rows instead.
 
-**The allowlist** names what a rebuild is expected to change, as `table.column`, or `table`
-for a whole table, whose differences are still counted and printed. By default it holds what
-ADRs 0066 and 0067 change: `content_hash` and `intervention_types` of the version tables,
-and the build's own record (`build_info`: the schema version and the build's statistics).
-The command exits with code 1 when any difference falls outside the allowlist, and 0 when
-none does.
+**The allowlist** names what a rebuild is expected to change, as `table.column`, `table` for
+a whole table, or `table[pattern]` for the keys of a statistics table (`NAMED_KEY_TABLES`)
+that may differ, appear or disappear (a shell-style pattern, such as `interventions.*`);
+allowed differences are still counted and printed. A statistics table is judged by its keys:
+any key that differs, appears or disappears outside the allowed patterns is a difference
+outside the allowlist, whatever its column. By default the allowlist holds what ADRs 0066
+and 0067 change: `content_hash` and `intervention_types` of the version tables, and in the
+build's own record (`build_info`) the schema version and the new statistics of the
+interventions config. The command exits with code 1 when any difference falls outside the
+allowlist, and 0 when none does.
 
 **Never a value.** The output holds table and column names and counts. For `build_info`,
 whose keys are the names of the build's statistics, it also names the keys that differ; no
@@ -24,8 +28,10 @@ value of any row is printed, and no key of any other table.
 
 import argparse
 import json
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -44,16 +50,18 @@ KEYS: dict[str, tuple[str, ...]] = {
     "stop_reasons": ("nct_id",),
 }
 # Tables whose keys name the build's statistics rather than data: their differing keys are
-# named in the output.
+# named in the output, and the allowlist names the keys that may change.
 NAMED_KEY_TABLES: frozenset[str] = frozenset({"build_info"})
 DEFAULT_ALLOWED: tuple[str, ...] = (
     "versions.content_hash",
     "versions.intervention_types",
     "versions_quarantine.content_hash",
     "versions_quarantine.intervention_types",
-    "build_info",
+    "build_info[schema_version]",
+    "build_info[interventions.*]",
 )
 COLUMNS_PER_QUERY = 8
+_KEY_ENTRY = re.compile(r"^(?P<table>[^.\[\]]+)\[(?P<pattern>[^\[\]]+)\]$")
 
 
 @dataclass
@@ -77,6 +85,15 @@ class TableResult:
     allowed: bool = False
     columns: list[ColumnResult] = field(default_factory=list)
     named_keys: dict[str, list[str]] = field(default_factory=dict)
+    allowed_keys: tuple[str, ...] = ()
+
+    @property
+    def judged_by_key(self) -> bool:
+        """A statistics table matched by its key: its keys say what changed."""
+        return self.name in NAMED_KEY_TABLES and bool(self.key)
+
+    def key_allowed(self, name: str) -> bool:
+        return any(fnmatchcase(name, pattern) for pattern in self.allowed_keys)
 
     def problems(self) -> list[str]:
         """The differences outside the allowlist, as short descriptions."""
@@ -85,10 +102,18 @@ class TableResult:
         out = []
         if self.status in ("only in old", "only in new"):
             out.append(f"{self.name}: table {self.status}")
-        if self.only_old or self.only_new:
+        if self.judged_by_key:
+            # Rows on one side only are the keys only in old or new, and a column's differing
+            # rows are the differing keys: judged by key, against the allowed patterns.
+            outside = sorted(
+                {n for names in self.named_keys.values() for n in names if not self.key_allowed(n)}
+            )
+            if outside:
+                out.append(f"{self.name}: keys outside the allowlist: {', '.join(outside)}")
+        elif self.only_old or self.only_new:
             out.append(f"{self.name}: rows on one side only")
         for c in self.columns:
-            if c.allowed or (c.status == "compared" and not c.differing):
+            if c.allowed or (c.status == "compared" and (self.judged_by_key or not c.differing)):
                 continue
             label = f"{self.name}.{c.name}"
             out.append(label if c.status == "compared" else f"{label}: {c.status}")
@@ -141,13 +166,34 @@ def _allowed(allowlist: set[str], table: str, column: str | None = None) -> bool
     return table in allowlist or (column is not None and f"{table}.{column}" in allowlist)
 
 
+def _key_patterns(allowlist: set[str], table: str) -> tuple[str, ...]:
+    """The allowed key patterns of a statistics table (entries `table[pattern]`)."""
+    found = (_KEY_ENTRY.match(entry) for entry in allowlist)
+    return tuple(sorted(m["pattern"] for m in found if m and m["table"] == table))
+
+
+def check_allowlist(allowlist: Iterable[str]) -> None:
+    """Refuse a key entry for a table that is not judged by key (it would allow nothing)."""
+    for entry in allowlist:
+        m = _KEY_ENTRY.match(entry)
+        if m is None and ("[" in entry or "]" in entry):
+            raise RefusedError(f"not an allowlist entry: {entry}")
+        if m is not None and m["table"] not in NAMED_KEY_TABLES:
+            raise RefusedError(f"{m['table']} is not judged by key: {entry}")
+
+
 def compare_table(
     con: duckdb.DuckDBPyConnection, table: str, allowlist: set[str], key: Sequence[str] | None
 ) -> TableResult:
     """One table of the two files attached as `o` (old) and `n` (new)."""
     t = _quote(table)
     old, new = _columns(con, "o", table), _columns(con, "n", table)
-    result = TableResult(table, "compared", allowed=_allowed(allowlist, table))
+    result = TableResult(
+        table,
+        "compared",
+        allowed=_allowed(allowlist, table),
+        allowed_keys=_key_patterns(allowlist, table),
+    )
     result.rows_old = _scalar(con, f"SELECT count(*) FROM o.{t}")
     result.rows_new = _scalar(con, f"SELECT count(*) FROM n.{t}")
     for name in old:
@@ -245,6 +291,7 @@ def compare_files(
     """Every table of two warehouse files, compared (see the module text)."""
     keys = KEYS if keys is None else keys
     allowlist = set(allowed)
+    check_allowlist(allowlist)
     temp_dir.mkdir(parents=True, exist_ok=True)
     with duckdb.connect() as con:
         con.execute(f"SET memory_limit = '{memory_limit}'")
@@ -290,6 +337,8 @@ def report_lines(results: Sequence[TableResult]) -> list[str]:
             if c.status == "compared" and not c.differing:
                 continue
             note = " (allowed)" if c.allowed else ""
+            if not c.allowed and c.status == "compared" and r.judged_by_key:
+                note = " (judged by key, below)"
             if c.status in ("only in old", "only in new"):
                 lines.append(f"  {c.name}: column {c.status}{note}")
             else:
@@ -302,7 +351,9 @@ def report_lines(results: Sequence[TableResult]) -> list[str]:
             lines.append(f"  identical in every matched row: {len(same)} columns")
         for kind, names in r.named_keys.items():
             if names:
-                lines.append(f"  keys {kind}: {', '.join(names)}")
+                allowed_names = {n for n in names if r.allowed or r.key_allowed(n)}
+                marked = [n + (" (allowed)" if n in allowed_names else "") for n in names]
+                lines.append(f"  keys {kind}: {', '.join(marked)}")
     return lines
 
 
@@ -314,8 +365,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--allow",
         action="append",
         default=None,
-        metavar="TABLE[.COLUMN]",
-        help="expected to differ (repeatable); replaces the default allowlist",
+        metavar="ENTRY",
+        help="expected to differ, as table, table.column or table[key pattern] (repeatable); "
+        "replaces the default allowlist",
     )
     parser.add_argument("--memory-limit", default="2GB", help="DuckDB's memory limit")
     parser.add_argument("--temp-dir", type=Path, default=TEMP_DIR, help="where DuckDB spills")
