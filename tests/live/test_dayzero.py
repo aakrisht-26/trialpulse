@@ -49,8 +49,15 @@ def _reference(day: dt.date) -> tuple[pd.DataFrame, pd.DataFrame, Any]:
     people, features = engine.features_on(memory, day, RULES, CFG, DECISIONS)
     scored = people[people["reason"].isna()].sort_values("trial_id").reset_index(drop=True)
     scores = _scorer(scored, features, day)
-    unscored = dayzero.live_unscored(people, day)
+    # The unscored rows made here, not by the code under test (`dayzero.live_unscored`).
+    out = people[people["reason"].notna()]
+    unscored = pd.DataFrame({
+        "nct_id": out["trial_id"].astype(str).to_numpy(), "as_of_date": pd.Timestamp(day),
+        "true_index": out["true_index"].to_numpy(), "reason": out["reason"].to_numpy(),
+        "content_hash": out["content_hash"].to_numpy(),
+    }).sort_values("nct_id").reset_index(drop=True)  # fmt: skip
     assert len(scores) > 0
+    assert len(unscored) > 0
     return scores, unscored, seeded
 
 
@@ -81,3 +88,31 @@ def test_the_day0_check_compares_the_live_path_with_the_reference(scratch: str) 
         "scores.risk_24m: 1 differ",
         "scores.drivers: 1 differ",
     ]
+    # Every compared column, a trial the live path lacks, and the unscored trials' reason.
+    changed = scores.copy()
+    changed["flagged"] = changed["flagged"].astype(bool)
+    rows = [i % len(changed) for i in range(6)]  # one changed value per column
+    changed.loc[rows[0], "flagged"] = not changed.loc[rows[0], "flagged"]
+    changed.loc[rows[1], "landmark_index"] += 1
+    changed.loc[rows[2], "true_index"] += 1
+    changed.loc[rows[3], "model_version"] = "stand-in/2"
+    changed.loc[rows[4], "risk_12m"] += 1e-12
+    changed.loc[rows[5], "as_of_date"] = np.datetime64(day - dt.timedelta(days=1), "D")
+    extra = changed.iloc[[0]].assign(nct_id="NCT99999999")
+    other = unscored.copy()
+    other.loc[0, "reason"] = "another reason"
+    result = dayzero.check_cutoff(CFG, dsn, MODEL, (pd.concat([changed, extra]), other))
+    assert result["differences"] == [
+        "scores: 0 rows only new, 1 only in the reference",
+        "scores.as_of_date: 1 differ",
+        "scores.true_index: 1 differ",
+        "scores.landmark_index: 1 differ",
+        "scores.flagged: 1 differ",
+        "scores.risk_12m: 1 differ",
+        "scores.model_version: 1 differ",
+        "unscored.reason: 1 differ",
+    ]
+    # A live path that loses every unscored trial is caught.
+    result = dayzero.check_cutoff(CFG, dsn, MODEL, (scores, pd.concat([unscored, unscored.iloc[
+        [0]].assign(nct_id="NCT99999998")])))  # fmt: skip
+    assert result["differences"] == ["unscored: 0 rows only new, 1 only in the reference"]
