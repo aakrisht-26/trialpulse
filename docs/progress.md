@@ -2532,7 +2532,7 @@ Aakrisht's phase A, item by item, on this laptop and the local Postgres only (no
   4. `SPONSOR_ID_KEY`, which he must create before the real bootstrap.
 - **Deferred:** the gap of ADR 0041 (after phase A, as he ordered); the bulk display pull after every bootstrap (the local display tables are empty now); copying the decisions file of ADR 0034 into the bundle for the runner (SHA-256 recorded in item 2); `data/warehouse_schema3.duckdb` (4.1 GB), kept until his review; the renamed Docker folder, still to delete.
 - **A working agreement broken:** the census's first run passed an hour without a cheaper plan proposed first, and failed (item 3). The rerun took 18.4 minutes.
-- **Independent checks:** items 1 and 2 had one each, with every finding verified and dealt with (in their items). Items 3 and 4 have only my own mutation tests (13 of 13 mutants of the census, 8 of 8 of the guard, 7 of 7 of the bootstrap); an independent check of both runs next, and its findings will be recorded here.
+- **Independent checks:** items 1 and 2 had one each, with every finding verified and dealt with (in their items). Items 3 and 4 have only my own mutation tests (13 of 13 mutants of the census, 8 of 8 of the guard, 7 of 7 of the bootstrap); an independent check of them was not run before this report and is his to ask for (it costs a reviewer agent).
 - **Not touched:** Neon, as he ordered. API v2 was called at 30 requests a minute or fewer, and the internal history endpoint never.
 
 **Verify (PowerShell), the phase as a whole.** The items list their own commands; these are the ones that show its results on this laptop.
