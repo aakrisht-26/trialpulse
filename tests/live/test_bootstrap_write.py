@@ -357,3 +357,25 @@ def test_the_command_refuses_before_computing_or_taking_a_lease(
     with pytest.raises(RefusedError, match="differ from Step 13"):
         bootstrap.run_bootstrap(CFG, dsn, SECRET, True, stubbed, say=lambda _: None)
     assert _runs(dsn) == []  # held to Step 13's files before any lease
+
+
+def test_drivers_are_held_at_the_cutoff_and_where_step_13_wrote_them(
+    dsn: str, stubbed: bootstrap.Inputs
+) -> None:
+    """Step 13 wrote drivers into the cutoff's file only: a bootstrap dated earlier (the
+    replay of parity layer 2) is held on every other column, and one at the cutoff refuses
+    a file without drivers."""
+    files = stubbed.scores_dir
+    without = pd.read_parquet(files / f"scores_{RELEASE}.parquet").drop(columns="drivers")
+    earlier = RELEASE - dt.timedelta(days=1)
+    without.to_parquet(files / f"scores_{earlier}.parquet")
+    (files / f"unscored_{earlier}.parquet").write_bytes(
+        (files / f"unscored_{RELEASE}.parquet").read_bytes()
+    )
+    report = bootstrap.run_bootstrap(CFG, dsn, SECRET, False, stubbed, say=lambda _: None,
+                                     day=earlier)  # fmt: skip
+    assert "drivers" not in report["held_columns"]
+    assert "risk_12m" in report["held_columns"]
+    without.to_parquet(files / f"scores_{RELEASE}.parquet")
+    with pytest.raises(RefusedError, match="lacks"):
+        bootstrap.run_bootstrap(CFG, dsn, SECRET, True, stubbed, say=lambda _: None)

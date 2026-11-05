@@ -275,11 +275,16 @@ def _frame_counts(new: pd.DataFrame, reference: pd.DataFrame,
     return out
 
 
-def compare_scores(new: Scored, scores: pd.DataFrame, unscored: pd.DataFrame) -> dict[str, Any]:
+def compare_scores(
+    new: Scored,
+    scores: pd.DataFrame,
+    unscored: pd.DataFrame,
+    columns: Sequence[str] = SCORE_COLUMNS,
+) -> dict[str, Any]:
     """`new` against reference scores and unscored trials of the same date (Step 13's
-    files): the trials of each side, and every column equal or different, by count. The
-    content hashes are counted too, but apart (`differences` leaves them out): Step 13's
-    are canonical hashes, the live path's are feature hashes (ADR 0037)."""
+    files): the trials of each side, and every column of `columns` equal or different, by
+    count. The content hashes are counted too, but apart (`differences` leaves them out):
+    Step 13's are canonical hashes, the live path's are feature hashes (ADR 0037)."""
 
     def prepared(frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
         out = frame[["nct_id", *columns, "content_hash"]].copy()
@@ -287,9 +292,8 @@ def compare_scores(new: Scored, scores: pd.DataFrame, unscored: pd.DataFrame) ->
         return out
 
     return {
-        "scores": _frame_counts(prepared(new.scores, SCORE_COLUMNS),
-                                prepared(scores, SCORE_COLUMNS),
-                                [*SCORE_COLUMNS, "content_hash"]),
+        "scores": _frame_counts(prepared(new.scores, columns), prepared(scores, columns),
+                                [*columns, "content_hash"]),
         "unscored": _frame_counts(prepared(new.unscored, UNSCORED_COLUMNS),
                                   prepared(unscored, UNSCORED_COLUMNS),
                                   [*UNSCORED_COLUMNS, "content_hash"]),
@@ -424,7 +428,13 @@ def run_bootstrap(
         scored = offline.score(cfg, day, bundle, decisions, warehouse=inputs.warehouse)
     except Exception as exc:  # no lease is held yet, so there is no run row to fail
         raise daily.JobFailedError(daily.failure_line(stage, exc), type(exc).__name__) from None
-    compared = compare_scores(scored, *reference)
+    # Step 13 wrote drivers into the cutoff's file only; an earlier date (the replay of
+    # parity layer 2) is held on every column its file has, and the cutoff on all of them.
+    held = tuple(c for c in SCORE_COLUMNS if c in reference[0].columns)
+    if day == cfg.dataset.cutoff and held != SCORE_COLUMNS:
+        raise RefusedError(f"Step 13's file of the cutoff lacks {set(SCORE_COLUMNS) - set(held)}")
+    report["held_columns"] = list(held)
+    compared = compare_scores(scored, *reference, columns=held)
     report["held_to_step13"] = compared
     found = differences(compared)
     if found:
