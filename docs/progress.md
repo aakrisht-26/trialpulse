@@ -2504,6 +2504,50 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 
 Aakrisht's phase A, item by item, on this laptop and the local Postgres only (nothing on Neon). His two decisions came first: the seeded test database draws its risks from integers, and the stubs were recorded again once (`b7edd2a`; the stub test passes here and in CI, 1,410 passed on Linux); the bootstrap writes in one transaction with every row prepared first (W1), timed on the local Postgres first, and if the write to Neon would take more than about 2 minutes, the work stops for him before any switch to W2.
 
+### Phase A report: the three checks of CLAUDE.md Section 4
+
+**1. Were the acceptance criteria met, with evidence?**
+
+| Item | Asked | Result | Evidence |
+| --- | --- | --- | --- |
+| 1 | The contract changes of guidance items 10 and 13 with their ADRs, the rebuild, and a guard showing every cohort and feature output unchanged and no registered number moved | **Met** | ADRs 0066 and 0067; two builds, the second "Identical: yes"; the guard finds nothing outside the allowlist (judged by key since its check); the cohort, its UNKNOWN variant, the features and their variant each "Identical: yes", and 93 output files byte-identical but one generated header; every test that holds a registered number passes. Everything else the rebuild changes is listed in the item |
+| 2 | The bootstrap streamed as planned, a test that it equals `seed` on a sample, a rehearsal into local Postgres at the cutoff with its time and peak memory, and the day-0 check | **Met** | The 5% sample test passes; on the final code the bootstrap took 647.9 s with a peak of 7,978 MiB (the write 7.7 s), held to Step 13's files on every column, drivers included; the day-0 check finds the live path equal to Step 13 on all 88,895 scored and 2,704 unscored trials (311 s). Logs `data/logs/bootstrap_final_20261105.log` and `dayzero_final_20261105.log` |
+| 3 | The census of ADR 0042 on every unchanged trial, with the seeded 50 and its four conditions | **Met** | 145,535 unchanged trials: 1,531 differ in a field a served feature reads, each with a registry-side cause; 0 bugs, 0 titles stating another phase, 0 API texts keeping an HTML comment, 0 breaks of condition 4; the seeded 50 pass |
+| 4 | Parity layer 2, the replay through local Postgres, its time estimated first | **Estimated, and a segment run; the full run waits for his choice** | A full-size segment (the bootstrap at 2026-08-28, a full daily run, one checkpoint) took 19.3 minutes with no difference in the population or any of the 58 served features of 88,977 trials. The full layer 2 is estimated at 2.1 to 2.4 hours, past the hour, so it was not run: options A, B and C are in the item |
+| All | The suite, and CI | **Clean** | The full suite on the final code with Postgres required: 1,494 passed, none skipped (597 s); ruff, ruff format and mypy clean through pre-commit on every commit. CI on the pushed head (`e140a08`, run 41944594833): success, 1,481 passed and 13 skipped (the tests that need `data/`) |
+
+**2. Decisions made without asking, flagged with reasons** (each is in its item):
+
+- Item 1: the canonical intervention types stay out of the feature whitelist and need no migration (ADR 0067); `distill --load-table` rather than a relabel; the build's DuckDB cap of 10 GB and 8 threads; Docker Desktop repaired by renaming a folder instead of a factory reset that would have deleted the local Postgres volume; after the check, the enum trimming rule made exactly DuckDB's on both paths.
+- Item 2: the day-0 check compares with Step 13's stored files, not the bootstrap's rows; the stream's DuckDB settings; a throwaway `SPONSOR_ID_KEY` in the process only, since none is set; after the check, the bootstrap refuses before it computes and holds no connection while it scores (a Neon risk the check named).
+- Item 3: the population of the 2026-11-01 census (open or UNKNOWN interventional records); raw values compared in substance; a bug fails the census in any column but the texts.
+- Item 4: the feed as compact rows from the warehouse; the replay in the main local database; a bootstrap dated before the cutoff held on the columns Step 13's file has.
+
+**3. Blocked, skipped or deferred.**
+
+- **For Aakrisht to decide before the Neon phase:**
+  1. The bootstrap's write to Neon passes about 2 minutes (167.6 MB: at least 134 s at 10 Mbps). W1 is kept and W2 not started, per his decision 2. Options A (W1 as built), B (time a 10 MB COPY on Neon first, then A or C) and C (W2); recommended B, then A.
+  2. The Neon sizing: the built tables' rows put the 12-month estimate at about 717 to 769 MB, past the 700 MB line of 30% headroom. It must be redone with the measured rows before any Neon work, and if the overrun holds, the choices are his.
+  3. Parity layer 2's full run: A (2.1 to 2.4 hours, recommended), B (about an hour) or C (about 45 minutes).
+  4. `SPONSOR_ID_KEY`, which he must create before the real bootstrap.
+- **Deferred:** the gap of ADR 0041 (after phase A, as he ordered); the bulk display pull after every bootstrap (the local display tables are empty now); copying the decisions file of ADR 0034 into the bundle for the runner (SHA-256 recorded in item 2); `data/warehouse_schema3.duckdb` (4.1 GB), kept until his review; the renamed Docker folder, still to delete.
+- **A working agreement broken:** the census's first run passed an hour without a cheaper plan proposed first, and failed (item 3). The rerun took 18.4 minutes.
+- **Independent checks:** items 1 and 2 had one each, with every finding verified and dealt with (in their items). Items 3 and 4 have only my own mutation tests (13 of 13 mutants of the census, 8 of 8 of the guard, 7 of 7 of the bootstrap); an independent check of both runs next, and its findings will be recorded here.
+- **Not touched:** Neon, as he ordered. API v2 was called at 30 requests a minute or fewer, and the internal history endpoint never.
+
+**Verify (PowerShell), the phase as a whole.** The items list their own commands; these are the ones that show its results on this laptop.
+
+```powershell
+uv run pytest -q -m "slow or not slow"
+uv run python -m trialpulse.warehouse.compare --old data/warehouse_schema3.duckdb
+uv run python -m trialpulse.warehouse.census
+uv run python -m trialpulse.live.replay_parity --start 2026-08-28 --end 2026-08-31 --checkpoint 2026-08-31
+uv run python -m trialpulse.live.bootstrap --target local --rebuild
+uv run python -m trialpulse.live.dayzero --target local
+```
+
+The bootstrap needs `SPONSOR_ID_KEY` in `.env`. The replay replaces the local database's live state, and the bootstrap after it puts the cutoff's back. The replay and the bootstrap take about 20 and 11 minutes and about 8 GB each, with the charger in; the census takes about 20 minutes and 160 requests to API v2.
+
 ### Item 1: the warehouse contract changes of guidance items 10 and 13, and the rebuild
 
 **What was built.**
