@@ -280,13 +280,16 @@ def run_replay(
             f"SELECT count(*) FROM versions WHERE effective_date > DATE '{start}' "
             f"AND effective_date <= DATE '{end}'"
         ).fetchone()
-    sent_versions = {(n, v) for (n, _), v in feed.fed.items()}
+    after = {(n, v) for (n, d), v in feed.fed.items() if d > start}
+    in_window = int(posted[0]) if posted else 0
     result["feed"] = {
         "records_sent": feed.sent, "records_kept": len(kept),
-        "distinct_records_sent": len(feed.fed),
-        "sent_not_kept": len(feed.fed.keys() - set(kept)),
-        "versions_posted_in_the_window": int(posted[0]) if posted else 0,
-        "versions_never_sent": (int(posted[0]) if posted else 0) - len(sent_versions),
+        # The pull's overlap re-sends records the seed already holds, which ingest leaves out.
+        "distinct_records_sent_posted_by_the_start": sum(1 for _, d in feed.fed if d <= start),
+        "distinct_versions_sent_posted_after_the_start": len(after),
+        "versions_posted_after_the_start": in_window,
+        # Hidden from the feed: superseded on their day, or within a missed run's window.
+        "versions_never_sent": in_window - len(after),
     }  # fmt: skip
     result["seconds"]["total"] = round(clock.perf_counter() - started, 1)
     result["passes"] = all(not c["differences"] for c in result["checkpoints"])
