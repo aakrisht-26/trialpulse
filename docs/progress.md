@@ -73,7 +73,7 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): items 1 (the contract changes of guidance items 10 and 13 and the rebuild), 2 (the bootstrap, its rehearsal and the day-0 check) and 3 (the census) are done; item 4 follows (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
+Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): items 1 (the contract changes of guidance items 10 and 13 and the rebuild), 2 (the bootstrap, its rehearsal and the day-0 check) and 3 (the census) are done, and item 4 (parity layer 2) is built and measured, its full run waiting for his choice; phase A's report waits for his review (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2729,6 +2729,60 @@ uv run python -m trialpulse.warehouse.census
 ```
 
 The census must end with "Census: passes".
+
+### Item 4: parity layer 2, the replay through local Postgres (estimated; the full run waits for Aakrisht)
+
+**What was built.**
+
+- `trialpulse.live.replay_parity` (`7b94b3f`, fixed in `3337790` and `43cfcf6`). It bootstraps the local Postgres at a start date, then runs the daily job's own code (`daily.run_daily`) on every weekday through an end date, but the missed ones. Its pull is replaced by a feed from the warehouse: for every trial with a version posted in the run's window, its latest version posted by the run's date (of several on one day, the last), made a compact row as the bootstrap makes them. On each checkpoint it compares the live path's features of every scored trial, read from the live tables as a full run reads them, with the offline path (Step 13's code) on the warehouse's versions of the feed F: every version posted by the start, then the records the live path kept. The population and every served feature must be exact. The accepted loss (offline on every version against offline on F) is counted apart. It runs on the laptop and the local Postgres only, and never calls API v2.
+- Four openings for it, each a default that leaves today's behaviour as it is (`67d5c29`): `run_daily(fetch=...)` in place of its pull, `day_features` (the feature part of `score_day`), `run_bootstrap(day=...)` dated before the cutoff (the command stays at the cutoff), and `prepare_sources(only_versions=...)`. A test shows that fed the records the API path converts, the job writes what it writes from the API, display rows aside.
+- A bootstrap dated before the cutoff is held to Step 13's file of that date on the columns the file has (`3337790`): Step 13 wrote drivers into the cutoff's file only, and the first measured run stopped on that after its scores stage. At the cutoff, drivers stay required.
+
+**The segment measured** (2026-11-05, from `3337790`, charger in; log `data/logs/replay_measure_20261105_run2.log`):
+
+| Part | Seconds |
+| --- | --- |
+| The bootstrap at 2026-08-28, held to Step 13's file of that date (drivers aside) | 654.4 |
+| The daily run of 2026-08-31, a full run (88,977 trials scored with drivers; 1,186 records kept) | 348.9 |
+| The checkpoint of 2026-08-31: live features 9.1, offline on the feed 78.0, offline on every version 63.5 | 150.6 |
+| **Total** | **1,157 (19.3 minutes)** |
+
+At the checkpoint (a Monday after a weekend, and the month's last day): 88,977 scored trials on both paths, **no difference in the population, none in any of the 58 served features**, and an accepted loss of 0 rows (no version was hidden in this window). The run ends `"passes": true`.
+
+**The estimate of the full layer 2** (ADR 0038: no misses, one run in 30 missed, and the gap of ADR 0041, on dates across a month end, a weekend and a landmark):
+
+- A daily run that is not full was not measured. I estimate 60 to 90 s: about 1,700 trials rescored a day (records that changed and trials that passed a landmark) with drivers at about 13 ms a trial, plus the ingest, the sponsor pass and the writes.
+- One feed from 2026-08-28 to the cutoff is 20 run days, 4 of them full (a full run is due every 7 days): 11 minutes of bootstrap, 23 of full runs, 16 to 24 of daily runs, and 5 checkpoints at 2.5 minutes, so **63 to 71 minutes**. Two feeds (no misses, and one run missed) take **2.1 to 2.4 hours**.
+- The gap of ADR 0041 needs the later dataset read, which comes after phase A.
+
+That passes about an hour, so it was not run. Options for his decision:
+
+| | A. The full plan | B. Two one-week feeds | C. One two-week feed with a missed run |
+| --- | --- | --- | --- |
+| Feeds | 2026-08-28 to 2026-09-25, once with every run and once with 2026-09-02 missed | 2026-08-28 to 2026-09-04, the same two ways | 2026-08-28 to 2026-09-11, with 2026-09-02 missed |
+| Covers | Both feeds of ADR 0038; 4 weeks of accumulation with 4 full runs; the month end, 4 weekends, landmarks every day | Both feeds; the month end, a weekend, one full run each | A late record after a missed run; the month end, two weekends, two full runs; no feed without a miss |
+| Time | 2.1 to 2.4 hours | about 1 hour | about 45 minutes |
+
+Recommendation: A, run unattended with the charger in. It is machine time, and accumulation over weeks is what layer 2 is for: ADR 0038 rejected Parity A because "a bug that shows on day 30 passes". B if he wants it within the hour.
+
+**Decisions made without asking (flagged).**
+
+1. The feed is made from the warehouse's versions as compact rows, as the bootstrap makes them, not as API v2 JSON. The API mapping is layer 4, the census; layer 2 tests what the live path does with its records over time.
+2. The replay runs in the main local database and replaces its live state, rather than in a database of its own. The bootstrap at the cutoff, run again on the final commit of phase A, restores it.
+3. A checkpoint compares the live features with offline(F) on the live side's keys, as layer 1 does, and compares the two populations apart.
+
+**Files touched.** `src/trialpulse/live/replay_parity.py` and `tests/warehouse/test_replay_parity.py` (new); `src/trialpulse/live/daily.py`, `src/trialpulse/live/bootstrap.py`, `src/trialpulse/features/build.py`; `tests/live/test_daily.py`, `tests/live/test_bootstrap_write.py`.
+
+**Blocked or deferred.** The full layer 2 waits for his choice (A, B or C). The gap of ADR 0041 comes after phase A.
+
+**Verify (PowerShell).** The replay takes about 20 minutes and about 8 GB at its peak; charger in.
+
+```powershell
+uv run pytest -q tests/warehouse/test_replay_parity.py tests/live/test_daily.py
+uv run python -m trialpulse.live.replay_parity --start 2026-08-28 --end 2026-08-31 --checkpoint 2026-08-31
+```
+
+The replay must end with `"passes": true`.
 
 ## Laptop work before the deployments (2026-11-04)
 
