@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045); the cloud part built on `step-14-cloud`, waiting for review; the laptop and Neon parts not started |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B (2026-11-07): the census and replay checked and fixed, the full replay passes; the Neon estimate is 867 MB, over the 700 MB line, with options waiting for Aakrisht; the Neon copy timing waits for `NEON_DATABASE_URL`. Neon migration and the real bootstrap wait for his decisions |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2532,6 +2532,76 @@ One reviewer, read-only, against ADRs 0038 and 0042, with 33 deliberate faults (
 After the fixes, the same 17 surviving mutants (the reviewer's 12 plus my 5 for the new checks) were run against the new tests: 17 of 17 killed. Two of the reviewer's Postgres mutants were inconclusive (its 1,500 s timeout); the one on held columns is among the 17. The full suite with Postgres required: 1,504 passed, none skipped (626.6 s, log `data/logs/suite_phaseB_20261106.log`).
 
 **Decision made without asking (flagged):** the bound of F3 is 2% of the unchanged trials and at least 100 trials. It only adds a failure; the census of 2026-11-04 passes under it.
+
+### Item 3: parity layer 2, the full replay (option A)
+
+Two feeds from 2026-08-28 through 2026-09-25, run one after the other and unattended, from `c37c7fd` with the charger in throughout (battery status 2 at each start and end): the feed with run 2026-09-02 missed first, then the feed with no missed run, so the local state left behind is the full feed's. Each starts with the bootstrap dated 2026-08-28 (held to Step 13's file of that date on every column but drivers) and runs the daily job on every weekday, 4 of them full runs. Logs `data/logs/replay_full_missed1_20261106.log` and `replay_full_missed0_20261106.log`; counts in `data/replay_parity/replay_2026-08-28_2026-09-25_missed1.json` and `_missed0.json`.
+
+| Checkpoint | Feed | Trials scored | Population differences | Feature differences (58 columns) | Accepted loss (rows with a feature apart) |
+| --- | --- | --- | --- | --- | --- |
+| 2026-08-31 (full run) | both | 88,977 | 0 | 0 | 0 |
+| 2026-09-01 | both | 87,914 | 0 | 0 | 0 |
+| 2026-09-03 (after the missed run) | missed | 87,975 | 0 | 0 | 99 |
+| 2026-09-08 | full | 88,085 | 0 | 0 | 0 |
+| 2026-09-14 (full run) | missed / full | 88,333 | 0 | 0 | 87 / 0 |
+| 2026-09-25 (the cutoff) | missed / full | 88,895 | 0 | 0 | 86 / 0 |
+
+- **Both feeds pass.** Every record sent with a post date after the start was kept (21,821 and 21,945), none was kept without being sent, and no column of the live frame is missing offline.
+- **The full feed sent all 21,945 versions posted in the window** (none superseded on its day in these four weeks). With run 2026-09-02 missed, 124 versions were never sent: a trial updated on 2026-09-02 and again before the next run shows only its later version, as a real delta pull would. Those hidden versions put 86 to 99 rows apart between offline on every version and offline on the feed: the accepted loss of ADR 0038, counted and never failed.
+- **On 2026-09-25 the live path scores 88,895 trials**, the count of Step 13 at the cutoff, and its state holds 222,706 trials, the count of the bootstrap at the cutoff.
+- **Times:** 71.1 and 73.4 minutes per feed (about 2 hours 25 minutes with both), within the estimate of 63 to 71 minutes a feed for the first and 2 minutes past it for the second. Bootstrap 650 and 664 s; full runs 350 to 395 s; other runs 47 to 71 s; a checkpoint's offline side 2 to 6 minutes, growing with the feed.
+
+As instructed, `data/warehouse_schema3.duckdb` (4.1 GB) was deleted after both passed.
+
+### Item 4: the Neon estimate at 12 months, from the rows as built
+
+**Method.** Sizes are measured on local Postgres 16 in two states: the bootstrap at the cutoff (phase A's state, with the display rows of the 222,706 live-state trials pulled from API v2: 217,282 rows, 75.9 MB), and the state after the full replay, four weeks of real daily runs on the same code. Growth per four weeks is what those runs added: 21,945 versions (482 B a row with its indexes), 28,045 history rows (284 B), 6,664 outcome events, 1,247 net new live-state trials, and the markers' growth. It is scaled to 432 days: 67 days from the cutoff to go-live, as in the Step 14 sizing, then 12 months. The arithmetic is in `data/logs/neon_estimate_20261107.json`, from `sizes_cutoff_20261106.json`, `sizes_replay_end_20261107.json` and `growth_replay_20261107.json`.
+
+| Schema | Parts, MB | Total, MB |
+| --- | --- | --- |
+| `live` | State 104.6 at the cutoff, growth 9.1; versions 163.3; outcome events 21.2; sponsor file 26.6 (two copies as built) and growth 0.7; quarantine 1.2 | 326.7 |
+| `serving` | Latest 79.2 (39.7 fresh, doubled by the full runs' rewrites); history 23.8 at the cutoff, growth 123.0, four promotions 101.1 (worst case); markers 33.9, growth 34.9; display rows 82.6 with growth and 4.6 for updates; not scored, reason counts, data status 1.1; stop reasons 4.5 | 488.6 |
+| `monitoring` | Score files 16.2 (1.14 MB a month as built); runs 1.8; aggregates 1.4 | 19.5 |
+| Catalogs | 32.5 (the Step 14 sizing's figure; 9.5 measured locally) | 32.5 |
+| **Total** | | **867.3** |
+
+**Still over the 700 MB line** (167 MB over; 13% headroom against 1 GB), and by more than phase A's rough 717 to 769 MB. What moved it: versions are 482 B a row as built (360 B of row, 109 B of index) against the sizing's 226 B, the latest table doubles under full runs (79.2 MB against 39.7 fresh), the sponsor file holds two copies, and score files are 1.14 MB a month against 0.62. The markers' growth counts their bloat as growth every period, which overstates it. The estimate is cautious in three places: no seasonality, the first live run's gap rows counted at the daily pace, and four promotions that each add a row per trial.
+
+**Options, with their savings** (measured where the item says so; the rest from measured row sizes):
+
+| Option | Saves, MB | Total after, MB | Cost |
+| --- | --- | --- | --- |
+| 1. `VACUUM FULL` of `serving.trial_scores_latest` and `live.sponsor_file` after each full run | 53.0 (measured locally: 79.2 to 39.6, and 26.6 to 13.2) | 814.3 | An exclusive lock on each table for the rewrite, once a week; the API's cache covers reads. Lock time on Neon not measured |
+| 2. On a promotion, history rows only where the score moves by 0.01 or more (Section 12's rule) | up to 101.1 | down to 766.2 | The real saving depends on how far a new model moves scores, unknown until a promotion; likely much less than the bound |
+| 3. Retention of `live.study_versions` at 6 months instead of 12 (ADR 0045, export to the laptop first) | 94.1 | 773.2 | An ADR amending ADR 0045's 12 months; versions stay on the laptop for the retrain |
+| 3b. The same for history rows, the cutoff's rows kept | 70.9 | 796.4 | The dashboard's risk line would show only the last 6 months beyond its first point |
+| 4. Display rows for served trials only (91,599 of 217,282) | 43.7 | 823.6 | Must be checked against every endpoint that names a trial outside the served set before it is chosen |
+
+Combinations: 1 + 3 gives 720.2 MB (still over); **1 + 3 + 4 gives 676.5 MB** (32% headroom); 1 + 3 + 3b gives 649.3 MB; 1 + 3 + 3b + 4 gives 605.6 MB. My recommendation is 1 + 3 + 4, which keeps every history row: option 1 is measured and needs no change to the data, option 3 only moves rows the laptop already keeps, and option 4 drops names no page shows, if the check confirms that. All three are his to decide; each needs code, and options 3 and 4 an ADR.
+
+### Item 5: a timed 10 MB copy on Neon
+
+**Blocked.** `NEON_DATABASE_URL` is not set in `.env` (checked through the `Secrets` class, printing nothing). The probe is written and has not touched Neon: it refuses any host but Neon's direct one, writes 10 MB of synthetic random rows (no dataset row, ADR 0040) into a throwaway table, times two copies, drops the table, checks it is gone and prints timings only. It runs with one command once he sets the direct URL; nothing else on Neon is changed.
+
+**W1 or W2.** Without the measurement, my recommendation stays W1 (one transaction, as built and tested), on one condition: the probe projects the 167.6 MB write at under 10 minutes. The transaction is active for the whole copy, so Neon's 5-minute limit on sessions idle in a transaction (ADR 0058) does not apply; the risk of W1 is a dropped connection during a long copy, which leaves nothing written and is simply run again. If the projection is past 10 minutes, W2.
+
+### Phase B report: the three checks of CLAUDE.md Section 4
+
+**1. Met, with evidence?** Item 1 done (`SPONSOR_ID_KEY` in `.env`, 256 bits, never printed). Item 2 done: nine fixable findings, all held, all fixed with tests (`ae57c89`, `c37c7fd`); three wording findings corrected here; 17 of 17 mutants killed; full suite 1,504 passed with Postgres required. Item 3 met: both feeds pass with no difference at any of 10 checkpoints. Item 4 done: 867.3 MB, over the line, with options and measured savings. Item 5 blocked (above).
+
+**2. Decisions made without asking:** the census's registry-share bound (2% and 100 trials, item 2); feed order (the missed feed first, so the state left is the full feed's); the estimate's 67-day gap, kept from the Step 14 sizing; counting catalogs at the sizing's 32.5 MB rather than the 9.5 MB measured locally; running `VACUUM FULL` on the local replay tables to measure option 1 (data unchanged, the local database only).
+
+**3. Blocked, skipped or deferred:** item 5 (needs `NEON_DATABASE_URL`, the direct URL); the Docker folder (error 1920, retry after a restart); Neon untouched, as ordered; no API v2 call and no internal endpoint call in this phase. The local database now holds the replay's state at 2026-09-25, not the cutoff bootstrap; the real bootstrap waits for his decisions.
+
+**Verify (PowerShell):**
+
+```powershell
+uv run pytest -q -m "slow or not slow"
+uv run python -m trialpulse.live.replay_parity --start 2026-08-28 --end 2026-09-25 --miss 2026-09-02 --checkpoint 2026-08-31 --checkpoint 2026-09-01 --checkpoint 2026-09-03 --checkpoint 2026-09-14 --checkpoint 2026-09-25
+uv run python -m trialpulse.live.replay_parity --start 2026-08-28 --end 2026-09-25 --checkpoint 2026-08-31 --checkpoint 2026-09-01 --checkpoint 2026-09-08 --checkpoint 2026-09-14 --checkpoint 2026-09-25
+```
+
+Each replay takes about 75 minutes and 8 GB with the charger in, and replaces the local database's live state.
 
 ## Step 14, phase A on the laptop (2026-11-04)
 

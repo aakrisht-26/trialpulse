@@ -353,3 +353,10 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 **Likely interview question.** "How do you know the live system computes the same features as your offline pipeline?"
 
 **Short answer.** It is checked at three levels on real data. At the cutoff, the live path reproduced Step 13's risks and drivers exactly for all 88,895 scored trials. Across 145,535 unchanged trials, every canonical difference between API v2 and the dataset had a registry-side cause, with none from the mapping. After a real daily run through Postgres, all 58 served features of 88,977 trials equalled the offline path on the same feed. The longer replay, over four weeks with a missed run, is sized at about 2 hours and waits for approval.
+
+## Step 14, phase B on the laptop
+
+- **What was built:** fixes from an independent check of the census and the replay harness (the replay's offline side now uses every record sent, not the ones the live path kept; the census fails on missing raw values, missing second reads, repeated ids and implausible registry shares), then the full replay: four weeks of daily runs, twice, once with a missed run, equal to the offline path on every checkpoint. Then a 12-month Neon estimate from the tables as built.
+- **Key decision and why:** define the replay's reference set by what the feed sent. If it is defined by what the system under test kept, a record the system wrongly drops disappears from both sides and the comparison still passes.
+- **Rejected alternative:** keeping the sizing from design-time row sizes. The tables as built were 2 times larger in two places (versions, and the latest table under full rewrites), which moved the estimate from about 550 MB to 867 MB.
+- **Likely question:** "Your parity test passed. How do you know it could fail?" Answer: deliberate faults. The reviewer seeded 33 mutants; the ones that survived showed where the tests were blind, and after the fixes all 17 survivors are killed. The replay also refuses to pass with no checkpoint or with nothing scored, so it cannot pass by comparing nothing.
