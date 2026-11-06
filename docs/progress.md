@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B (2026-11-07): the census and replay checked and fixed, the full replay passes; the Neon estimate is 867 MB, over the 700 MB line, with options waiting for Aakrisht; the Neon copy timing waits for `NEON_DATABASE_URL`. Neon migration and the real bootstrap wait for his decisions |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon blocked: `NEON_DATABASE_URL` is empty in `.env` |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2499,6 +2499,43 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 14, phase B on Neon (2026-11-07)
+
+Aakrisht's decisions of 2026-11-07: the census's 2% bound approved; storage options 1, 3 and 4, each as an ADR with its safeguard, and the estimate redone with them in place; the Neon probe committed under `scripts/` and run from there, W1 if the full write projects under 10 minutes, otherwise stop. Then on Neon, in order: migrate, the real bootstrap with the day-0 check, the reason counts, model statement and display rows, the API's role, the GitHub secrets with the decisions registered and one dispatch of `timing.yml`, and Neon's storage against the estimate. `daily.yml` stays disabled; no gap read, no deployment.
+
+### The storage options, built
+
+| ADR | What | Safeguard and its test | Commit |
+| --- | --- | --- | --- |
+| 0068 | After a full run has published, the daily job runs VACUUM FULL on `serving.trial_scores_latest` and `live.sponsor_file` | Only in the job, after a full run, under the lease (renewed before each table). Tests: a full run compacts both (new files) while its run row is `running` and after publication; a run that is not full, or that lost its lease, compacts nothing | `310745d` |
+| 0069 | Versions kept 6 months on Neon, history 12; monthly by hand on the laptop | Export and verify before any delete (unchanged). Tests: every read the daily job makes of `live.study_versions` gives the same answer before and after a 6-month retention; a source scan finds only those four readers | `bf3234c` |
+| 0070 | Display rows of served trials only; the job prunes after publication, the bulk command keeps served trials | Test: with an unserved trial planted under a named sponsor and an area, no GET route shows its title, its id appears only in its own timeline, and its risk is 404 (a fault that drops the API's served filter fails it). The dashboard reaches only the API (`tests/app/test_imports.py`) | `310745d` |
+| 0071 | The census's registry bound (approved), recorded | Its tests landed in `ae57c89` | `f8a75d2` |
+
+CLAUDE.md's Amendments gain the four lines. Also built: `uv run python -m trialpulse.live.registry --attach-decisions`, which logs Step 13's result file to the champion's run only if its SHA-256 is the one the day-0 check validated (`fe8d035`). The full suite with Postgres required: 1,511 passed (626 s), and the 2 tests of that command.
+
+### The estimate with the options in place: 683.9 MB, under the 700 MB line
+
+Recomputed from the same measured tables (`data/logs/neon_estimate_options_20261107.json`), with three inputs measured anew:
+
+- **Versions (option 3), on real data.** The warehouse's versions of the 432 days before the cutoff stand in for the year: 346,871 versions (167.3 MB at 482 B a row). A monthly retention at 6 months keeps 212,519 rows just after a run and 233,354 just before the next: **112.5 MB at worst, saving 54.8 MB.** My first figure for this option (94.1 MB) was wrong: the retention keeps each trial's newest row whatever its age, which the daily job reads, and 48,724 such rows are older than the window.
+- **Display rows (option 4), pulled.** The bulk pull of API v2 (30 requests a minute) kept for the 91,599 served trials of the replay's last day: 89,419 display rows (27.1 MB) and 10,774 named sponsors (3.5 MB), **30.6 MB against 75.9 MB**. 2,180 served trials had no live-status record on API v2 on 2026-11-07 (their records moved since 2026-09-25), so no display row.
+- **Markers.** VACUUM FULL of the markers after the replay gave 33.9 MB, their fresh size: their four weeks of "growth" were dead rows (2.2 MB, held as such), not growth. The first estimate counted them as growth in every period (34.9 MB); growth is now 6 bytes a marker and 150 bytes a new trial (5.0 MB).
+
+| Schema | Parts, MB | Total, MB |
+| --- | --- | --- |
+| `live` | State 104.6, growth 9.1; versions 112.5; outcome events 21.2; sponsor file 13.9; quarantine 1.2 | 262.5 |
+| `serving` | Latest 39.6; history 23.8 at the cutoff, growth 123.0, four promotions 101.1 (worst case); markers 33.9, dead rows 2.2, growth 5.0; display 33.3 with growth, updates 1.8; not scored, reason counts, data status 1.1; stop reasons 4.5 | 369.4 |
+| `monitoring` | Score files 16.2; runs 1.8; aggregates 1.4 | 19.5 |
+| Catalogs | 32.5 (the Step 14 sizing's figure; 9.5 measured locally) | 32.5 |
+| **Total** | | **683.9** (31.6% headroom) |
+
+Under the line by 16 MB. During a full run, until its compaction, the two compacted tables hold about 53 MB more (about 737 MB at month 12, still 26% under the cap). The estimate stays cautious in four places: four promotions that each add a row per trial, catalogs at 32.5 MB, the go-live gap at the daily pace, no seasonality. A missed monthly retention adds about 12 MB.
+
+### The Neon probe: blocked
+
+The probe is committed as `scripts/neon_copy_probe.py` (`139d833`). It did not run: the `NEON_DATABASE_URL` line in `.env` has an empty value (its length is 0; `.env` was last saved 2026-11-06 22:00), so the `Secrets` class reads it as unset. Since every Neon step waits on the probe's result (W1 or stop), nothing on Neon was touched, no GitHub secret was set, the decisions were not attached and `timing.yml` was not dispatched.
 
 ## Step 14, phase B on the laptop (2026-11-06)
 
