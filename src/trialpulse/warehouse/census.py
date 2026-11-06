@@ -42,9 +42,15 @@ In order:
    the same rules (the literal check of the original criterion).
 
 The census passes when no difference is left without its column's cause: no bug, no title
-phase moved, no unchanged record quarantined on the API path, and no feature hash apart for
-a trial without a difference in a field a served feature reads. It prints and writes counts
-only: no trial id, sponsor name or key, and no text.
+phase moved, no raw value missing, no unchanged record quarantined on the API path, and no
+feature hash apart for a trial without a difference in a field a served feature reads. It
+also fails when the pull repeats an id or returns a record it cannot read (either could hide
+a record never pulled), when a differing trial is missing on the second read (a changed one
+is set aside and counted), and when registry changes in one column pass `REGISTRY_SHARE` of
+the unchanged trials (and `REGISTRY_FLOOR` trials): the conversion and the census read the
+API through the same paths (`API_V2_PATHS`), so a wrong path would show as registry changes
+in nearly every record. It prints and writes counts only: no trial id, sponsor name or key,
+and no text.
 """
 
 import argparse
@@ -135,6 +141,12 @@ PHASE_MOVED = "fail: the titles state another phase"
 NO_RAW = "fail: the raw values could not be read"
 UNKNOWN_LABEL = "the registry's UNKNOWN label only (the submitted status is equal)"
 FAILING: frozenset[str] = frozenset({BUG, PHASE_MOVED, NO_RAW})
+REGISTRY = "registry: "  # the prefix of every registry cause
+# The largest share of unchanged trials one column may show as changed by the registry. The
+# census of 2026-11-04 found at most 0.94% (sponsor names); a wrong API path would show
+# in nearly every record that has the field.
+REGISTRY_SHARE = 0.02
+REGISTRY_FLOOR = 100  # below this many trials a column is never judged by its share
 
 
 class JsonApi(Protocol):
@@ -267,6 +279,8 @@ def _status_cause(source: RowSources, rules: CohortRules) -> str:
         submitted_status(rules, str(d["overall_status"]), d.get("last_known_status"))
     ):
         return UNKNOWN_LABEL
+    if not source.raw:
+        return NO_RAW
     unknown = {token(label) for label in rules.unknown_labels}
 
     def raw_submitted(overall: Any, known: Any) -> Any:
@@ -279,6 +293,8 @@ def _status_cause(source: RowSources, rules: CohortRules) -> str:
 
 
 def _sponsor_cause(source: RowSources) -> str:
+    if source.raw.get("raw_sponsor_name") is None:  # no raw row, or no core-file match
+        return NO_RAW
     api, dataset = (
         name_form(api_raw(source.study, "lead_sponsor_name")),
         name_form(source.raw.get("raw_sponsor_name")),
@@ -310,10 +326,12 @@ def cause_of(column: str, source: RowSources, rules: CohortRules) -> str:
         return f"text: {text_class(*_texts(source, column))}"
     if column == "intervention_types":
         dataset_pairs = frozenset((n, token(t)) for n, t in source.pairs)
+        if not dataset_pairs and source.dataset_row.get("intervention_types"):
+            return NO_RAW  # the canonical types came from config rows the read did not find
         same = api_pairs(source.study) == dataset_pairs
         return BUG if same else "registry: the interventions changed"
     raw_name = RAW_NAMES.get(column, column)
-    if raw_name not in source.raw:
+    if not source.raw or raw_name not in source.raw:
         return NO_RAW
     if same_raw(column, api_raw(source.study, column), source.raw[raw_name]):
         return BUG
@@ -350,6 +368,17 @@ def seeded_sample(nct_ids: Iterable[str], seed: int, size: int = SAMPLE_SIZE) ->
     return sorted(random.Random(f"{seed}:census-50").sample(ordered, min(size, len(ordered))))
 
 
+def registry_overreach(tally: "Tally", unchanged: int) -> list[str]:
+    """The columns whose registry causes pass `REGISTRY_SHARE` of the unchanged trials (and
+    `REGISTRY_FLOOR` trials)."""
+    limit = max(REGISTRY_SHARE * unchanged, REGISTRY_FLOOR)
+    return [
+        column
+        for column, causes in sorted(tally.columns.items())
+        if sum(n for cause, n in causes.items() if cause.startswith(REGISTRY)) > limit
+    ]
+
+
 @dataclass
 class Tally:
     """The counts of one set of unchanged trials."""
@@ -359,6 +388,7 @@ class Tally:
     trials_differing_in_a_feature: int = 0
     trials_failing: int = 0
     set_aside: int = 0
+    missing_on_second_read: int = 0
     columns: dict[str, Counter[str]] = field(default_factory=dict)
     comments_left: int = 0
     hash_no_difference: Counter[str] = field(default_factory=Counter)
@@ -374,11 +404,13 @@ class Tally:
         return sum(n for c in self.columns.values() for cause, n in c.items() if cause in FAILING)
 
     def add(self, differences: Sequence[Difference] | None, hashes_equal: bool,
-            comments: int = 0) -> None:  # fmt: skip
-        """One trial: its differences (None when it was set aside) and its hash check."""
+            comments: int = 0, missing: bool = False) -> None:  # fmt: skip
+        """One trial: its differences (None when it was set aside: changed since the pull, or
+        with `missing`, not returned by the second read) and its hash check."""
         self.trials += 1
         if differences is None:
             self.set_aside += 1
+            self.missing_on_second_read += missing
             return
         verdict = "equal" if hashes_equal else "apart"
         if not differences:
@@ -400,6 +432,7 @@ class Tally:
         return {
             "trials": self.trials,
             "set_aside_changed_or_missing_on_the_second_read": self.set_aside,
+            "missing_on_the_second_read": self.missing_on_second_read,
             "trials_with_no_difference": sum(self.hash_no_difference.values()),
             "trials_differing": self.trials_differing,
             "trials_differing_in_a_field_a_served_feature_reads": (
@@ -723,9 +756,10 @@ def run_census(
     for nct in unchanged:
         api_row, dataset_row = pulled.rows[nct], versions[nct]
         differences: list[Difference] | None = []
-        comments = 0
+        comments, missing = 0, False
         if nct in differing:
             study = studies.get(nct)
+            missing = study is None
             if study is None or _identity(study)[1] != api_row["effective_date"]:
                 differences = None  # changed or missing on the second read: set aside
             else:
@@ -737,11 +771,13 @@ def run_census(
                                if c in COUNTED_TEXTS or c in TITLE_COLUMNS)  # fmt: skip
         hashes_equal = feature_hashes_equal(api_row, pulled.titles[nct], dataset_row,
                                             dataset_titles[nct], rules, secret)  # fmt: skip
-        everyone.add(differences, hashes_equal, comments)
+        everyone.add(differences, hashes_equal, comments, missing)
         if nct in sample:
-            fifty.add(differences, hashes_equal, comments)
+            fifty.add(differences, hashes_equal, comments, missing)
 
     failures = []
+    if pulled.repeated or sum(pulled.unreadable.values()):
+        failures.append("the pull repeated an id or returned an unreadable record")
     if sum(quarantined_unchanged.values()):
         failures.append("unchanged records quarantined on the API path")
     for name, tally in (("every unchanged trial", everyone), ("the seeded 50", fifty)):
@@ -749,6 +785,11 @@ def run_census(
             failures.append(f"{name}: differences without their column's cause")
         if tally.condition_4_breaks:
             failures.append(f"{name}: a feature hash apart without a feature difference")
+        if tally.missing_on_second_read:
+            failures.append(f"{name}: differing trials missing on the second read")
+    failures += [f"{column}: registry changes in more than {REGISTRY_SHARE:.0%} of the "
+                 "unchanged trials (a wrong API path?)"
+                 for column in registry_overreach(everyone, len(unchanged))]  # fmt: skip
     return {
         "data_timestamp": stamp,
         "dataset_revision": cfg.dataset.revision,

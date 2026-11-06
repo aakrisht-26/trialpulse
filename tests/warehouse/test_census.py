@@ -2,6 +2,8 @@
 rule, the failures, condition 4, the seeded 50, and output that names nothing."""
 
 import copy
+import datetime as dt
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -9,7 +11,7 @@ from typing import Any
 import pytest
 
 from trialpulse.cli import RefusedError, StoppedEarlyError
-from trialpulse.config import ProjectConfig
+from trialpulse.config import REPO_ROOT, ProjectConfig
 from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL
 from trialpulse.warehouse import census
 
@@ -177,6 +179,18 @@ def test_registry_changes_without_a_new_version_are_counted_with_their_cause(
     assert result["verdict"]["passes"]
 
 
+def test_dates_their_precision_and_ages_changed_on_the_registry_are_counted(
+    inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    api = FakeApi([nct5(start_date="2015-04-20", completion_date="2018-01-31",
+                        minimum_age="21 Years")])  # fmt: skip
+    result = _run(api, inputs, cfg, tmp_path)
+    for column in ("start_date", "start_date_precision", "completion_date",
+                   "minimum_age_years"):  # fmt: skip
+        assert _causes(result, column) == {"registry: the value changed": 1}, column
+    assert result["verdict"]["passes"]
+
+
 def test_the_same_raw_value_with_another_canonical_value_is_a_bug(
     inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -184,12 +198,15 @@ def test_the_same_raw_value_with_another_canonical_value_is_a_bug(
 
     def broken(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
         row, texts = real(record)
-        return {**row, "primary_purpose": "PREVENTION", "sponsor_key": "another key"}, texts
+        return {**row, "primary_purpose": "PREVENTION", "sponsor_key": "another key",
+                "start_date": dt.date(2015, 5, 1), "completion_date_precision": "month",
+                "minimum_age_years": 21.0}, texts  # fmt: skip
 
     monkeypatch.setattr(census, "canonical_from_api_v2", broken)
     result = _run(FakeApi([nct5()]), inputs, cfg, tmp_path)
-    assert _causes(result, "primary_purpose") == {census.BUG: 1}
-    assert _causes(result, "sponsor_key") == {census.BUG: 1}
+    for column in ("primary_purpose", "sponsor_key", "start_date", "completion_date_precision",
+                   "minimum_age_years"):  # fmt: skip
+        assert _causes(result, column) == {census.BUG: 1}, column
     assert result["every_unchanged_trial"]["trials_failing"] == 1
     assert not result["verdict"]["passes"]
     assert (
@@ -359,3 +376,87 @@ def test_the_census_reads_the_columns_the_compact_row_is_made_from() -> None:
     assert expected == census.FEATURE_COLUMNS
     assert set(census.COMPARED) >= census.FEATURE_COLUMNS
     assert not census.FEATURE_COLUMNS & set(census.COUNTED_TEXTS)
+
+
+def test_a_difference_whose_raw_values_cannot_be_read_fails(
+    inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing raw_versions row, core-file sponsor name or interventions config row is never
+    read as a registry change."""
+    api = FakeApi([
+        nct5(lead_sponsor_name="Acme Holdings", sex="FEMALE",
+             interventions=[("Aspirin", "DRUG")]),
+        nct6(last_known_status="ACTIVE_NOT_RECRUITING"),
+    ])  # fmt: skip
+    monkeypatch.setattr(census, "dataset_raw", lambda *a, **k: ({}, {}))
+    result = _run(api, inputs, cfg, tmp_path)
+    for column in ("lead_sponsor_name", "sex", "intervention_types", "last_known_status"):
+        assert _causes(result, column) == {census.NO_RAW: 1}, column
+    assert not result["verdict"]["passes"]
+
+    real = census.dataset_raw
+
+    def no_sponsor_name(*args: Any, **kwargs: Any) -> Any:
+        raws, pairs = real(*args, **kwargs)
+        return {n: {**r, "raw_sponsor_name": None} for n, r in raws.items()}, pairs
+
+    monkeypatch.setattr(census, "dataset_raw", no_sponsor_name)
+    result = _run(FakeApi([nct5(lead_sponsor_name="Acme Holdings")]), inputs, cfg, tmp_path)
+    assert _causes(result, "lead_sponsor_name") == {census.NO_RAW: 1}
+    assert not result["verdict"]["passes"]
+
+
+def test_a_differing_trial_missing_on_the_second_read_fails(
+    inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    api = FakeApi([nct5(), nct6(organization_class="OTHER")])
+    del api.current["NCT00000006"]
+    result = _run(api, inputs, cfg, tmp_path)
+    everyone = result["every_unchanged_trial"]
+    assert everyone["set_aside_changed_or_missing_on_the_second_read"] == 1
+    assert everyone["missing_on_the_second_read"] == 1
+    assert result["verdict"]["failures"] == [
+        "every unchanged trial: differing trials missing on the second read",
+        "the seeded 50: differing trials missing on the second read",
+    ]
+
+
+def test_a_pull_that_repeats_an_id_fails(
+    inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    """With as many records as API v2 counted, a repeated id stands for a record never seen."""
+    result = _run(FakeApi([nct5(), nct5()]), inputs, cfg, tmp_path)
+    assert result["pull"]["repeated_ids"] == 1
+    assert result["verdict"]["failures"] == [
+        "the pull repeated an id or returned an unreadable record"
+    ]
+
+
+def test_registry_changes_in_too_many_trials_of_one_column_fail(
+    inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The conversion and the census read API v2 through the same paths, so a wrong path would
+    show as registry changes in nearly every record: the share is bounded."""
+    api = FakeApi([nct5(sex="FEMALE"), nct6()])
+    assert _run(api, inputs, cfg, tmp_path)["verdict"]["passes"]  # below the floor
+    monkeypatch.setattr(census, "REGISTRY_FLOOR", 0)
+    result = _run(api, inputs, cfg, tmp_path)
+    assert result["verdict"]["failures"] == [
+        "sex: registry changes in more than 2% of the unchanged trials (a wrong API path?)"
+    ]
+
+
+def test_the_api_paths_resolve_on_recorded_api_v2_records() -> None:
+    """The paths the conversion and the census share, checked on records API v2 returned
+    (tests/live/fixtures): each resolves in some record but the two these records lack."""
+    fixtures = REPO_ROOT / "tests" / "live" / "fixtures"
+    pages = [json.loads((fixtures / f"delta_page_{n}.json").read_text(encoding="utf-8"))
+             for n in (1, 2)]  # fmt: skip
+    studies = [s for page in pages for s in page["studies"]]
+    unresolved = {
+        name for name, path in census.API_V2_PATHS.items()
+        if all(census.get_path(s, f"protocolSection.{path}") is None for s in studies)
+    }  # fmt: skip
+    # No recorded record is UNKNOWN or stopped; the census of 2026-11-04 read the last known
+    # status of 9,866 UNKNOWN records through its path.
+    assert unresolved == {"last_known_status", "why_stopped"}
