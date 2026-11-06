@@ -94,6 +94,26 @@ def renew(cur: Any, run_id: int) -> None:
         raise LeaseLostError(f"run {run_id} lost its lease (taken over as stale)")
 
 
+# The tables a full run rewrites whole, which plain VACUUM leaves at twice their size: every
+# row of the latest scores, and the one row of the sponsor file (ADR 0068).
+COMPACTED: tuple[str, ...] = ("serving.trial_scores_latest", "live.sponsor_file")
+COMPACT_LOCK_TIMEOUT = "60s"  # VACUUM FULL waits this long for readers, then the run fails
+
+
+def compact(cur: Any, run_id: int) -> None:
+    """VACUUM FULL of `COMPACTED`, each after renewing the lease, so it runs only while the
+    job holds it (ADR 0068). The connection must be in autocommit: VACUUM cannot run inside
+    a transaction. It takes an exclusive lock on each table for its rewrite; a read waiting
+    on it gets its answer after."""
+    cur.execute(f"SET lock_timeout = '{COMPACT_LOCK_TIMEOUT}'")
+    try:
+        for table in COMPACTED:
+            renew(cur, run_id)
+            cur.execute(f"VACUUM (FULL, ANALYZE) {table}")
+    finally:
+        cur.execute("RESET lock_timeout")
+
+
 def finish_run(
     cur: Any, run_id: int, status: str, counts: Mapping[str, Any], error: str | None = None
 ) -> None:

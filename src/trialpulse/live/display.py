@@ -4,7 +4,9 @@
 
 `display_rows` turns API v2 records into the rows of `serving.trial_display` and
 `serving.sponsors`; the daily job calls it on each record it ingests, and the bulk command
-below fills the tables once. Nothing here reads the dataset.
+below fills the tables once. Only served trials (scored, or listed as not scored) keep a
+display row, and only sponsors that lead one keep a name (ADR 0070): the daily job prunes
+the others after publication. Nothing here reads the dataset.
 
 - The brief title is the canonical text of the title (`contracts.text.normalize_text`).
 - The sponsor's keyed id follows ADR 0044; a display name only where `live.contract.
@@ -90,7 +92,8 @@ def display_rows(studies: Iterable[Mapping[str, Any]], secret: bytes) -> list[Di
 
 
 def trials_led(cur: Any, sponsor_ids: Iterable[str]) -> dict[str, int]:
-    """The number of live trials (rows of `serving.trial_display`) each sponsor leads."""
+    """The number of trials with a display row each sponsor leads: after publication, its
+    served trials (ADR 0070)."""
     rows = cur.execute(
         """SELECT sponsor_id, count(*) FROM serving.trial_display
         WHERE sponsor_id = ANY(%s) GROUP BY sponsor_id""",
@@ -179,6 +182,36 @@ def remove(cur: Any, trials: Iterable[str]) -> None:
         refresh(cur, {r[0] for r in left if r[0]})
 
 
+SERVED = """(EXISTS (SELECT 1 FROM serving.trial_scores_latest l WHERE l.nct_id = d.nct_id)
+  OR EXISTS (SELECT 1 FROM serving.trials_not_scored n WHERE n.nct_id = d.nct_id))"""
+
+
+def keep_served(cur: Any) -> int:
+    """ADR 0070: remove the display rows of trials that are not served (neither scored nor
+    listed as not scored), decide their sponsors' names again (`refresh`), and remove the
+    names of sponsors that lead no served trial. Returns the trial rows removed."""
+    left = cur.execute(
+        f"DELETE FROM serving.trial_display d WHERE NOT {SERVED} RETURNING sponsor_id"
+    ).fetchall()
+    refresh(cur, {r[0] for r in left if r[0]})
+    cur.execute(
+        """DELETE FROM serving.sponsors s WHERE NOT EXISTS (
+          SELECT 1 FROM serving.trial_display d WHERE d.sponsor_id = s.sponsor_id)"""
+    )
+    return len(left)
+
+
+def unnamed(cur: Any) -> int:
+    """Served trials without a display row (the API then gives no title or sponsor for them).
+    The daily job records the count; the bulk command fills them."""
+    row = cur.execute(
+        """SELECT count(*) FROM (SELECT nct_id FROM serving.trial_scores_latest
+          UNION SELECT nct_id FROM serving.trials_not_scored) s
+        WHERE NOT EXISTS (SELECT 1 FROM serving.trial_display d WHERE d.nct_id = s.nct_id)"""
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def pull_live_records(api: ApiClient, page_size: int) -> list[dict[str, Any]]:
     """Every record of API v2 with a status a live trial can have (no page cache)."""
     params: dict[str, str | int] = {
@@ -237,10 +270,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     studies = pull_live_records(api, cfg.live.page_size)
     rows = display_rows(studies, key.get_secret_value().encode("utf-8"))
     with psycopg.connect(_dsn(args.target), connect_timeout=10) as con, con.cursor() as cur:
-        if not args.all_pulled:
-            live = {r[0] for r in cur.execute("SELECT nct_id FROM live.trial_state")}
-            rows = [r for r in rows if r.nct_id in live]
+        if not args.all_pulled:  # the served trials only (ADR 0070)
+            served = {r[0] for r in cur.execute(
+                "SELECT nct_id FROM serving.trial_scores_latest "
+                "UNION SELECT nct_id FROM serving.trials_not_scored")}  # fmt: skip
+            rows = [r for r in rows if r.nct_id in served]
         counts = save(cur, rows)
+        if not args.all_pulled:
+            counts["pruned"] = keep_served(cur)
+            counts["served_without_display"] = unnamed(cur)
         con.commit()
         sizes = table_sizes(cur)
     summary = {"records": len(studies), **counts, "bytes": sizes,

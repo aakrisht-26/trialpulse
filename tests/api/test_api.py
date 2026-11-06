@@ -403,3 +403,69 @@ def test_driver_errors_without_a_sqlstate_are_classed_by_kind_not_by_name(
     exc = OperationalError("connect", {}, error("connection timeout expired"))
     assert sqlstate(exc) == ""
     assert unreachable(exc) is waking
+
+
+def test_no_endpoint_names_a_trial_outside_the_served_set(make_client: Make, seeded: str) -> None:
+    """ADR 0070: display rows are kept for served trials only, so no answer may need one of
+    another trial. A trial with a display row, a history row and markers but neither a score
+    nor a reason (it left the served set) is planted under a named sponsor and an area, and
+    every GET route is called: its title appears nowhere, its id appears only in its own
+    timeline (which never reads display rows), and its risk is not found. The dashboard
+    shows only the API's answers (tests/app/test_imports.py)."""
+    import datetime as dt
+
+    import psycopg
+
+    from trialpulse.api import areas as area_list
+
+    gone, title = "NCT09999999", "A planted title of a trial that is not served"
+    with psycopg.connect(seeded) as con:
+        con.execute(
+            """INSERT INTO serving.trial_display (nct_id, brief_title, sponsor_id,
+              sponsor_class, areas) VALUES (%s, %s, 'sp-acme', 'INDUSTRY', '{2}')""",
+            (gone, title),
+        )
+        con.execute(
+            """INSERT INTO serving.trial_score_history (nct_id, as_of_date, model_version,
+              risk_12m, risk_24m, reasons, landmark_index, true_landmark_index, content_hash,
+              flagged) VALUES (%s, %s, 'm/1', 0.2, 0.3, '{first_score}', 1, 1, %s, false)""",
+            (gone, dt.date(2026, 9, 25), b"\x07" * 32),
+        )
+        con.commit()
+    client, _, _ = make_client()
+    trial_ids = (gone, "NCT00000001", "NCT00000003")
+    slugs = (*(a.slug for a in area_list.AREAS), area_list.NOT_CLASSIFIED_SLUG)
+    values = {"nct_id": trial_ids, "name": ("Acme Pharma Inc.",), "area": slugs}
+    routes = [
+        r
+        for r in client.app.routes  # type: ignore[attr-defined]
+        if "GET" in getattr(r, "methods", set()) and r.path.startswith(("/v1", "/health"))
+    ]
+    assert {r.path for r in routes} >= {
+        "/v1/trials/{nct_id}/risk",
+        "/v1/areas",
+        "/v1/sponsors/{name}/portfolio",
+        "/v1/model",
+    }
+    called = 0
+    for route in routes:
+        params = [p for p in values if "{" + p + "}" in route.path]
+        choices = [(route.path, {})]
+        for p in params:
+            choices = [
+                (path.replace("{" + p + "}", v), {**k, p: v})
+                for path, k in choices
+                for v in values[p]
+            ]
+        for path, chosen in choices:
+            query = "?prefix=acm" if route.path == "/v1/sponsors" else ""
+            answer = client.get(path + query)
+            called += 1
+            text = answer.text
+            assert title not in text, path
+            if chosen.get("nct_id") == gone and path.endswith("/timeline"):
+                continue  # its own history, asked for by id
+            if chosen.get("nct_id") == gone:
+                assert answer.status_code == 404, path
+            assert gone not in text, path
+    assert called > len(routes)

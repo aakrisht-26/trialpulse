@@ -56,7 +56,7 @@ from trialpulse.live.state import lapse_events
 from trialpulse.scoring import serving
 from trialpulse.scoring.predict import Scored, classify
 
-INGEST, SPONSORS, PUBLISH = "ingest", "sponsors", "publish"
+INGEST, SPONSORS, PUBLISH, COMPACT = "ingest", "sponsors", "publish", "compact"
 QUARANTINED_EXIT = 2
 RETENTION_EXIT = 3
 # A scorer turns the scored trials of a day and their features into score rows (the columns
@@ -317,8 +317,17 @@ def run_daily(
                     store.save_score_file(cur, day, model.version, file[0], file[1],
                                           report.run_id)  # fmt: skip
                 store.set_data_status(cur, day, model.version, rules.early_stop)
+                pruned = display.keep_served(cur)  # ADR 0070: display rows of served trials
             timings[PUBLISH] = clock.perf_counter() - tick
             report.counts["trials_rescored"] = rescored
+            unnamed = display.unnamed(cur)
+            report.counts["details"].update(display_pruned=pruned, served_without_display=unnamed)
+
+            # 4. After a full run, the tables it rewrote are compacted (ADR 0068) -------------
+            if full:
+                stage, tick = COMPACT, clock.perf_counter()
+                store.compact(cur, report.run_id)
+                timings[COMPACT] = clock.perf_counter() - tick
             size = store.database_mb(cur)
             alerts = [mb for mb in live.retention_alert_mb if size >= mb]
             report.counts["details"].update(seconds=timings, database_mb=round(size, 1),

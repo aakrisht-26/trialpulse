@@ -16,7 +16,7 @@ from tenacity import wait_none
 
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.ingest.ctgov_api import STUDIES_URL, VERSION_URL, ApiClient, scrub_personal_data
-from trialpulse.live import daily, pull, store
+from trialpulse.live import daily, display, pull, store
 from trialpulse.live.seed import seed
 from trialpulse.live.sponsors import SponsorFile
 
@@ -149,15 +149,22 @@ def test_a_daily_run_publishes_and_a_second_run_changes_nothing(dsn: str) -> Non
     assert kinds == [("full", "succeeded", DAY)]
     assert through == DAY - dt.timedelta(days=1)
     assert files == 1
-    with psycopg.connect(dsn) as con:  # the API's rows (ADRs 0049 and 0051)
+    with psycopg.connect(dsn) as con:  # the API's rows (ADRs 0049, 0051 and 0070)
         live = {r[0] for r in con.execute("SELECT nct_id FROM live.trial_state")}
+        served = {r[0] for r in con.execute(
+            "SELECT nct_id FROM serving.trial_scores_latest "
+            "UNION SELECT nct_id FROM serving.trials_not_scored")}  # fmt: skip
         shown = con.execute("SELECT nct_id, brief_title FROM serving.trial_display").fetchall()
         names = [r[0] for r in con.execute("SELECT display_name FROM serving.sponsors")]
         status = con.execute("SELECT data_as_of, model_version FROM serving.data_status").fetchone()
     pages = ("delta_page_1.json", "delta_page_2.json")
     pulled = {s["protocolSection"]["identificationModule"]["nctId"]
               for p in pages for s in _load(p)["studies"]}  # fmt: skip
-    assert {n for n, _ in shown} == live & pulled
+    assert {n for n, _ in shown} == live & pulled & served
+    assert live & pulled - served  # a live trial that is not served keeps no display row
+    assert report.counts["details"]["display_pruned"] == len(live & pulled - served)
+    # Served trials the pull did not return have no display row until the bulk command runs.
+    assert report.counts["details"]["served_without_display"] == len(served - pulled)
     assert all(title for _, title in shown)
     assert "Example Sponsor Organization" in names  # an organization word (ADR 0059)
     assert names
@@ -893,3 +900,106 @@ def test_the_data_date_moves_only_after_publication(
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
     with psycopg.connect(dsn) as con:
         assert con.execute("SELECT count(*) FROM serving.data_status").fetchone() == (0,)
+
+
+# ADR 0068: the full run compacts the tables it rewrote, under its lease -----------------------
+
+
+def _files(dsn: str) -> dict[str, int]:
+    """The file each compacted table lives in: VACUUM FULL writes a new one."""
+    with psycopg.connect(dsn) as con:
+        return {t: con.execute("SELECT pg_relation_filenode(%s::regclass)", (t,)).fetchone()[0]
+                for t in store.COMPACTED}  # fmt: skip
+
+
+@respx.mock
+def test_a_full_run_compacts_the_tables_it_rewrote_while_it_holds_the_lease(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bootstrap(dsn)
+    seen: list[tuple[str, str, int]] = []
+    real = store.compact
+
+    def watched(cur: Any, run_id: int) -> None:
+        with psycopg.connect(dsn) as other:  # the run's row as another session sees it
+            kind, status = other.execute(
+                "SELECT run_kind, status FROM monitoring.pipeline_runs WHERE run_id = %s",
+                (run_id,),
+            ).fetchone()
+            published = other.execute("SELECT count(*) FROM serving.data_status").fetchone()[0]
+        seen.append((kind, status, published))
+        real(cur, run_id)
+
+    monkeypatch.setattr(store, "compact", watched)
+    before = _files(dsn)
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    assert report.counts["details"]["full"]
+    assert seen == [("full", "running", 1)]  # after publication, before the run's end
+    compacted = _files(dsn)
+    assert all(compacted[t] != before[t] for t in store.COMPACTED)
+    assert daily.COMPACT in report.counts["details"]["seconds"]
+    # A daily run that is not full compacts nothing.
+    again = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL, force=True)
+    assert not again.counts["details"]["full"]
+    assert len(seen) == 1
+    assert _files(dsn) == compacted
+
+
+@respx.mock
+def test_a_run_that_lost_its_lease_compacts_nothing(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bootstrap(dsn)
+    real = store.compact
+
+    def taken_over(cur: Any, run_id: int) -> None:
+        with psycopg.connect(dsn) as other:  # another job took the lease as stale
+            other.execute(
+                "UPDATE monitoring.pipeline_runs SET status = 'failed' WHERE run_id = %s",
+                (run_id,),
+            )
+            other.commit()
+        real(cur, run_id)
+
+    monkeypatch.setattr(store, "compact", taken_over)
+    before = _files(dsn)
+    with pytest.raises(daily.JobFailedError, match="compact: LeaseLostError"):
+        daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    assert _files(dsn) == before
+
+
+# ADR 0070: display rows of served trials only ---------------------------------------------------
+
+
+@respx.mock
+def test_display_rows_and_names_are_kept_for_served_trials_only(dsn: str) -> None:
+    """A display row of a trial that is not served goes after publication, and the name of a
+    sponsor that leads no served trial goes with it."""
+    _bootstrap(dsn)
+    with psycopg.connect(dsn) as con:
+        con.execute(
+            """INSERT INTO serving.trial_display (nct_id, brief_title, sponsor_id,
+              sponsor_class, areas) VALUES ('NCT09999999', 'Not served', 'sp-gone', 'OTHER',
+              '{}')"""
+        )
+        con.execute(
+            """INSERT INTO serving.sponsors (sponsor_id, display_name, search_key,
+              sponsor_class) VALUES ('sp-gone', 'Gone University', 'gone university',
+              'OTHER')"""
+        )
+        con.commit()
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    assert report.status == "succeeded"
+    with psycopg.connect(dsn) as con:
+        unserved = con.execute(
+            f"SELECT count(*) FROM serving.trial_display d WHERE NOT {display.SERVED}"
+        ).fetchone()[0]
+        gone = con.execute(
+            "SELECT count(*) FROM serving.sponsors WHERE sponsor_id = 'sp-gone'"
+        ).fetchone()[0]
+        orphans = con.execute(
+            """SELECT count(*) FROM serving.sponsors s WHERE NOT EXISTS (
+              SELECT 1 FROM serving.trial_display d WHERE d.sponsor_id = s.sponsor_id)"""
+        ).fetchone()[0]
+    assert (unserved, gone, orphans) == (0, 0, 0)
+    assert report.counts["details"]["display_pruned"] >= 1
