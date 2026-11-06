@@ -78,6 +78,7 @@ CANONICAL: tuple[str, ...] = (
 SCORE_COLUMNS: tuple[str, ...] = ("as_of_date", "true_index", "landmark_index", "flagged",
                                   "risk_12m", "risk_24m", "model_name", "model_version",
                                   "drivers")  # fmt: skip
+SCORE_COLUMNS_BEFORE_THE_CUTOFF = tuple(c for c in SCORE_COLUMNS if c != "drivers")
 UNSCORED_COLUMNS: tuple[str, ...] = ("as_of_date", "true_index", "reason")
 UPLINKS_MBPS: tuple[float, ...] = (10.0, 2.0)  # the Neon estimate's uplinks
 DISPLAY_NEXT = ("next: the display tables are empty; fill them with uv run python -m "
@@ -429,10 +430,12 @@ def run_bootstrap(
     except Exception as exc:  # no lease is held yet, so there is no run row to fail
         raise daily.JobFailedError(daily.failure_line(stage, exc), type(exc).__name__) from None
     # Step 13 wrote drivers into the cutoff's file only; an earlier date (the replay of
-    # parity layer 2) is held on every column its file has, and the cutoff on all of them.
+    # parity layer 2) is held on every other column, and the cutoff on all of them.
     held = tuple(c for c in SCORE_COLUMNS if c in reference[0].columns)
-    if day == cfg.dataset.cutoff and held != SCORE_COLUMNS:
-        raise RefusedError(f"Step 13's file of the cutoff lacks {set(SCORE_COLUMNS) - set(held)}")
+    needed = SCORE_COLUMNS if day == cfg.dataset.cutoff else SCORE_COLUMNS_BEFORE_THE_CUTOFF
+    lacking = sorted(set(needed) - set(held))
+    if lacking:
+        raise RefusedError(f"Step 13's file of {day} lacks {', '.join(lacking)}")
     report["held_columns"] = list(held)
     compared = compare_scores(scored, *reference, columns=held)
     report["held_to_step13"] = compared

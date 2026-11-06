@@ -374,8 +374,12 @@ def test_drivers_are_held_at_the_cutoff_and_where_step_13_wrote_them(
     )
     report = bootstrap.run_bootstrap(CFG, dsn, SECRET, False, stubbed, say=lambda _: None,
                                      day=earlier)  # fmt: skip
-    assert "drivers" not in report["held_columns"]
-    assert "risk_12m" in report["held_columns"]
+    assert report["held_columns"] == list(bootstrap.SCORE_COLUMNS_BEFORE_THE_CUTOFF)
+    # An earlier file without a risk column is refused, not held on what is left.
+    without.drop(columns="risk_24m").to_parquet(files / f"scores_{earlier}.parquet")
+    with pytest.raises(RefusedError, match="lacks risk_24m"):
+        bootstrap.run_bootstrap(CFG, dsn, SECRET, True, stubbed, say=lambda _: None,
+                                day=earlier)  # fmt: skip
     without.to_parquet(files / f"scores_{RELEASE}.parquet")
-    with pytest.raises(RefusedError, match="lacks"):
+    with pytest.raises(RefusedError, match="lacks drivers"):
         bootstrap.run_bootstrap(CFG, dsn, SECRET, True, stubbed, say=lambda _: None)

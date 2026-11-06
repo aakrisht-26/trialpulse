@@ -20,12 +20,15 @@ local database. In order:
    trial, read from the live tables as a full run reads them (`daily.day_features`),
    against the offline path (Step 13's code, `scoring.features.compute_served`) on the
    warehouse's versions of the feed F: every version posted on or before the start, then
-   the records the live path kept. The populations must be equal (trials, reversal, served
-   landmark index, reason), and every served feature exact. The accepted loss, offline on
-   every version against offline on F, is counted apart.
+   every record the feed sent through that day (ADR 0038 defines F by what was sent, so a
+   record the live path wrongly dropped shows as a difference). The populations must be
+   equal (trials, reversal, served landmark index, reason), and every served feature exact.
+   The accepted loss, offline on every version against offline on F, is counted apart.
 
-It prints and writes counts only (data/replay_parity/), never a trial id or a name, and
-passes when every checkpoint has no difference.
+It prints and writes counts only (data/replay_parity/), never a trial id or a name. It passes
+when it has at least one checkpoint, every checkpoint scored some trials and has no
+difference, and the live path kept every record sent with a post date after the start (a
+record of an earlier date is a re-send of the overlap, which the seed already holds).
 """
 
 import argparse
@@ -133,6 +136,30 @@ def kept_records(cur: Any, run_id: int) -> list[tuple[str, dt.date]]:
     return [(str(n), d) for n, d in rows]
 
 
+def kept_by_run(dsn: str, run_id: int) -> list[tuple[str, dt.date]]:
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as con, con.cursor() as cur:
+        return kept_records(cur, run_id)
+
+
+def live_on(
+    dsn: str, cfg: ProjectConfig, rules: CohortRules, day: dt.date, model: daily.Model
+) -> daily.DayFeatures:
+    """The live path's population and features on `day`, read as a full run reads them."""
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as con, con.cursor() as cur:
+        sponsors = store.load_file(cur)
+        return daily.day_features(cur, cfg, rules, day, sponsors, model, full=True)
+
+
+def differs(entry: Mapping[str, Any]) -> bool:
+    """Whether a checkpoint found a difference, or scored nothing to compare."""
+    return bool(entry["people"] or entry["features"] or entry["columns_live_not_offline"]
+                or not entry["scored"])  # fmt: skip
+
+
 def frame_differences(live: pd.DataFrame, offline: pd.DataFrame) -> dict[str, int]:
     """Per column, the rows whose values differ (exactly; missing equals missing)."""
     out = {}
@@ -228,10 +255,11 @@ def run_replay(
     say: Any = print,
 ) -> dict[str, Any]:
     """The replay (see the module text); returns its counts."""
-    import psycopg
 
     if cfg.dataset.cutoff is None or end > cfg.dataset.cutoff:
         raise RefusedError("the replay ends on or before the data cutoff")
+    if not checkpoints:
+        raise RefusedError("the replay needs at least one --checkpoint")
     days = run_days(start, end, missed)
     unknown = sorted(set(checkpoints) - set(days))
     if unknown:
@@ -257,8 +285,7 @@ def run_replay(
             tick = clock.perf_counter()
             report = daily.run_daily(cfg, dsn, secret, DayApi(day), model, fetch=feed.fetch)  # type: ignore[arg-type]
             seconds = round(clock.perf_counter() - tick, 1)
-            with psycopg.connect(dsn, autocommit=True) as con, con.cursor() as cur:
-                kept_now = kept_records(cur, int(report.run_id or 0))
+            kept_now = kept_by_run(dsn, int(report.run_id or 0))
             kept += kept_now
             details = report.counts.get("details", {})
             entry = {
@@ -272,7 +299,7 @@ def run_replay(
                 raise RefusedError(f"the run of {day} ended {report.status}")
             if day in checkpoints:
                 result["checkpoints"].append(
-                    checkpoint(cfg, day, dsn, model, inputs, interventions, start, feed, kept,
+                    checkpoint(cfg, day, dsn, model, inputs, interventions, start, feed,
                                memory_limit)
                 )  # fmt: skip
                 say(f"checkpoint {day}: {result['checkpoints'][-1]}")
@@ -282,8 +309,12 @@ def run_replay(
         ).fetchone()
     after = {(n, v) for (n, d), v in feed.fed.items() if d > start}
     in_window = int(posted[0]) if posted else 0
+    kept_set = set(kept)
+    sent_after = {key for key in feed.fed if key[1] > start}
     result["feed"] = {
         "records_sent": feed.sent, "records_kept": len(kept),
+        "sent_after_the_start_not_kept": len(sent_after - kept_set),
+        "kept_not_sent": len(kept_set - set(feed.fed)),
         # The pull's overlap re-sends records the seed already holds, which ingest leaves out.
         "distinct_records_sent_posted_by_the_start": sum(1 for _, d in feed.fed if d <= start),
         "distinct_versions_sent_posted_after_the_start": len(after),
@@ -292,26 +323,28 @@ def run_replay(
         "versions_never_sent": in_window - len(after),
     }  # fmt: skip
     result["seconds"]["total"] = round(clock.perf_counter() - started, 1)
-    result["passes"] = all(not c["differences"] for c in result["checkpoints"])
+    result["passes"] = bool(
+        result["checkpoints"]
+        and not any(c["differences"] for c in result["checkpoints"])
+        and not result["feed"]["sent_after_the_start_not_kept"]
+        and not result["feed"]["kept_not_sent"]
+    )
     return result
 
 
 def feed_versions(
-    warehouse: duckdb.DuckDBPyConnection,
-    start: dt.date,
-    day: dt.date,
-    feed: Feed,
-    kept: Sequence[tuple[str, dt.date]],
+    warehouse: duckdb.DuckDBPyConnection, start: dt.date, day: dt.date, feed: Feed
 ) -> pd.DataFrame:
     """The versions of the feed F through `day`: every version posted on or before the
-    start, then the versions of the records the live path kept."""
+    start, then the version of every record the feed sent with a post date through `day`."""
     before = warehouse.execute(
         f"SELECT nct_id, nct_version FROM versions WHERE effective_date <= DATE '{start}'"
     ).df()
-    after = pd.DataFrame(
-        [(n, feed.fed[(n, d)]) for n, d in kept if d <= day], columns=["nct_id", "nct_version"]
+    sent = pd.DataFrame(
+        [(n, v) for (n, d), v in sorted(feed.fed.items()) if d <= day],
+        columns=["nct_id", "nct_version"],
     )
-    return pd.concat([before, after], ignore_index=True).drop_duplicates()
+    return pd.concat([before, sent], ignore_index=True).drop_duplicates(ignore_index=True)
 
 
 def checkpoint(
@@ -323,21 +356,16 @@ def checkpoint(
     interventions: str,
     start: dt.date,
     feed: Feed,
-    kept: Sequence[tuple[str, dt.date]],
     memory_limit: str,
 ) -> dict[str, Any]:
     """The live features of every scored trial on `day` against offline(F), and the accepted
     loss (offline on every version against offline(F)), by count."""
-    import psycopg
-
     tick = clock.perf_counter()
     rules = CohortRules.from_config(cfg, cutoff=max(day, cfg.dataset.cutoff or day))
-    with psycopg.connect(dsn, autocommit=True) as con, con.cursor() as cur:
-        sponsors = store.load_file(cur)
-        live = daily.day_features(cur, cfg, rules, day, sponsors, model, full=True)
+    live = live_on(dsn, cfg, rules, day, model)
     live_seconds = clock.perf_counter() - tick
     keys = live_features.served_keys(live.scored, day, rules, cfg)
-    versions = feed_versions(feed.warehouse, start, day, feed, kept)
+    versions = feed_versions(feed.warehouse, start, day, feed)
     on_feed = offline_on(cfg, inputs.warehouse, interventions, day, keys, model.decisions,
                          versions, memory_limit)  # fmt: skip
     on_all = offline_on(cfg, inputs.warehouse, interventions, day, keys, model.decisions, None,
@@ -372,8 +400,7 @@ def checkpoint(
             "offline_all": round(on_all.seconds, 1),
         },
     }
-    entry["differences"] = bool(entry["people"] or entry["features"]
-                                or entry["columns_live_not_offline"])  # fmt: skip
+    entry["differences"] = differs(entry)
     return entry
 
 
