@@ -110,6 +110,41 @@ def test_old_rows_are_exported_verified_and_then_deleted(scratch: str, tmp_path:
     assert runs == [("succeeded",), ("succeeded",)]
 
 
+def test_versions_go_after_6_months_and_history_after_12(scratch: str, tmp_path: Path) -> None:
+    """ADR 0069: with the version months set, a version 6 to 12 months old goes and a history
+    row of the same age stays."""
+    dsn = _dsn(scratch)
+    _rows(dsn)
+    with psycopg.connect(dsn) as con:
+        consumed = con.execute("SELECT last_run_id FROM live.sponsor_file").fetchone()[0]
+        con.execute(
+            """INSERT INTO live.study_versions (nct_id, effective_date, status, title_phase,
+              intervention_types, feature_hash, run_id, ingested_at)
+            VALUES ('NCT00000001', %s, 'RECRUITING', 'NONE', '{DRUG}', %s, %s,
+              timestamptz '2027-01-01 00:00:00+00')""",
+            (AS_OF - dt.timedelta(days=270), b"m9" * 16, consumed),
+        )
+        con.execute(
+            """INSERT INTO serving.trial_score_history (nct_id, as_of_date, model_version,
+              risk_12m, risk_24m, reasons, flagged, run_id, content_hash)
+            VALUES ('NCT00000001', %s, 'trialpulse-m4/1', 0.1, 0.2, '{calendar}', false, %s, %s)""",
+            (AS_OF - dt.timedelta(days=270), consumed, b"\x02" * 32),
+        )
+        con.commit()
+    results = retention.retain(dsn, AS_OF, 12, tmp_path, version_months=6)
+    versions, history = _left(dsn)
+    nine_months = AS_OF - dt.timedelta(days=270)
+    assert ("NCT00000001", nine_months) not in versions
+    assert ("NCT00000001", nine_months) in history
+    by_table = {r.table: r for r in results}
+    assert by_table["live.study_versions"].deleted == 3  # the two old rows and the 9-month one
+    assert by_table["serving.trial_score_history"].deleted == 2
+    manifests = [json.loads(p.read_text()) for p in tmp_path.glob("*.json")]
+    assert {m["table"]: m["before"] for m in manifests} == {
+        "live.study_versions": "2027-06-15", "serving.trial_score_history": "2026-12-15"
+    }  # fmt: skip
+
+
 def test_export_only_keeps_the_rows(scratch: str, tmp_path: Path) -> None:
     dsn = _dsn(scratch)
     _rows(dsn)
@@ -232,3 +267,61 @@ def test_retention_that_lost_its_lease_deletes_nothing(
                            "WHERE job IN ('retention', 'daily') AND status <> 'succeeded' "
                            "ORDER BY run_id").fetchall()  # fmt: skip
     assert runs == [("retention", "failed", "stale lease"), ("daily", "running", None)]
+
+
+# ADR 0069: what the daily job reads of live.study_versions survives the retention -----------
+
+DAILY_READERS = {"latest_live", "versions_after", "latest_post_date", "overlap_rows"}
+
+
+def _readers_of_versions() -> set[str]:
+    """Every function of the package whose code reads live.study_versions (an INSERT is not
+    a read), but the retention itself and the laptop's replay."""
+    import ast
+
+    from trialpulse.config import REPO_ROOT
+
+    found = set()
+    for path in (REPO_ROOT / "src" / "trialpulse").rglob("*.py"):
+        if path.name in ("retention.py", "replay_parity.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                text = ast.get_source_segment(path.read_text(encoding="utf-8"), node) or ""
+                if "FROM live.study_versions" in text:
+                    found.add(node.name)
+    return found
+
+
+def test_the_daily_job_reads_versions_only_through_four_store_functions() -> None:
+    assert _readers_of_versions() == DAILY_READERS
+
+
+def _daily_reads(dsn: str) -> dict[str, Any]:
+    """What the daily job's four reads return, with the arguments it passes them."""
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        trials = [r[0] for r in cur.execute("SELECT DISTINCT nct_id FROM live.study_versions")]
+        consumed = store.load_file(cur).last_run_id
+        latest = store.latest_post_date(cur)
+        assert latest is not None
+        return {
+            "latest_live": store.latest_live(cur, trials),
+            "versions_after": store.versions_after(cur, consumed),
+            "latest_post_date": latest,
+            "overlap_rows": store.overlap_rows(cur, latest - dt.timedelta(days=3)),
+        }
+
+
+def test_retention_at_6_months_deletes_no_version_the_daily_job_reads(
+    scratch: str, tmp_path: Path
+) -> None:
+    """Every read the daily job makes of live.study_versions gives the same answer before and
+    after the versions older than 6 months are deleted. A trial's newest row and the rows the
+    sponsor pass has not consumed are what it reads, and the retention keeps both."""
+    dsn = _dsn(scratch)
+    _rows(dsn)
+    before = _daily_reads(dsn)
+    results = retention.retain(dsn, AS_OF, 12, tmp_path, version_months=6)
+    assert {r.table: r.deleted for r in results}["live.study_versions"] == 2
+    assert _daily_reads(dsn) == before

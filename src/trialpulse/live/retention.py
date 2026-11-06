@@ -3,9 +3,11 @@
     uv run python -m trialpulse.live.retention --target neon
     uv run python -m trialpulse.live.retention --target neon --export-only
 
-Run by hand on the laptop when the daily job's alert reports 600 MB (never by the job: at the
-cap deletes fail too, and nothing is deleted without a confirmed export). For each table,
-the rows older than `live.retention_months` before `--as-of` (default today):
+Run by hand on the laptop at the start of every month (ADR 0069), and whenever the daily job's
+alert reports 600 MB; never by the job (at the cap deletes fail too, and nothing is deleted
+without a confirmed export). For each table, the rows older than its months before `--as-of`
+(default today): `live.retention_months` (12) for score history and
+`live.version_retention_months` (6) for versions:
 
 - `serving.trial_score_history`, except each trial's newest row, which the next publication
   compares with (the last history row of an earlier day);
@@ -120,6 +122,9 @@ class Exported:
     deleted: int
 
 
+VERSIONS = "live.study_versions"
+
+
 def retain(
     dsn: str,
     as_of: dt.date,
@@ -127,13 +132,18 @@ def retain(
     out_dir: Path,
     export_only: bool = False,
     stale_minutes: int = 120,
+    version_months: int | None = None,
 ) -> list[Exported]:
-    """Export, verify and (unless `export_only`) delete the old rows of every table."""
+    """Export, verify and (unless `export_only`) delete the old rows of every table: those
+    older than `months`, or for `live.study_versions` than `version_months` when given."""
     import psycopg
 
     if os.environ.get("GITHUB_ACTIONS"):
         raise RefusedError("retention exports rows to the laptop; it never runs on a runner")
     cutoff = add_months(as_of, -months)
+    cutoffs = {t.name: cutoff for t in TABLES}
+    if version_months is not None:
+        cutoffs[VERSIONS] = add_months(as_of, -version_months)
     out_dir.mkdir(parents=True, exist_ok=True)
     results: list[Exported] = []
     with psycopg.connect(dsn, connect_timeout=10, autocommit=True) as con:
@@ -144,14 +154,19 @@ def retain(
                 run_id = store.start_run(cur, "retention", "retention", as_of, stale_minutes)
         try:
             for table in TABLES:
-                results.append(_one(con, table, cutoff, run_id, out_dir, export_only))
+                results.append(_one(con, table, cutoffs[table.name], run_id, out_dir,
+                                    export_only))  # fmt: skip
         except BaseException:
             from trialpulse.live.daily import record_failure
 
             record_failure(dsn, run_id, {}, "retention failed")
             raise
         with con.cursor() as cur, con.transaction():
-            details = {r.table: {"rows": r.rows, "deleted": r.deleted} for r in results}
+            details = {
+                r.table: {"rows": r.rows, "deleted": r.deleted,
+                          "before": cutoffs[r.table].isoformat()}
+                for r in results
+            }  # fmt: skip
             store.finish_run(cur, run_id, "succeeded", {"watermark_to": cutoff,
                                                         "details": details})  # fmt: skip
     return results
@@ -219,7 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cfg = load_project_config()
     for result in retain(_dsn(args.target), args.as_of, cfg.live.retention_months, args.out,
-                         args.export_only, cfg.live.lease_stale_minutes):  # fmt: skip
+                         args.export_only, cfg.live.lease_stale_minutes,
+                         cfg.live.version_retention_months):  # fmt: skip
         where = result.path.name if result.path else "nothing to export"
         print(f"{result.table}: {result.rows} rows exported ({where}), {result.deleted} deleted")
     return 0

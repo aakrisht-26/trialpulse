@@ -200,7 +200,8 @@ class LiveConfig(_Section):
     page_size: int = Field(gt=0, le=1000)
     requests_per_minute: float = Field(gt=0, le=40)
     retention_alert_mb: tuple[PositiveInt, ...] = Field(min_length=1)
-    retention_months: PositiveInt  # rows older than this are exported, then deleted
+    retention_months: PositiveInt  # history rows older than this are exported, then deleted
+    version_retention_months: PositiveInt  # the same for live.study_versions (ADR 0069)
 
     @model_validator(mode="after")
     def _kill_after_alarm(self) -> Self:

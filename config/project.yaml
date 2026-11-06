@@ -99,7 +99,8 @@ live:
   page_size: 1000                # API v2 clamps larger values
   requests_per_minute: 40        # CLAUDE.md Section 7
   retention_alert_mb: [600, 700]
-  retention_months: 12
+  retention_months: 12           # score history kept on Neon (ADR 0045)
+  version_retention_months: 6    # live.study_versions kept on Neon (ADR 0069)
 
 # The read-only API (ADR 0049).
 api:
