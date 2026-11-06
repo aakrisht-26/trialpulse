@@ -2500,6 +2500,39 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
 
+## Step 14, phase B on the laptop (2026-11-06)
+
+Aakrisht approved phase A on 2026-11-06, the Docker repair included, and set five items in order: `SPONSOR_ID_KEY`, an independent check of items 3 and 4, the full replay (option A), the Neon estimate redone from the rows as built, and a timed 10 MB copy on Neon. Neon is migrated and the real bootstrap run only after his decisions.
+
+**Housekeeping he asked for.** The renamed Docker folder (`docker-secrets-engine.stale-20261104`) could not be deleted: Windows refuses with error 1920 ("the file cannot be accessed by the system") under Remove-Item, rmdir, fsutil and Python alike. The cause is not established; I will try again after his next restart. Nothing depends on it. `data/warehouse_schema3.duckdb` is kept until the replay passes (item 3).
+
+### Item 1: `SPONSOR_ID_KEY`
+
+Generated as 32 random bytes (256 bits) from Python's `secrets`, written straight into `.env` by a script that neither read nor printed any value. `Secrets().sponsor_id_key` loads it. He backs it up; nothing to commit (`.env` is ignored).
+
+### Item 2: the independent check of items 3 and 4
+
+One reviewer, read-only, against ADRs 0038 and 0042, with 33 deliberate faults (mutants) in a scratch clone outside the repository; the repository was left clean. It ran no census, replay, build or network call. Its verdict: both recorded results stand and nothing is fatal, but nine gaps were fixable. I checked each against the code; all nine hold.
+
+| Finding | Held? | Dealt with |
+| --- | --- | --- |
+| F1. The replay built offline(F) from the records the live path kept, not those sent, so a record ingest wrongly dropped would vanish from both sides and pass (ADR 0038 defines F by the feed) | Yes. The recorded segment is unaffected: 1,186 sent after the start, 1,186 kept | F is every version posted by the start plus every record sent through the day; a record sent after the start but not kept fails the replay (`c37c7fd`) |
+| F2. Six mutants of the replay's core survived its tests: F without the pre-start versions, F of the wrong records, the checkpoint read not as a full run, the verdict ignoring features, a NaN-lenient comparison, the feed without its day bound | Yes | New tests drive `run_replay` with the job, the live read and the offline path stood in for, and test the live read, the day bound and NaN against a value (`c37c7fd`) |
+| F3. The census reads the API's raw values through `API_V2_PATHS`, the table the conversion uses, so a wrong path would be counted as registry changes, with no bound | Yes | Registry causes in one column above 2% of the unchanged trials (and above 100 trials) fail the census; the largest real share is 0.94% (sponsor names). A test checks every shared path on records API v2 returned (`ae57c89`) |
+| F4. A missing raw_versions row, core-file sponsor name or interventions config row gave a registry cause in three rules, not `NO_RAW` | Yes | Each now gives `NO_RAW`, which fails (`ae57c89`) |
+| F5. No test had a date, precision or age difference | Yes | Tests in both directions (`ae57c89`) |
+| F6. A differing trial missing on the second read was set aside and never failed | Yes. 0 in the real run | Missing fails; a trial whose record changed since the pull is still set aside and counted (`ae57c89`) |
+| F7. With records equal to the API's total, a repeated id could hide a record never pulled | Yes. 0 repeated and 0 unreadable in the real run | A repeated id or an unreadable record fails the census (`ae57c89`) |
+| F8. A replay without `--checkpoint` reported a pass, and a checkpoint that scored nothing passed | Yes | The replay refuses without a checkpoint, and a checkpoint with nothing scored is a difference (`c37c7fd`) |
+| F9. Before the cutoff, the bootstrap was held on whatever columns Step 13's file had, which could be none | Yes | Before the cutoff it requires every column but drivers (`c37c7fd`) |
+| F10. "Every unchanged trial" of ADR 0042: the census covers open or UNKNOWN interventional records only, while the daily pull also converts closed ones | Wording; the scope was flagged in item 3 | Stated here as a scope limit of the census: closed records (terminal statuses, ACTUAL enrollment, why-stopped text) are checked only by the conversion tests and the replay, which feeds them from the warehouse. Adding them to a census at the Neon bootstrap is his choice |
+| F11. "1,531 differ in a field a served feature reads" includes 122 trials whose compact row is unchanged | Wording | Corrected: 1,531 trials differ in a source field of the compact row; 1,409 of them have a feature hash apart, and 122 an equal one (title text changed, the title phase the same) |
+| F12. "58 served features" against ADR 0038's 54; the seeded 50 is a seeded draw from that day's unchanged trials | Wording | Corrected: the replay compares 58 columns, every non-text feature column of the registry that the offline frame holds. M4's 54 features are among them (the model file's 54 names are all registry columns, and its 55th input is the interval, which no frame holds); the other 4 are computed but not used by M4. The reviewer's reading (interval and index columns) did not hold. The seeded 50 is reproducible for a given set of unchanged trials, not the same 50 trials on another day |
+
+After the fixes, the same 17 surviving mutants (the reviewer's 12 plus my 5 for the new checks) were run against the new tests: 17 of 17 killed. Two of the reviewer's Postgres mutants were inconclusive (its 1,500 s timeout); the one on held columns is among the 17. The full suite with Postgres required: 1,504 passed, none skipped (626.6 s, log `data/logs/suite_phaseB_20261106.log`).
+
+**Decision made without asking (flagged):** the bound of F3 is 2% of the unchanged trials and at least 100 trials. It only adds a failure; the census of 2026-11-04 passes under it.
+
 ## Step 14, phase A on the laptop (2026-11-04)
 
 Aakrisht's phase A, item by item, on this laptop and the local Postgres only (nothing on Neon). His two decisions came first: the seeded test database draws its risks from integers, and the stubs were recorded again once (`b7edd2a`; the stub test passes here and in CI, 1,410 passed on Linux); the bootstrap writes in one transaction with every row prepared first (W1), timed on the local Postgres first, and if the write to Neon would take more than about 2 minutes, the work stops for him before any switch to W2.
