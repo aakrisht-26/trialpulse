@@ -1,10 +1,11 @@
 # The read-only API of Step 15 (CLAUDE.md Section 13). It installs the `api` dependency group
 # only: no model, no dataset client, no offline code. It holds no data and no secret; the
-# database URL comes from the platform's secret store (API_DATABASE_URL, ADR 0049).
+# database URL comes from the platform's secret store (API_DATABASE_URL, ADR 0049). It listens on
+# PORT, 10000 by default as on Render (ADR 0065, render.yaml).
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
-    PYTHONPATH=/app/src PORT=7860
+    PYTHONPATH=/app/src PORT=10000
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
@@ -25,5 +26,5 @@ COPY src/ src/
 RUN useradd --create-home --uid 1000 api
 USER api
 
-EXPOSE 7860
+EXPOSE 10000
 CMD ["sh", "-c", "exec uvicorn trialpulse.api.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]

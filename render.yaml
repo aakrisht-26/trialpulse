@@ -1,0 +1,27 @@
+# Render Blueprint for the read-only API of Step 15 (ADR 0065). Field names follow Render's
+# Blueprint specification: https://render.com/docs/blueprint-spec
+#
+# It holds no secret. API_DATABASE_URL (Neon's pooled URL for the API's read-only role, ADR
+# 0049 and ADR 0064) is marked `sync: false`: Render asks for its value once, when the
+# Blueprint is first created in the dashboard, and never reads it from this file.
+services:
+  - type: web
+    name: trialpulse-api
+    runtime: docker
+    plan: free
+    # Neon's project is in AWS us-east-1 (N. Virginia); the region cannot change later.
+    region: virginia
+    branch: main
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    # Render's HTTP health check: a 2xx or 3xx within five seconds passes
+    # (https://render.com/docs/health-checks). /health never touches Neon (ADR 0049).
+    healthCheckPath: /health
+    # Deploys only after CI passes on main.
+    autoDeployTrigger: checksPass
+    envVars:
+      # Render routes public traffic to the port in PORT (https://render.com/docs/web-services).
+      - key: PORT
+        value: "10000"
+      - key: API_DATABASE_URL
+        sync: false

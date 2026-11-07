@@ -2583,6 +2583,21 @@ Differences by column and cause (all traced to raw values; none a bug):
 
 The code is built and tested on synthetic data (above); the local rehearsal (rebootstrap, reference check, loads, the first catch-up run, the no-op run, storage) waits for the decision on Track 2. ADR 0074 (Proposed) records the design. No Neon runbook is written, since it would rest on a rehearsal that did not run.
 
+### Track 4: deployment prepared, not deployed: done
+
+Nothing was deployed and no account was touched. Sources: Render's documentation (web services, Docker, Blueprint specification, health checks, free instances, environment variables) and Streamlit's (deploy, app dependencies, file organization, secrets management, multipage apps), read on 2026-11-08 and cited in `docs/deploy.md`.
+
+- **The API on Render** (ADR 0065):
+  - `render.yaml`: one free web service, `trialpulse-api`, runtime docker from `./Dockerfile.api` (context `.`), region `virginia` (Neon is in AWS us-east-1; the region is fixed at creation), branch `main`, `healthCheckPath: /health`, `autoDeployTrigger: checksPass`, `PORT` 10000 and `API_DATABASE_URL` with `sync: false` (Render asks for it once at Blueprint creation; no value in the file).
+  - `Dockerfile.api`: the default `PORT` is now 10000 (Render's default) instead of 7860 (the Hugging Face plan); it still binds `0.0.0.0:${PORT}`.
+  - `tests/api/test_render.py` (4 tests): the Blueprint's service, health check and port, no URL or password in the file, and a `.dockerignore` allowlist that can never let `data/` or `.env` into the build context.
+  - **Local image check:** `docker build -f Dockerfile.api -t trialpulse-api .` succeeded. Inside the image, `/app` holds `config`, `pyproject.toml`, `src`, `uv.lock` (147 files): no `data/`, no `.env`, and no `.env`, `.duckdb` or `.parquet` file anywhere outside site-packages. Run against the local Postgres with the API's local role (`api_role --target local`, its URL written to a scratch file, never printed, deleted after): `/health` 200, `/docs` 200, `/v1/trials/<a scored trial>/risk` 200 with both risks, 5 drivers per horizon, the flag and `trialpulse-m4/1`. The local container's port mapping is `-p 8000:10000`.
+  - **The X-Forwarded-For measurement:** `scripts/measure_forwarded.py` (2 tests) sends 70 requests to `/v1/model` plain, then with forged entries, and counts answers by status; `docs/deploy.md` says how to read it (the rate limit runs before the cache, so the measurement is black-box and needs no code change on the service).
+- **The dashboard on Streamlit Community Cloud:** entry `app/Home.py`, Python 3.12, the secret `API_URL`. `app/requirements.txt` already holds only `httpx`, `plotly` and `streamlit` at `uv.lock`'s versions (held by `tests/app/test_imports.py`); Community Cloud reads the entry point's folder before the repository's root, so it wins over the root's `uv.lock`. **Local check** against the local API (port 8501): Overview, Portfolio, Trial detail (score card, drivers, timeline), Landscape, Why trials stop and Model health all loaded, each with the notice and the attribution. With the API stopped, a new trial showed "The API service is starting (it sleeps when idle); retrying in 5 seconds.", and after about 3 minutes "The API did not answer within about 3 minutes..." with a "Try again" button, no traceback.
+- **`docs/deploy.md`:** the click-by-click runbook for Render and Community Cloud with placeholders only, where each secret goes, and what to check after each step.
+
+Decisions made on my own: region `virginia` (from the Neon host's region token, read without printing the URL); `autoDeployTrigger: checksPass` rather than `commit`; the default port moved to 10000. Note: CLAUDE.md's Step 15 verify line (`docker run --rm -p 8000:8000 ...`) predates ADR 0065; with the image's port it is `-p 8000:10000`.
+
 ## Step 14, the gap read of ADR 0041 (2026-11-07): stopped at item 3, the schema comparison
 
 Laptop only; Neon untouched; `daily.yml` disabled; no deployment. Code in `src/trialpulse/gap/` (pull, release, adapter), each refusing under GitHub Actions, and kept out of every workflow's imports (`tests/test_workflows.py`). Everything read sits under `data/gap/` and `data/raw/history/<commit>/`, gitignored.
