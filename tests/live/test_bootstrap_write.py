@@ -147,6 +147,26 @@ def test_the_write_receives_prepared_rows_and_computes_nothing(
     assert counts["live.sponsor_file"] == 1
 
 
+def test_a_rebootstrap_keeps_the_labels_end_apart_from_its_own_date(dsn: str) -> None:
+    """ADR 0074: a bootstrap seeded after the pinned cutoff writes the reason counts with the
+    date their labels end, not its own date, so later early stops count as unlabeled."""
+    seeded = _seeded()
+    labels_end = RELEASE - dt.timedelta(days=40)
+    with psycopg.connect(dsn, autocommit=True) as con:
+        run_id = _lease(con)
+        with con.cursor() as cur:
+            rows = store.prepare_bootstrap(cur, run_id, RELEASE, seeded.wides, seeded.sponsors,
+                                           seeded.markers, _scored(seeded), REASONS,
+                                           labeled_through=labels_end)  # fmt: skip
+            with con.transaction():
+                store.load_bootstrap(cur, rows)
+            labeled = con.execute("SELECT labeled_through FROM serving.data_status").fetchone()
+            run = con.execute("SELECT watermark_to FROM monitoring.pipeline_runs "
+                              "WHERE run_id = %s", (run_id,)).fetchone()  # fmt: skip
+    assert labeled == (labels_end,)
+    assert run == (RELEASE,)  # the watermark is still the bootstrap's own date
+
+
 def test_the_write_is_all_or_nothing(dsn: str) -> None:
     seeded = _seeded()
     with psycopg.connect(dsn, autocommit=True) as con:

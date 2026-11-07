@@ -493,6 +493,7 @@ class BootstrapRows:
     file: tuple[Any, ...]  # the values of the sponsor file's row (`file_values`)
     reasons: tuple[tuple[dt.date, str, str, int], ...] | None
     trials: int
+    labeled_through: dt.date | None = None  # the reason counts' end, if not `release`
 
     def sizes(self) -> dict[str, dict[str, int]]:
         """Rows and bytes sent for each table (the sponsor file as its row's content)."""
@@ -543,6 +544,7 @@ def prepare_bootstrap(
     markers: Mapping[str, Sequence[tuple[dt.date, int]]],
     scored: "Scored | None" = None,
     reasons: Sequence[tuple[dt.date, str, str, int]] | None = None,
+    labeled_through: dt.date | None = None,
 ) -> BootstrapRows:
     """Every row of the bootstrap's write, made with no transaction open (ADR 0058): the wide
     rows, the amendment markers and, with `scored`, the release date's scores as first
@@ -569,6 +571,7 @@ def prepare_bootstrap(
         file=file_values(sponsors),
         reasons=None if reasons is None else tuple(reasons),
         trials=len(wides),
+        labeled_through=labeled_through,
     )
 
 
@@ -598,7 +601,7 @@ def load_bootstrap(cur: Any, rows: BootstrapRows, rebuild: bool = False) -> int:
             copy.write(payload.data)
     _write_file(cur, rows.file)
     if rows.reasons is not None:
-        reason_counts.load(cur, rows.reasons, rows.release)
+        reason_counts.load(cur, rows.reasons, rows.labeled_through or rows.release)
     details = {"trials": rows.trials, "rows": {p.table: p.rows for p in rows.copies}}
     finish_run(cur, rows.run_id, "succeeded", {"watermark_to": rows.release, "details": details})
     return rows.run_id

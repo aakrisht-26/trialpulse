@@ -329,6 +329,8 @@ class Inputs:
     decisions: Path
     outcomes: Path
     scores_dir: Path
+    interventions: str | None = None  # the config that goes with `warehouse` (ADR 0074)
+    reasons_warehouse: Path | None = None  # the reason counts' warehouse, if not `warehouse`
 
     @classmethod
     def default(cls) -> "Inputs":
@@ -382,10 +384,15 @@ def run_bootstrap(
     inputs: Inputs,
     say: Callable[[str], None] = print,
     day: dt.date | None = None,
+    labeled_through: dt.date | None = None,
 ) -> dict[str, Any]:
     """The bootstrap (see the module text); returns its report. It is dated the data cutoff;
     the replay of parity layer 2 (`live.replay_parity`) dates it earlier, on a day whose
-    Step 13 files exist, so that the daily job can run forward to the cutoff."""
+    Step 13 files exist, so that the daily job can run forward to the cutoff. The
+    rebootstrap of ADR 0074 passes a configuration whose cutoff is its seed date, the
+    reference files of that date as `inputs.scores_dir`, and the pinned cutoff as
+    `labeled_through` (the reason labels end there, ADR 0050); by default it is the
+    bootstrap's own date."""
     import psycopg
 
     from trialpulse.live import daily, reasons
@@ -427,7 +434,8 @@ def run_bootstrap(
         check(cur)
     stage, tick = "scores", clock.perf_counter()
     try:
-        scored = offline.score(cfg, day, bundle, decisions, warehouse=inputs.warehouse)
+        scored = offline.score(cfg, day, bundle, decisions, warehouse=inputs.warehouse,
+                               interventions=inputs.interventions)  # fmt: skip
     except Exception as exc:  # no lease is held yet, so there is no run row to fail
         raise daily.JobFailedError(daily.failure_line(stage, exc), type(exc).__name__) from None
     # Step 13 wrote drivers into the cutoff's file only; an earlier date (the replay of
@@ -487,7 +495,8 @@ def run_bootstrap(
                                        "no wide row")  # fmt: skip
                 frame["content_hash"] = frame["nct_id"].map(hashes)
             with keep_alive(con, keepalive):  # the reason counts read the dataset's files
-                counts = reasons.counts_from_files(inputs.warehouse, inputs.outcomes)
+                counts = reasons.counts_from_files(inputs.reasons_warehouse or inputs.warehouse,
+                                                   inputs.outcomes)  # fmt: skip
             report["counts"].update(scored=len(scored.scores), unscored=len(scored.unscored),
                                     reason_count_rows=len(counts),
                                     labeled_early_stops=sum(c[3] for c in counts))  # fmt: skip
@@ -496,7 +505,8 @@ def run_bootstrap(
 
             stage, tick = "prepare", clock.perf_counter()
             rows = store.prepare_bootstrap(cur, run_id, day, streamed.wides, streamed.sponsors,
-                                           streamed.markers, scored, counts)  # fmt: skip
+                                           streamed.markers, scored, counts,
+                                           labeled_through)  # fmt: skip
             del streamed, scored, hashes
             gc.collect()
             renew()

@@ -2531,6 +2531,58 @@ Unattended run on the laptop (charger in). No Neon write, no deployment, `daily.
 
 Logs: `data/logs/failed_review_measure_20261108.log`, `data/logs/census_20261108.log`, `data/logs/track1_tests_20261108.log`.
 
+### Track 2: the gap read, items 4 to 6: STOPPED at item 4 (agreement 99.8131%, below 99.9%)
+
+`uv run python -m trialpulse.gap.compare` (762 s): the release adapted under ADR 0073 (74 s), its canonical rows built by the pinned warehouse's own build into data/gap/release/warehouse.duckdb (488 s; 4,476,761 versions of 610,078 trials, 0 quarantined), then the overlap check against the pinned warehouse. Counts in data/gap/overlap.json and data/logs/gap_compare_20261108.log.
+
+| Overlap, versions posted by the cutoff | Count |
+| --- | --- |
+| Keys in either / both | 4,445,303 / 4,444,541 |
+| Pinned only (not in the release) / release only (not in the pinned revision) | 1 / 761 |
+| Content hash equal | 4,384,623 of 4,444,541 |
+| Agree on every column a served feature reads (titles by phase, status by the submitted status) | 4,436,993 |
+| **Agreement** | **99.8131%** (bar: 99.9%) |
+| Bugs (same raw value, another canonical value) | 0 |
+
+Differences by column and cause (all traced to raw values; none a bug):
+
+| Column | Versions | Cause |
+| --- | --- | --- |
+| `sponsor_key` | 7,437 (4,477 trials) | the release holds another sponsor name |
+| `lead_sponsor_name` | 7,606 | the same |
+| `sponsor_is_individual` | 11 | the same |
+| `overall_status`, `last_known_status` | 13,912 | the registry's UNKNOWN label only (the submitted status is equal; agrees) |
+| `effective_date_type` | 22,797 | the failed-review versions: the release has no post-date type for them (no feature reads it) |
+| `organization_class` / `lead_sponsor_class` / `healthy_volunteers` | 103 / 80 / 40 | the release changed the raw value |
+| Titles | 1,293 official, 653 brief | text only; **no title states another phase** |
+| Summary, eligibility, why stopped | 14,480 / 13,727 / 22 | text; no served feature reads them |
+
+**Why it is below the bar: sponsor names.** Without the sponsor columns, agreement is 99.980% (146 versions differ in another feature column). Checked read-only (counts only):
+
+- 7,226 of the 7,437 differing keys are another name in letters; 195 differ with non-ASCII characters, 11 by the individual rule, 5 by accents only. They span every post year from 2005.
+- 4,452 of the 4,477 trials differ on their **latest** pinned version too, so the release did not invent per-version names: it holds another name across the history.
+- In the kept API pull, 103 of these trials have a record: **API v2's current sponsor key equals the release's in 102 and the pinned revision's in 0** (1 neither).
+- So the registry renamed these sponsors without a new version, and the newer scrape shows the new name on every version. It is the same kind of change as the census's "registry: another name" (1,395 open trials), but across closed trials too.
+- 94 of the 4,477 trials have gap rows; for those, pinned rows and gap rows would carry two names.
+
+**What stopped:** per the instruction, Tracks 2 and 3. The gap store (item 5), parity layer 5b (item 6) and the local rebootstrap rehearsal were **not run**. Nothing pinned or registered was touched; the release warehouse sits apart under data/gap/release/.
+
+**Built and tested, not run on real rows** (synthetic tests only):
+
+- `gap/compare.py`: the overlap check and the gap store (5 tests).
+- `gap/parity.py`: parity layer 5b (hidden versions by cause, records the release lacks by post date, field differences, served features on two feeds, the analog scaled to the gap's 40 days: 10,596 hidden versions and 2,944 scored rows) (5 tests).
+- `gap/rebootstrap.py`: combine, reference, bootstrap and check steps (ADR 0074, Proposed) (5 tests), with `score(interventions=...)`, `bootstrap.Inputs.interventions` and `reasons_warehouse`, and `labeled_through` kept apart from the bootstrap's date (1 Postgres test).
+
+**Decision for Aakrisht (the stop).** How to read the overlap:
+
+- **(a) Recommended:** treat sponsor renames as the census treats them, counted by cause and not failed (the API confirms the release in 102 of 103), and judge the overlap on the other feature columns (99.980%, above the bar). The rebootstrap then keeps the pinned names on pinned rows; the 94 trials with gap rows show a sponsor change at their first gap version, as the live path would show it on their next update. Needs an ADR amending the gap read's item 4.
+- **(b)** Same as (a), but also take the release's names onto the pinned rows of the 4,477 trials in the live state only (never the warehouse or the registered results), so the state matches API v2 from day one.
+- **(c)** Fall back to Gap (a) of ADR 0041: no gap rows, the state stays at the cutoff, and the first daily run catches up from API v2 alone.
+
+### Track 3: the rebootstrap rehearsal: NOT RUN (depends on Track 2)
+
+The code is built and tested on synthetic data (above); the local rehearsal (rebootstrap, reference check, loads, the first catch-up run, the no-op run, storage) waits for the decision on Track 2. ADR 0074 (Proposed) records the design. No Neon runbook is written, since it would rest on a rehearsal that did not run.
+
 ## Step 14, the gap read of ADR 0041 (2026-11-07): stopped at item 3, the schema comparison
 
 Laptop only; Neon untouched; `daily.yml` disabled; no deployment. Code in `src/trialpulse/gap/` (pull, release, adapter), each refusing under GitHub Actions, and kept out of every workflow's imports (`tests/test_workflows.py`). Everything read sits under `data/gap/` and `data/raw/history/<commit>/`, gitignored.

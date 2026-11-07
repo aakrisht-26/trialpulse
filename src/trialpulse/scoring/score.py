@@ -137,10 +137,13 @@ def score(
     warehouse: Path = WAREHOUSE_PATH,
     with_drivers: bool = True,
     only: set[str] | None = None,
+    interventions: str | None = None,
 ) -> Scored:
     """The served scores of every open trial on `day` (see the module text). With `only`,
     the scores of those trials alone (the population and its reasons are still decided on
-    every trial; the parity test uses it to stay small)."""
+    every trial; the parity test uses it to stay small). `interventions` is the glob of the
+    interventions config that goes with `warehouse` (by default the pinned revision's; the
+    rebootstrap of ADR 0074 passes the combined one)."""
     if tuple(cfg.horizons_months) != HORIZONS:
         raise RefusedError(
             f"the served scores hold the horizons {HORIZONS} (risk_12m and risk_24m); "
@@ -149,7 +152,8 @@ def score(
     seconds: dict[str, float] = {}
     started = clock.perf_counter()
     rules = CohortRules.from_config(cfg, cutoff=max(day, cfg.dataset.cutoff or day))
-    interventions = config_glob(RAW_HISTORY_DIR, str(cfg.dataset.revision), "interventions")
+    if interventions is None:
+        interventions = config_glob(RAW_HISTORY_DIR, str(cfg.dataset.revision), "interventions")
     con = served_features.open_session(rules, warehouse, interventions)
     build_cohort_states(con, rules)
     people = classify(population(con, rules, day), day, rules, decisions)
