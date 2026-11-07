@@ -63,3 +63,45 @@ def test_migrate_upgrades_the_explicit_url_and_never_reads_database_url(
     explicit = scratch.replace("postgresql+psycopg://", "postgresql://", 1)
     assert migrate.upgrade(explicit) == ("0005", "0006")
     assert migrate.upgrade(explicit) == ("0006", "0006")
+
+
+def _secrets_with(monkeypatch: pytest.MonkeyPatch, url: str | None) -> None:
+    from pydantic import SecretStr
+
+    import trialpulse.config as config
+
+    class Fake:
+        neon_database_url = SecretStr(url) if url is not None else None
+
+    monkeypatch.setattr(config, "Secrets", lambda: Fake())
+
+
+def test_from_env_reads_neon_database_url_and_never_prints_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(migrate, "upgrade", lambda url: seen.append(url) or ("0005", "0006"))
+    monkeypatch.setattr(migrate.getpass, "getpass", lambda *a: pytest.fail("prompted"))
+    _secrets_with(monkeypatch, NEON)
+    assert migrate.main(["--from-env"]) == 0
+    assert seen == [NEON]
+    printed = capsys.readouterr().out
+    assert printed.strip() == "migrated from revision 0005 to 0006"
+    assert "secret" not in printed
+
+
+def test_from_env_refuses_a_pooled_url_and_a_missing_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    _secrets_with(monkeypatch, NEON.replace("ep-example-123.", "ep-example-123-pooler."))
+    with pytest.raises(RefusedError, match="pooled"):
+        migrate.main(["--from-env"])
+    _secrets_with(monkeypatch, None)
+    with pytest.raises(RefusedError, match="not set"):
+        migrate.main(["--from-env"])
+
+
+def test_the_prompt_stays_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(migrate.getpass, "getpass", lambda *a: "prompted-url")
+    seen: list[str] = []
+    monkeypatch.setattr(migrate, "upgrade", lambda url: seen.append(url) or (None, "0006"))
+    assert migrate.main([]) == 0
+    assert seen == ["prompted-url"]

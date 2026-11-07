@@ -1,9 +1,12 @@
 """Migrate the live database on Neon (ADR 0062).
 
     uv run python -m trialpulse.live.migrate
+    uv run python -m trialpulse.live.migrate --from-env
 
 Asks for the database's direct URL at a prompt that does not echo it, so it never lands in
-the shell's history, and runs `alembic upgrade head` on it. DATABASE_URL is never read: it
+the shell's history, and runs `alembic upgrade head` on it. With `--from-env` it reads
+NEON_DATABASE_URL from the environment or `.env` instead (where a shell cannot answer the
+prompt), with the same refusals. DATABASE_URL is never read: it
 names the local Postgres only, and `alembic/env.py` refuses it when it names any other host.
 Neon's pooled URL (a host with `-pooler`) is refused: a migration needs the direct URL, as
 the daily job does (`NEON_DATABASE_URL`, ADR 0045). The URL is never printed; the revision
@@ -63,8 +66,18 @@ def upgrade(url: str, target: str = "head") -> tuple[str | None, str | None]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Migrate the live database on Neon.")
-    parser.parse_args(argv)
-    url = getpass.getpass("Neon's direct URL (not echoed, never stored): ")
+    parser.add_argument("--from-env", action="store_true",
+                        help="read NEON_DATABASE_URL from the environment or .env")  # fmt: skip
+    args = parser.parse_args(argv)
+    if args.from_env:
+        from trialpulse.config import Secrets
+
+        secret = Secrets().neon_database_url
+        if secret is None:
+            raise RefusedError("NEON_DATABASE_URL is not set (environment or .env)")
+        url = secret.get_secret_value()
+    else:
+        url = getpass.getpass("Neon's direct URL (not echoed, never stored): ")
     before, after = upgrade(url)
     print(f"migrated from revision {before} to {after}")
     return 0
