@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041) stopped at the schema comparison: the API pull and the release pin done, the adapter built; decisions on unlisted columns and failed-review versions waiting for Aakrisht. `daily.yml` disabled |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; the overlap check stopped at 99.8131% agreement (bar 99.9%) from registry sponsor renames, so the gap store, parity 5b and the rebootstrap rehearsal (ADR 0074, Proposed) wait for a decision. Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2578,6 +2578,12 @@ Differences by column and cause (all traced to raw values; none a bug):
 - **(a) Recommended:** treat sponsor renames as the census treats them, counted by cause and not failed (the API confirms the release in 102 of 103), and judge the overlap on the other feature columns (99.980%, above the bar). The rebootstrap then keeps the pinned names on pinned rows; the 94 trials with gap rows show a sponsor change at their first gap version, as the live path would show it on their next update. Needs an ADR amending the gap read's item 4.
 - **(b)** Same as (a), but also take the release's names onto the pinned rows of the 4,477 trials in the live state only (never the warehouse or the registered results), so the state matches API v2 from day one.
 - **(c)** Fall back to Gap (a) of ADR 0041: no gap rows, the state stays at the cutoff, and the first daily run catches up from API v2 alone.
+
+### Decisions waiting for Aakrisht (overnight run of 2026-11-08)
+
+1. **How to read the overlap check** (Track 2): (a) sponsor renames counted by cause, not failed, judged on the other feature columns at 99.980% (recommended; needs an ADR amending the gap read's item 4); (b) as (a), with the release's names on the pinned rows of the 4,477 trials in the live state only; (c) Gap (a) of ADR 0041.
+2. **ADR 0074 (Proposed):** the rebootstrap from pinned plus gap rows, its reference files and its reference check; the seed date to be chosen from parity layer 5b.
+3. **The choices made on my own** in each track below (listed there), above all the region `virginia` and `autoDeployTrigger: checksPass` in render.yaml.
 
 ### Track 3: the rebootstrap rehearsal: NOT RUN (depends on Track 2)
 

@@ -26,6 +26,9 @@ FORBIDDEN_MODULES = (
     "trialpulse.gap.pull",
     "trialpulse.gap.release",
     "trialpulse.gap.adapter",
+    "trialpulse.gap.compare",
+    "trialpulse.gap.parity",
+    "trialpulse.gap.rebootstrap",
     "huggingface_hub",
 )
 FORBIDDEN_TEXT = ("hf://", "huggingface.co", "data/raw", "HF_TOKEN")
