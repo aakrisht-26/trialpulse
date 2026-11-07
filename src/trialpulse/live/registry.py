@@ -15,6 +15,7 @@ SHA-256 is not that of the file the day-0 check validated.
 """
 
 import argparse
+import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -22,7 +23,7 @@ from typing import Any
 
 from trialpulse import tracking
 from trialpulse.cli import RefusedError, run
-from trialpulse.scoring.bundle import MODEL_NAME, sha256_of
+from trialpulse.scoring.bundle import META, MODEL_NAME, sha256_of
 
 DECISIONS = "step13_checks.json"
 # Step 13's result file (data/results/checks/step13_checks.json), as the day-0 check of
@@ -30,13 +31,30 @@ DECISIONS = "step13_checks.json"
 DECISIONS_SHA256 = "dae12abbd54096e3ac4f8d76282fe61bc63e1f3526f7d57df0cdbd44cbe9a928"
 
 
-def fetch(alias: str, folder: Path) -> list[str]:
-    import mlflow
+def fetch(alias: str, folder: Path, client: Any = None, download: Any = None) -> list[str]:
+    """Download the files of the version `alias` names, and record that version in the
+    fetched `meta.json` as `<MODEL_NAME>/<version>`, the model version the stored scores
+    carry (ADR 0045: the version comes from the registry at load). The champion's registered
+    `meta.json` was logged before its registration, so it holds no version; without this
+    the bundle would name itself by its trees' digest, and the first run would rescore every
+    trial as a new model. A `meta.json` that names another version is refused."""
+    if client is None or download is None:
+        import mlflow
+        from mlflow.tracking import MlflowClient
 
-    mlflow.set_tracking_uri(tracking.tracking_target().uri)
+        mlflow.set_tracking_uri(tracking.tracking_target().uri)
+        client = client or MlflowClient()
+        download = download or mlflow.artifacts.download_artifacts
+    version = client.get_model_version_by_alias(MODEL_NAME, alias)
+    name = f"{MODEL_NAME}/{version.version}"
     folder.mkdir(parents=True, exist_ok=True)
-    local = Path(mlflow.artifacts.download_artifacts(f"models:/{MODEL_NAME}@{alias}",
-                                                     dst_path=str(folder)))  # fmt: skip
+    local = Path(download(f"models:/{MODEL_NAME}/{version.version}", dst_path=str(folder)))
+    meta_path = local / META
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("version", name) != name:
+        raise RefusedError(f"the fetched {META} names {meta['version']}, not {name}")
+    meta["version"] = name
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return sorted(p.name for p in local.iterdir())
 
 

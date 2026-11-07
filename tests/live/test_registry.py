@@ -52,3 +52,33 @@ def test_another_file_or_a_runner_is_refused(
     with pytest.raises(RefusedError, match="never on a runner"):
         registry.attach_decisions(path, client=client)
     assert client.logged == []
+
+
+def _fake_download(meta: dict[str, Any]) -> Any:
+    import json
+
+    def download(uri: str, dst_path: str) -> str:
+        assert uri == f"models:/{registry.MODEL_NAME}/1"  # the alias's own version, pinned
+        folder = Path(dst_path)
+        (folder / registry.META).write_text(json.dumps(meta), encoding="utf-8")
+        (folder / "model.txt").write_text("trees", encoding="utf-8")
+        return str(folder)
+
+    return download
+
+
+def test_the_fetched_bundle_names_the_registered_version(tmp_path: Path) -> None:
+    """The champion's registered meta.json holds no version (it was logged before the
+    registration); the fetched copy names the registry's, the one the stored scores carry."""
+    import json
+
+    names = registry.fetch("champion", tmp_path, FakeClient(), _fake_download({"files": {}}))
+    assert names == [registry.META, "model.txt"]
+    meta = json.loads((tmp_path / registry.META).read_text(encoding="utf-8"))
+    assert meta["version"] == f"{registry.MODEL_NAME}/1"
+
+
+def test_a_fetched_bundle_naming_another_version_is_refused(tmp_path: Path) -> None:
+    download = _fake_download({"files": {}, "version": f"{registry.MODEL_NAME}/7"})
+    with pytest.raises(RefusedError, match="names trialpulse-m4/7"):
+        registry.fetch("champion", tmp_path, FakeClient(), download)
