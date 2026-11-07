@@ -1,6 +1,7 @@
 """The API's role reads the serving schema only (ADR 0049)."""
 
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -82,3 +83,49 @@ def test_the_command_grants_and_prints_a_url_that_reads_serving(
         with psycopg.connect(dsn, autocommit=True) as con:
             con.execute(f"DROP OWNED BY {api_role.ROLE}")
             con.execute(f"DROP ROLE {api_role.ROLE}")
+
+
+def test_the_url_can_go_into_the_env_file_without_being_printed(
+    scratch: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """With --env-file the command writes API_DATABASE_URL into the file (its line replaced,
+    every other line kept) and prints no password and no URL."""
+    from trialpulse.live import api_role
+
+    dsn = scratch.replace("postgresql+psycopg://", "postgresql://", 1)
+    monkeypatch.setattr("trialpulse.live.daily._dsn", lambda target: dsn)
+    env = tmp_path / ".env"
+    env.write_text("HF_TOKEN=keep-me\nAPI_DATABASE_URL=old\nSPONSOR_ID_KEY=also-kept\n",
+                   encoding="utf-8")  # fmt: skip
+    try:
+        assert api_role.main(["--target", "local", "--env-file", str(env)]) == 0
+        printed = capsys.readouterr().out
+        lines = env.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == "HF_TOKEN=keep-me"
+        assert lines[2] == "SPONSOR_ID_KEY=also-kept"
+        name, url = lines[1].split("=", 1)
+        assert name == "API_DATABASE_URL"
+        assert url.startswith("postgresql://trialpulse_api:")
+        password = url.split(":", 2)[2].split("@", 1)[0]
+        assert password not in printed
+        assert "postgresql://" not in printed
+        with psycopg.connect(url, autocommit=True) as con:
+            assert con.execute("SELECT count(*) FROM serving.trial_scores_latest").fetchone()
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as con:
+            con.execute(f"DROP OWNED BY {api_role.ROLE}")
+            con.execute(f"DROP ROLE {api_role.ROLE}")
+
+
+def test_the_env_file_gains_the_line_when_it_has_none(tmp_path: Path) -> None:
+    from trialpulse.live.api_role import write_env
+
+    env = tmp_path / ".env"
+    env.write_text("HF_TOKEN=x\n", encoding="utf-8")
+    write_env(env, "postgresql://trialpulse_api:p@h/db")
+    assert env.read_text(encoding="utf-8") == (
+        "HF_TOKEN=x\nAPI_DATABASE_URL=postgresql://trialpulse_api:p@h/db\n"
+    )
