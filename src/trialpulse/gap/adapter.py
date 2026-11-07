@@ -1,4 +1,4 @@
-"""The newer release's layout mapped to the pinned columns (ADR 0041, decision 4).
+"""The newer release's layout mapped to the pinned columns (ADR 0041, decision 4; ADR 0073).
 
 The release at `gap_read.commit` (anamnesis-data/clinical_trials_history) changed the layout
 of the two configs TrialPulse reads. Every difference from the pinned revision is listed
@@ -9,10 +9,12 @@ passed through. The pinned schema is read from the pinned files themselves.
 
 - **Failed review.** A version that failed the registry's review was never public: its
   `last_update_post_date` is empty and `reset_notice_post_date` holds the reset notice's date.
-  Such versions are outside the version clock, so they are left out and counted
-  (`FAILED_REVIEW`). A version with neither date, or a public version with a reset notice,
-  is refused.
-- **New columns.** `reset_notice_post_date` (read above, then dropped); `is_obsolete` and
+  The pinned revision held such versions dated at the reset notice, and ADR 0073 (decision 2)
+  keeps that rule on every row: the version is kept with its reset notice's date as its post
+  date, and counted (`FAILED_REVIEW`). A version with neither date, or a public version with
+  a reset notice, is refused.
+- **New columns** (ADR 0073, decision 1). `reset_notice_post_date` (read above, then
+  dropped); `is_obsolete` and
   `obsolete_by` (the card's flag of registrations merged into another; the pinned revision
   kept their rows, so they are kept and the flag dropped); `status_verified_date_precision`
   and `document_no_sap` (no TrialPulse code reads them; dropped).
@@ -28,7 +30,8 @@ passed through. The pinned schema is read from the pinned files themselves.
   and entries without a name are kept. The pinned config held one row per distinct pair and
   no entry without a name, which the features count (ADR 0020), so the adapter gives one row
   per distinct (name, type), the description of its first entry, and leaves out and counts
-  the entries without a name. `ord`, `is_obsolete` and `obsolete_by` are dropped.
+  the entries without a name (the rule of both paths since ADR 0073, decision 3). `ord`,
+  `is_obsolete` and `obsolete_by` are dropped.
 """
 
 from collections.abc import Mapping
@@ -39,9 +42,10 @@ import duckdb
 from trialpulse.cli import RefusedError
 from trialpulse.ingest.history import refuse_on_a_runner
 
-FAILED_REVIEW = "failed review: never public, left out of the version clock"
+FAILED_REVIEW = "failed review: never public, dated at its reset notice (ADR 0073)"
+POST_DATE = "last_update_post_date"
 NEW_CORE: Mapping[str, str] = {
-    "reset_notice_post_date": "read to tell a version that failed review, then dropped",
+    "reset_notice_post_date": "the post date of a version that failed review, then dropped",
     "is_obsolete": "dropped: the pinned revision kept the rows of merged registrations",
     "obsolete_by": "dropped, with is_obsolete",
     "status_verified_date_precision": "dropped: no TrialPulse code reads it",
@@ -119,13 +123,16 @@ def adapt(
             f"{broken[0]} versions have neither a post date nor a reset notice, and "
             f"{broken[1]} public versions have a reset notice"
         )
-    columns = ", ".join(
-        f"CAST(NULL AS {kind}) AS {column}" if column in RETYPED and core_new[column] != kind
-        else column
-        for column, kind in core_pinned.items()
-    )  # fmt: skip
-    core_sql = (f"SELECT {columns} FROM read_parquet('{new_core}', union_by_name=true) "
-                "WHERE last_update_post_date IS NOT NULL")  # fmt: skip
+
+    def column_sql(column: str, kind: str) -> str:
+        if column == POST_DATE:  # a failed review is dated at its reset notice (ADR 0073)
+            return f"coalesce({POST_DATE}, reset_notice_post_date) AS {POST_DATE}"
+        if column in RETYPED and core_new[column] != kind:
+            return f"CAST(NULL AS {kind}) AS {column}"
+        return column
+
+    columns = ", ".join(column_sql(c, k) for c, k in core_pinned.items())
+    core_sql = f"SELECT {columns} FROM read_parquet('{new_core}', union_by_name=true)"
     pinned_iv = ", ".join(iv_pinned)
     interventions_sql = f"""SELECT {pinned_iv} FROM (
           SELECT *, row_number() OVER (PARTITION BY nct_id, nct_version, intervention_name,
@@ -139,7 +146,9 @@ def adapt(
 def left_out(
     con: duckdb.DuckDBPyConnection, new_core: str, new_interventions: str
 ) -> dict[str, int]:
-    """What the adapter leaves out, counted."""
+    """What the adapter leaves out or changes, counted: failed-review versions (kept, dated
+    at their reset notice), merged registrations (kept), interventions without a name (left
+    out) and repeated pairs (one row each)."""
     refuse_on_a_runner()
     core = con.execute(
         f"""SELECT count(*) FILTER (WHERE last_update_post_date IS NULL),

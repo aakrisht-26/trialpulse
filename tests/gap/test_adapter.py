@@ -83,11 +83,15 @@ def test_the_core_rows_come_out_in_the_pinned_columns_and_types(layout: dict[str
     ]  # fmt: skip
 
 
-def test_a_version_that_failed_review_is_left_out_and_counted(layout: dict[str, Any]) -> None:
+def test_a_version_that_failed_review_is_kept_at_its_reset_notice_and_counted(
+    layout: dict[str, Any],
+) -> None:
+    """ADR 0073, decision 2: the pinned revision's rule, a failed review dated at its reset
+    notice, on the new release's rows too."""
     con = layout["con"]
-    rows = con.execute(f"SELECT nct_id, nct_version FROM ({_adapt(layout).core_sql}) "
-                       "ORDER BY 1, 2").fetchall()  # fmt: skip
-    assert rows == [("NCT1", 0), ("NCT2", 0)]
+    rows = con.execute(f"SELECT nct_id, nct_version, last_update_post_date "
+                       f"FROM ({_adapt(layout).core_sql}) ORDER BY 1, 2").fetchall()  # fmt: skip
+    assert rows == [("NCT1", 0, D1), ("NCT1", 1, RESET), ("NCT2", 0, D2)]
     counts = adapter.left_out(con, layout["new_core"], layout["new_iv"])
     assert (counts["failed_review_versions"], counts["failed_review_trials"]) == (1, 1)
 
@@ -112,7 +116,7 @@ def test_retyped_columns_become_null_of_the_pinned_type(layout: dict[str, Any]) 
     con = layout["con"]
     sql = _adapt(layout).core_sql
     values = con.execute(f"SELECT version_holder, unposted_responsible_party FROM ({sql}) "
-                         "WHERE nct_id = 'NCT1'").fetchall()  # fmt: skip
+                         "WHERE nct_id = 'NCT1' AND nct_version = 0").fetchall()  # fmt: skip
     assert values == [(None, None)]  # the new release's value is not carried
 
 

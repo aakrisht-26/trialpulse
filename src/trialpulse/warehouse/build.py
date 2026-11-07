@@ -358,12 +358,13 @@ def intervention_lists_sql(source: str) -> str:
     """SQL twin of contracts.versions.distinct_intervention_types (tested against it): from a
     relation of (nct_id, nct_version, intervention_name, intervention_type) rows, one list per
     version holding the type of each distinct (name, type) pair, sorted, with the type in
-    canonical form and pairs without a type left out."""
+    canonical form and pairs without a type or without a name (missing or empty) left out
+    (ADR 0073)."""
     kind = _sql_enum("intervention_type")
     return f"""SELECT nct_id, nct_version, list(kind ORDER BY kind) AS intervention_types
         FROM (SELECT DISTINCT nct_id, nct_version, intervention_name, {kind} AS kind
               FROM {source})
-        WHERE kind IS NOT NULL
+        WHERE kind IS NOT NULL AND intervention_name IS NOT NULL AND intervention_name <> ''
         GROUP BY nct_id, nct_version"""
 
 

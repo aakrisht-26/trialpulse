@@ -243,6 +243,25 @@ def test_intervention_types_go_by_the_raw_pairs(
     assert not result["verdict"]["passes"]
 
 
+def test_an_intervention_without_a_name_is_no_difference_and_is_counted(
+    inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path
+) -> None:
+    """ADR 0073: an API v2 entry without a name is left out on the live path, as the pinned
+    config held none, so the unchanged trial does not differ; the record is counted."""
+    pairs = [("Aspirin", "DRUG"), ("aspirin", "DRUG"), ("Placebo", "DRUG"), ("Saline", "OTHER"),
+             (None, "DEVICE"), ("", "OTHER")]  # fmt: skip
+    nameless = nct5(interventions=pairs)
+    result = _run(FakeApi([nameless]), inputs, cfg, tmp_path)
+    assert "intervention_types" not in result["every_unchanged_trial"].get("columns", {})
+    assert result["every_unchanged_trial"]["trials_with_no_difference"] == 1
+    assert result["nameless_interventions"] == {
+        "records": 1, "unchanged_records": 1,
+        "unchanged_records_differing_in_intervention_types": 0,
+    }  # fmt: skip
+    assert result["verdict"]["passes"]
+    assert census.api_pairs(nameless) == census.api_pairs(nct5())
+
+
 def test_a_status_changed_without_a_new_version_is_counted(
     inputs: census.Inputs, cfg: ProjectConfig, tmp_path: Path
 ) -> None:

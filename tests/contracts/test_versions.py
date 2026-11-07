@@ -256,17 +256,20 @@ def _with_interventions(study: dict[str, Any], interventions: Any) -> dict[str, 
 
 def test_api_v2_interventions_become_one_type_per_distinct_pair() -> None:
     """ADR 0067: exact strings, a repeated pair once, the type in canonical form, a pair
-    without a type left out, sorted; an empty list when none is listed."""
+    without a type left out, sorted; an empty list when none is listed. ADR 0073: a pair
+    without a name (missing or empty) is left out too, as the pinned config held none."""
     interventions = [
         {"name": "Aspirin", "type": "DRUG"},
         {"name": "Aspirin", "type": "DRUG"},  # a repeated pair counts once
         {"name": "aspirin", "type": "DRUG"},  # another name on exact strings
         {"name": "Walk", "type": " behavioral "},
         {"name": "Unnamed", "type": None},  # no type: left out
-        {"type": "DEVICE"},  # no name: still an intervention
+        {"type": "DEVICE"},  # no name: left out (ADR 0073)
+        {"name": "", "type": "OTHER"},  # an empty name: left out
+        {"name": None, "type": "DRUG"},
     ]
     row, _ = canonical_from_api_v2(_with_interventions(_study(), interventions))
-    assert row["intervention_types"] == ["BEHAVIORAL", "DEVICE", "DRUG", "DRUG"]
+    assert row["intervention_types"] == ["BEHAVIORAL", "DRUG", "DRUG"]
     valid, failing = split_valid(typed_frame(pd.DataFrame([row])))
     assert len(valid) == 1
     assert failing.empty
@@ -317,7 +320,7 @@ def test_the_sql_rule_for_intervention_types_matches_the_python_rule() -> None:
     pairs = [
         ("A", "DRUG"), ("A", "DRUG"), ("a", "DRUG"), ("B", " device "), ("C", None),
         (None, "OTHER"), (None, "OTHER"), ("D", ""), ("E", "drug"), ("F", "drug\t"),
-        ("G", "\nbiological"),
+        ("G", "\nbiological"), ("", "DEVICE"), ("H", "other"),
     ]  # fmt: skip
     with duckdb.connect() as con:
         con.execute(
@@ -326,12 +329,14 @@ def test_the_sql_rule_for_intervention_types_matches_the_python_rule() -> None:
         )
         con.executemany("INSERT INTO config VALUES ('NCT00000001', 0, ?, ?)", pairs)
         con.execute("INSERT INTO config VALUES ('NCT00000002', 0, 'X', NULL)")  # no type at all
+        con.execute("INSERT INTO config VALUES ('NCT00000003', 0, NULL, 'DRUG')")  # no name
         got = {(n, v): t for n, v, t in con.execute(intervention_lists_sql("config")).fetchall()}
     expected = distinct_intervention_types((name, canonical_enum(kind)) for name, kind in pairs)
     # A tab or a line break is not trimmed on either path: the list keeps the raw type, which
     # the contract then refuses (known_intervention_types) on both paths alike.
+    # A pair without a name, missing or empty, is left out on both paths (ADR 0073).
     assert expected == ["\nBIOLOGICAL", "DEVICE", "DRUG", "DRUG", "DRUG", "DRUG\t", "OTHER"]
-    assert got == {("NCT00000001", 0): expected}  # the warehouse gives the other an empty list
+    assert got == {("NCT00000001", 0): expected}  # the warehouse gives the others empty lists
 
 
 def _history_rows() -> pd.DataFrame:

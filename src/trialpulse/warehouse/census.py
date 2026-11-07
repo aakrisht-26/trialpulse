@@ -29,7 +29,9 @@ In order:
      is a bug, with no exception. The status is compared as the submitted status (ADR 0066):
      a difference in the registry's UNKNOWN label alone is counted, not a difference. The
      sponsor goes by the raw lead sponsor name and class; the titles by the phase they
-     state, which must be equal; the intervention types by the raw (name, type) pairs.
+     state, which must be equal; the intervention types by the raw (name, type) pairs,
+     without the entries that have no name, which both paths leave out (ADR 0073; the
+     records listing one are counted).
    - **Brief summary, eligibility and the why-stopped text** are counted by cause, never
      failed (condition 3). A differing API text that still holds an HTML comment would show
      that the comment rule of condition 1 is not in force; it is counted.
@@ -200,8 +202,17 @@ def api_raw(study: Mapping[str, Any], column: str) -> Any:
 
 
 def api_pairs(study: Mapping[str, Any]) -> frozenset[tuple[Any, Any]]:
+    """The raw (name, type) pairs of an API v2 record, without the entries that have no name,
+    which the canonical rule leaves out on both paths (ADR 0073)."""
     items = get_path(study, f"protocolSection.{API_V2_INTERVENTIONS}") or []
-    return frozenset((i.get("name"), token(i.get("type"))) for i in items if isinstance(i, dict))
+    return frozenset((i.get("name"), token(i.get("type"))) for i in items
+                     if isinstance(i, dict) and i.get("name") not in (None, ""))  # fmt: skip
+
+
+def has_a_nameless_intervention(study: Mapping[str, Any]) -> bool:
+    """Whether an API v2 record lists an intervention without a name (ADR 0073)."""
+    items = get_path(study, f"protocolSection.{API_V2_INTERVENTIONS}") or []
+    return any(isinstance(i, dict) and i.get("name") in (None, "") for i in items)
 
 
 def same_raw(column: str, api: Any, dataset: Any) -> bool:
@@ -468,6 +479,7 @@ class Pulled:
     total: int = 0
     records: int = 0
     repeated: int = 0
+    nameless: set[str] = field(default_factory=set)  # records with a nameless intervention
 
 
 def population_params(cfg: ProjectConfig) -> dict[str, str | int]:
@@ -547,6 +559,8 @@ def pull_population(api: JsonApi, cfg: ProjectConfig, workers: int = 0, say: Any
                 out.total = int(data.get("totalCount") or 0)
             studies = scrub_personal_data(data.get("studies", []))
             out.records += len(studies)
+            out.nameless.update(str(_identity(s)[0]) for s in studies
+                                if has_a_nameless_intervention(s))  # fmt: skip
             pages.append(pool.submit(convert_page, studies) if pool else convert_page(studies))
             if say is not None and out.pages % PROGRESS_PAGES == 0:
                 say(f"pulled {out.pages} pages, {out.records:,} of {out.total:,} records")
@@ -814,6 +828,14 @@ def run_census(
         },
         "every_unchanged_trial": everyone.as_dict(),
         "seeded_50": fifty.as_dict(),
+        "nameless_interventions": {  # ADR 0073: such entries are left out on both paths
+            "records": len(pulled.nameless),
+            "unchanged_records": sum(n in pulled.nameless for n in unchanged),
+            "unchanged_records_differing_in_intervention_types": sum(
+                n in pulled.nameless and "intervention_types" in differing.get(n, ())
+                for n in unchanged
+            ),
+        },
         "verdict": {"passes": not failures, "failures": failures},
     }
 

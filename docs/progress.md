@@ -2500,6 +2500,37 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
 
+## Step 14, the overnight run of 2026-11-08: ADR 0073, the gap read, the rebootstrap rehearsal, deployment prepared
+
+Unattended run on the laptop (charger in). No Neon write, no deployment, `daily.yml` untouched, no secret changed. Each track below is a checkpoint, committed when it finished.
+
+### Track 1: ADR 0073 (accepted by Aakrisht on 2026-11-08), done
+
+- **ADR 0073** (`docs/adr/0073-the-gap-release-read-under-the-pinned-rules.md`), in CLAUDE.md's amendments: the eight unlisted columns as built; failed-review versions keep the pinned rule (dated at their reset notice) on pinned and gap rows; an intervention without a name (missing or empty) is left out on both paths.
+- **Adapter** (`gap/adapter.py`): a version with an empty post date and a reset notice is now kept at its reset notice and counted; neither date, or a public version with a reset notice, is still refused. Merged registrations kept and counted: 106 versions of 31 trials in the release (2 after the cutoff); 104 versions of 29 trials in the pinned warehouse, with 29 outcome rows, 80 landmark rows and 6 test-origin evaluation rows.
+- **Nameless interventions:** `distinct_intervention_types` and `intervention_lists_sql` leave out a pair whose name is missing or empty; the census compares raw pairs without such entries and counts the records listing one. Tests on both paths, the SQL twin and the census.
+  - The pinned config has 0 such entries (0 missing, 0 empty, 0 blank of 9,401,447 rows): the warehouse is unchanged and was not rebuilt. The slow test `tests/features/test_intervention_lists_on_the_warehouse.py` passes.
+  - The gap's API pull: 1 of 28,750 records lists one.
+  - Neon, read-only session (`default_transaction_read_only`): one run (the bootstrap), 0 rows in `live.study_versions`, 0 `live.trial_state` rows posted after the cutoff. No API-derived intervention type is stored.
+  - Census rerun in full (API v2 data of 2026-11-06, 1,178 s): **passes**, 144,627 unchanged trials, 0 failing differences, 0 condition-4 breaks. 2 unchanged records list a nameless intervention and neither differs in intervention types. The census of 2026-11-04 had 2 differences labeled "registry: the interventions changed"; that cause is gone, so they were these entries, not registry changes.
+- **Failed-review versions, measured read-only** (warehouse schema 4 and the Step 4 cohort), in the ADR and in the data card's limitations (item 8):
+
+| Measure | Count |
+| --- | --- |
+| Failed-review versions the pinned revision holds | 22,797 (12,904 trials), all dated at their reset notice |
+| Status differs from the previous version | 2,928 (2,920 by the submitted status) |
+| Terminal status | 20,525 (15,275 COMPLETED, 5,250 TERMINATED, 0 WITHDRAWN); 2,822 entered that status |
+| Version 0 or first version / a trial's last pinned version | 0 / 1,284 |
+| Cohort outcomes dated by one | 615 of 47,772 early stops, 1,751 of 335,253 completions |
+| Landmark rows of these trials / on or after their first failed review | 66,147 / 298 of 1,448,969 |
+| Test-origin evaluation rows on or after a failed review (2018, 2019, 2020) | 0, 0, 23 |
+| Test-origin rows whose outcome one dates, within 12 months | 0, 81, 231 |
+
+  The registered results are unchanged; Step 17's retrain revisits the rule under its own ADR.
+- **Decision made on my own:** the data card's numbers must appear in the documents it summarizes (`tests/test_cards.py`); `docs/data_audit.md` is generated, so ADR 0073 was added to the data card's source list in that test instead of hand-editing the audit. Alternative: a generated "part 3" of the data audit.
+
+Logs: `data/logs/failed_review_measure_20261108.log`, `data/logs/census_20261108.log`, `data/logs/track1_tests_20261108.log`.
+
 ## Step 14, the gap read of ADR 0041 (2026-11-07): stopped at item 3, the schema comparison
 
 Laptop only; Neon untouched; `daily.yml` disabled; no deployment. Code in `src/trialpulse/gap/` (pull, release, adapter), each refusing under GitHub Actions, and kept out of every workflow's imports (`tests/test_workflows.py`). Everything read sits under `data/gap/` and `data/raw/history/<commit>/`, gitignored.

@@ -21,7 +21,8 @@ SOURCES = {
     "model_card.md": ("results.md", "explanations.md", "preregistration.md", "data_audit.md",
                       "scoring_checks.md"),
     "data_card.md": ("data_audit.md", "feasibility_report.md", "eda.md", "reason_labeling.md",
-                     "results.md", "preregistration.md"),
+                     "results.md", "preregistration.md",
+                     "adr/0073-the-gap-release-read-under-the-pinned-rules.md"),
 }  # fmt: skip
 
 

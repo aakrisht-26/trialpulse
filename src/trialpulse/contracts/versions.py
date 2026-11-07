@@ -15,10 +15,11 @@ the offline history dataset and live API v2 records, so downstream code is sourc
   keep the submitted status in this column (API v2 `lastKnownStatus`). It is empty otherwise.
 - `intervention_types` lists the version's interventions as one type per distinct (name,
   type) pair, sorted (ADR 0067): names and types compared as exact strings, each type in the
-  canonical form of an enum, a pair without a type left out, an empty list when none is
-  listed. The dataset's `interventions` config gives the pairs on the offline path, and API
-  v2's `armsInterventionsModule.interventions` on the live path. Every type must be one of
-  the registry's (`features.registry.INTERVENTION_TYPES`).
+  canonical form of an enum, a pair without a type or without a name (missing or empty)
+  left out (ADR 0073), an empty list when none is listed. The dataset's `interventions`
+  config gives the pairs on the offline path, and API v2's
+  `armsInterventionsModule.interventions` on the live path. Every type must be one of the
+  registry's (`features.registry.INTERVENTION_TYPES`).
 - `content_hash` is a SHA-256 of the canonical content: every column except the version
   number, the source and the hash itself, with the submitted status (ADR 0014) read in the
   place of `overall_status` and `last_known_status` (ADR 0066). Both columns stay in the row;
@@ -398,8 +399,10 @@ def api_v2_fields() -> str:
 def distinct_intervention_types(pairs: Iterable[tuple[str | None, str | None]]) -> list[str]:
     """The type of each distinct (name, type) pair, on exact strings, sorted (ADR 0067): what
     the dataset's interventions config gives per version. API v2 repeats pairs on some
-    records. A pair without a type is left out."""
-    return sorted(kind for _, kind in {(name, kind) for name, kind in pairs if kind is not None})
+    records. A pair without a type is left out, and so is a pair without a name (missing or
+    empty), which the pinned config never held (ADR 0073)."""
+    named = {(name, kind) for name, kind in pairs if kind is not None and name not in (None, "")}
+    return sorted(kind for _, kind in named)
 
 
 def api_v2_intervention_types(study: Mapping[str, Any]) -> list[str]:
