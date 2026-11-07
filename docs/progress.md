@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done 2026-11-07, waiting for review: migrated to 0006, bootstrapped at the cutoff, the day-0 check equal on Neon with the keep-alive of ADR 0072, the serving rows, the API's role and the secrets in place; 259.1 MB on Neon. `daily.yml` disabled |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041) stopped at the schema comparison: the API pull and the release pin done, the adapter built; decisions on unlisted columns and failed-review versions waiting for Aakrisht. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2499,6 +2499,58 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 14, the gap read of ADR 0041 (2026-11-07): stopped at item 3, the schema comparison
+
+Laptop only; Neon untouched; `daily.yml` disabled; no deployment. Code in `src/trialpulse/gap/` (pull, release, adapter), each refusing under GitHub Actions, and kept out of every workflow's imports (`tests/test_workflows.py`). Everything read sits under `data/gap/` and `data/raw/history/<commit>/`, gitignored.
+
+### Item 1: the API v2 pull from the cutoff
+
+`uv run python -m trialpulse.gap.pull`, through the daily job's own client, delta filter and conversion, at 30 requests a minute: records with LastUpdatePostDate from **2026-09-22** (the cutoff minus 3 days) through API v2's data date **2026-11-06**. **28,750 records** (one per trial, as a delta pull gives), equal to API v2's count, in **29 pages**; post dates from 2026-09-22 to 2026-11-06. All 28,750 converted; **0 quarantined**. The pull took 64.4 s; the conversion and files 1,295 s in all, about 20 minutes for 28,750 records. Kept under `data/gap/api/2026-11-06/`: the records as pulled, scrubbed of investigators and contacts as the job scrubs them, their canonical rows and texts, the compact rows, the quarantine (empty) and a summary. Nothing was written to a database.
+
+**Flag for go-live:** the conversion ran at about 23 records a second. A normal day (about 1,100 records) takes under a minute, but the first live run after the rebootstrap pulls its whole tail at once, and its conversion should be timed before it is scheduled.
+
+### Item 2: the newer release, pinned
+
+- Latest tag of `anamnesis-data/clinical_trials_history`: **v2026.11.04**, at commit **2b7c8b0e4c000df4bc438d64e148220f92c0e6d1** (also the head of `main`). Recorded in `config/project.yaml` (`gap_read`); `trialpulse.gap.release` refuses if the tag no longer resolves to that commit.
+- **The card at that commit:** license CC BY-NC 4.0; access gated on the same two conditions (cite the dataset and attribute the data to ClinicalTrials.gov; no commercial use without a separate license). The pinned revision's card says the same. Only the publisher's name, the contact and the citation's author and address changed. **Nothing that affects TrialPulse;** the README and data-card citation should name the new publisher when they are next edited (deferred).
+- Downloaded at the commit with HF_TOKEN from `.env`: `core` (9 files, 1,006.4 MB) and `interventions` (20 files, 91.4 MB), in 64 s, into `data/raw/history/2b7c8b0e.../`. The new release holds 4,476,761 versions of 610,078 trials; its newest post date is 2026-11-03.
+
+### Item 3: the adapter, and why the run stopped here
+
+`trialpulse.gap.adapter` maps the new layout to the pinned columns, reading the pinned schema from the pinned files, and refuses any difference it does not list. Every change the card lists is handled, with tests on synthetic Parquet files (11 tests):
+
+| Change the card lists | Handling | On the real release |
+| --- | --- | --- |
+| `interventions` keyed by `ord`, repeated pairs as separate rows, entries without a name kept | One row per distinct (name, type) with its first entry's description, as the pinned config held; entries without a name left out and counted (the pinned config held none); ADR 0067's rule then gives what it gave before | 223,820 entries repeat a pair; 412 have no name |
+| Empty post date for versions that failed review, `reset_notice_post_date` new | Left out of the version clock and counted; a version with neither date, or a public version with a reset notice, is refused | 24,002 versions of 13,524 trials; none breaks the rule |
+| The new column | `reset_notice_post_date`, read as above and dropped | |
+| Rich text now Markdown | Passes unchanged: `normalize_text` reads Markdown as it reads API v2's (tested against the HTML original's canonical form) | |
+
+With that handling, the adapted SELECTs give exactly the pinned schemas (96 core columns; the 5 of interventions): 4,452,759 core rows and 9,468,230 intervention rows.
+
+**The full schema comparison found differences the card does not list** (its breaking-change list starts at `v2026.09.28`; the pinned revision is `v2026.09.26`). As instructed, the run stopped here, before the overlap check:
+
+| Difference not on the card's list | Facts |
+| --- | --- |
+| New core columns `status_verified_date_precision` and `document_no_sap` | No TrialPulse code names either. `status_verified_date`, which the lapse rule reads, is DATE in both |
+| New core columns `is_obsolete` and `obsolete_by` | The card's notes describe them (registrations merged into another): 106 versions of 31 trials. The pinned revision kept those rows unflagged |
+| Six core columns retyped from INTEGER: `version_holder` (DATE), `expanded_access_status_for_nct_id` (VARCHAR), `unposted_responsible_party` (VARCHAR), `first_mcp_post_date` (DATE), `first_mcp_post_date_type` (VARCHAR), `estimated_results_first_submit_date` (DATE) | Every value was NULL in the pinned revision (hence INTEGER). No TrialPulse code names any of them. Five are still all NULL; `unposted_responsible_party` now holds 64,094 values |
+
+The adapter as committed handles these too (dropped, or NULL of the pinned type) so that its tests and its layout check could run on the real files, but nothing past the layout check was run on them.
+
+**A second finding that needs a decision before the overlap check means anything: failed-review versions.** The pinned revision held **22,797** of the 24,002 failed-review versions, each dated at its reset notice (22,797 of 22,797 equal to the new `reset_notice_post_date`, from 2020-01-14 to 2026-09-25); 1,284 of them are their trial's last pinned version. So the warehouse, the cohort, the features of Steps 7 to 13 and the bootstrap on Neon counted them as public versions posted on that date. The new release says they were never public. Apart from them, the keys line up: the new release's public versions posted by the cutoff are the pinned versions less these 22,797, with 1 pinned key absent from the new release and 1 new key absent from the pinned one.
+
+### Decisions for Aakrisht
+
+1. **The eight unlisted columns.** Recommended: approve the handling as built (the two unread new columns and the merge flag dropped; the six retyped columns NULL of the pinned type), since no TrialPulse code reads any of them and the overlap check will compare every column that does. Alternative: stop the gap read and fall back to Gap (a) of ADR 0041.
+2. **Failed-review versions** (needs an ADR either way, as it touches the version clock of Section 6):
+   - **(a) Keep the pinned semantics:** the adapter dates a failed-review version at its reset notice, as the pinned revision did. The overlap check can then expect equality on those 22,797, the gap rows add the 445 failed reviews whose notice came after the cutoff, and the rebootstrapped state stays consistent with the data the champion was trained and checked on. Recommended for this read.
+   - **(b) Follow the card:** leave them out, as instructed for this run. The overlap check then reports 22,797 pinned versions as a cause of difference, and a state seeded from pinned plus gap rows mixes the two rules unless the pinned rows are read again too; `n_versions` and version-0 values move for up to 13,524 trials against the model's training data.
+   - Either way, API v2 never shows a failed-review version, so the live path cannot count one after go-live; that skew exists already and is worth recording.
+3. **Unnamed interventions:** the adapter leaves out the 412 entries without a name, as the pinned config did; API v2's path counts them (ADR 0067's rule keeps a pair without a name). Recommended: keep the pinned rule for the gap rows, and record the API-side difference for the parity check.
+
+Items 4 to 7 (the overlap check, the gap store, parity layer 5b, the rebootstrap plan) wait for these decisions.
 
 ## Step 14, phase B on Neon (2026-11-07)
 
