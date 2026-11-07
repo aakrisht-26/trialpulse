@@ -23,6 +23,9 @@ FORBIDDEN_MODULES = (
     "trialpulse.ingest.history",
     "trialpulse.warehouse.build",
     "trialpulse.features.build",
+    "trialpulse.gap.pull",
+    "trialpulse.gap.release",
+    "trialpulse.gap.adapter",
     "huggingface_hub",
 )
 FORBIDDEN_TEXT = ("hf://", "huggingface.co", "data/raw", "HF_TOKEN")

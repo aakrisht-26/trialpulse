@@ -65,6 +65,15 @@ class DatasetConfig(_Section):
     cutoff: dt.date | None
 
 
+class GapReadConfig(_Section):
+    """The newer release read once for the gap (ADR 0041), pinned by its commit."""
+
+    repo_id: str
+    tag: str
+    commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    configs: tuple[str, ...] = Field(min_length=1)
+
+
 class PopulationConfig(_Section):
     """Cohort inclusion rule."""
 
@@ -235,6 +244,7 @@ class ProjectConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid", frozen=True)
 
     dataset: DatasetConfig
+    gap_read: GapReadConfig | None = None
     population: PopulationConfig
     statuses: StatusConfig
     unknown_rule: UnknownRuleConfig

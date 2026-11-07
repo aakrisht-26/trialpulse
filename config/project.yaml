@@ -11,6 +11,14 @@ dataset:
   revision: v2026.09.26   # Git tag of the pinned revision (v2026.MM.DD), set in Step 2
   cutoff: 2026-09-25     # max last_update_post_date in the pinned revision, recorded once computed
 
+# The one later read of the gap (ADR 0041): laptop only, before go-live. The tag can move if
+# the day is republished; the commit is what is read.
+gap_read:
+  repo_id: anamnesis-data/clinical_trials_history
+  tag: v2026.11.04
+  commit: 2b7c8b0e4c000df4bc438d64e148220f92c0e6d1
+  configs: [core, interventions]
+
 population:
   study_type: INTERVENTIONAL
   min_first_post_date: 2008-01-01   # time zero (t0) is study_first_post_date
