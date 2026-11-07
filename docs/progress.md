@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon blocked: `NEON_DATABASE_URL` is empty in `.env` |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon: migrated to 0006 and bootstrapped at the cutoff; stopped at the day-0 check, which Neon's 5-minute idle suspend cut off (options waiting for Aakrisht) |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2536,6 +2536,36 @@ Under the line by 16 MB. During a full run, until its compaction, the two compac
 ### The Neon probe: blocked
 
 The probe is committed as `scripts/neon_copy_probe.py` (`139d833`). It did not run: the `NEON_DATABASE_URL` line in `.env` has an empty value (its length is 0; `.env` was last saved 2026-11-06 22:00), so the `Secrets` class reads it as unset. Since every Neon step waits on the probe's result (W1 or stop), nothing on Neon was touched, no GitHub secret was set, the decisions were not attached and `timing.yml` was not dispatched.
+
+### Decisions of 2026-11-07 on the storage report
+
+1. `step13_checks.json` is attached to the champion's existing MLflow run (`b82c99e3`), not registered as a new model version; the command that checks its SHA-256 stays (`live.registry --attach-decisions`). No ADR: it changes no decided behaviour.
+2. ADR 0059's count of 5 trials led counts served trials only, as ADR 0070 already states.
+3. `/v1/trials/{nct_id}/timeline` answers by id for a trial that is not served, with no title (ADR 0070's consequences).
+4. The retention of ADR 0069 runs by hand on the laptop at the start of each month. No reminder is built; the planning chat sets one up at go-live.
+
+### The run on Neon (2026-11-07): stopped at item 4, the day-0 check
+
+| Item | Result |
+| --- | --- |
+| 1. The copy probe (`scripts/neon_copy_probe.py`) | Round trip 231 ms. 10.0 MB copied in 14.0 s, then 8.0 s (5.7 and 10.0 Mbit/s); the 167.6 MB bootstrap write projects at 235 s and 134 s, under 10 minutes, so **W1** (one transaction). Probe table dropped. Log `data/logs/neon_copy_probe_20261107.log` |
+| 2. Migration | Neon from no revision to **0006, the Alembic head**. Run through `trialpulse.live.migrate.upgrade` with the URL read from `Secrets` (the command's own function; its hidden prompt cannot be answered from this shell) |
+| 3. The bootstrap at the cutoff (`bootstrap --target neon`) | Succeeded in **739.5 s** (scores 301.4, seed 326.1, prepare 32.3, the W1 write **63.0 s**); peak private memory **7,949 MiB** (working set 5,568). Held to Step 13's file on every column, drivers included: 88,895 scored and 2,704 unscored trials, 0 differences. Written: 222,706 state rows, 88,895 latest and history rows, 2,704 not scored, the sponsor file, 3,942 reason-count rows. Log `data/logs/bootstrap_neon_20261107.log` (counts only) |
+| 4. The day-0 check (`dayzero --target neon`) | **Failed before comparing anything:** `AdminShutdown` ("terminating connection due to administrator command") on its first query after scoring |
+
+**The cause, measured.** Neon ends a connection that has sent nothing for about 5 minutes, autocommit or not, which fits the Free plan's suspend of an idle compute (ADR 0058 covered only sessions idle inside a transaction). The day-0 check reads the live state, then scores for about 5 minutes on the laptop with its connection silent, then reads the served hashes on the same connection. A probe confirmed it: an autocommit connection that sent nothing for 330 s got `AdminShutdown`; one that sent `SELECT 1` every 60 s for 330 s still answered (`data/logs/neon_idle_probe_20261107.log`).
+
+**The daily job has the same exposure.** Its full runs took 360 to 395 s in the replay, most of it scoring and drivers between two statements on the job's own connection; on Neon such a run would lose its connection before it renews its lease and publishes. Nothing in CI catches this: the tests lower `idle_in_transaction_session_timeout`, which never fires on a connection outside a transaction.
+
+**Options (his to choose; ADR 0058 would be refined either way):**
+
+- **A. A keep-alive on the job's connection (recommended).** While a stage computes, a background thread sends `SELECT 1` every 60 seconds on the same connection (psycopg serializes use of a connection). It applies to the daily job, the day-0 check and the retention command. The compute stays awake only while a job runs. Tested locally by lowering `idle_session_timeout`, which ends idle sessions outside transactions as the suspend does.
+- **B. A fresh connection after every long computation.** The job reconnects before each write and before renewing its lease. No extra thread, but every stage boundary changes, and the lease logic is reached from more places.
+- **C. Neon's suspend setting.** As I understand Neon's plans, the Free plan does not let the suspend be turned off (not checked in the console today), so this likely needs a paid plan.
+
+Nothing after item 4 ran: no reason counts, statement or display rows, no API role, no GitHub secrets, no attachment of the decisions file, no `timing.yml` dispatch, no storage measure. Neon holds the bootstrap's state (run 1, dated the cutoff) and nothing else. `daily.yml` stays disabled.
+
+**Also built:** `live.api_role --env-file .env` writes `API_DATABASE_URL` into the file (its line replaced, every other line kept) and prints neither the URL nor the password, as item 6 asks; tested, not yet run on Neon.
 
 ## Step 14, phase B on the laptop (2026-11-06)
 
