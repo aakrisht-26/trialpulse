@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon: migrated to 0006 and bootstrapped at the cutoff; stopped at the day-0 check, which Neon's 5-minute idle suspend cut off (options waiting for Aakrisht) |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done 2026-11-07, waiting for review: migrated to 0006, bootstrapped at the cutoff, the day-0 check equal on Neon with the keep-alive of ADR 0072, the serving rows, the API's role and the secrets in place; 259.1 MB on Neon. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2566,6 +2566,28 @@ The probe is committed as `scripts/neon_copy_probe.py` (`139d833`). It did not r
 Nothing after item 4 ran: no reason counts, statement or display rows, no API role, no GitHub secrets, no attachment of the decisions file, no `timing.yml` dispatch, no storage measure. Neon holds the bootstrap's state (run 1, dated the cutoff) and nothing else. `daily.yml` stays disabled.
 
 **Also built:** `live.api_role --env-file .env` writes `API_DATABASE_URL` into the file (its line replaced, every other line kept) and prints neither the URL nor the password, as item 6 asks; tested, not yet run on Neon.
+
+### The run on Neon, continued after ADR 0072 (2026-11-07)
+
+Aakrisht chose option A (ADR 0072, refining ADR 0058): a keep-alive span sends `SELECT 1` on a held connection every `live.keepalive_seconds` (60) while a command computes, pulls or waits; the ADR lists every wrapped span by command and stage (`361c238`, ADR `6d943d6`). `live.migrate --from-env` reads NEON_DATABASE_URL without printing it (`4b00435`); Neon's migration to 0006 earlier the same day went through `migrate.upgrade` directly, before the option existed.
+
+| Item | Result |
+| --- | --- |
+| 4. The day-0 check, rerun | **Equal.** 88,895 scored and 2,704 unscored trials on both sides, none on one side only, every column equal (risks with a largest difference of 0.0, all drivers, all reasons), `differences: []`; the live path's 91,599 content hashes equal the served rows on Neon. (The content-hash columns against Step 13's files differ on every row by design: those files hold offline hashes, which the check sets aside, as in phase A.) Log `data/logs/dayzero_neon_keepalive_20261107.log` |
+| 5. Reason counts, statement, display | 3,942 reason counts (32,144 early stops, labeled through 2026-09-25); the model statement (sha256 `6806e31b02c66683`); display rows by the bulk command at 30 requests a minute (9.5 minutes): 222,704 records pulled, **89,419** served trials with a row, **10,774** sponsors named and 4,584 hidden by the allowlist, 2,180 served trials without a live-status record on API v2 today (their rows come with their next record) |
+| 6. The API's role | `api_role --target neon --env-file .env`: `API_DATABASE_URL` written to `.env` (Neon's pooled host, role `trialpulse_api`), never shown. As that role: `serving.trial_scores_latest` read (88,895 rows); an UPDATE of `serving.data_status` and an INSERT into `serving.reason_counts` refused (`ReadOnlySqlTransaction`); reads of `live.trial_state` and `monitoring.pipeline_runs` refused (`InsufficientPrivilege`) |
+| 7. GitHub secrets | Set from `.env`, values piped: NEON_DATABASE_URL, SPONSOR_ID_KEY, MLFLOW_TRACKING_URI, MLFLOW_TRACKING_USERNAME, MLFLOW_TRACKING_PASSWORD, the five the workflows name. No HF_TOKEN |
+| 8. The decisions file | Attached to run `b82c99e3` (version 1 of `trialpulse-m4`); fetched back through the registry, its SHA-256 equals the validated file (`dae12abb...cbe9a928`) |
+| 9. `timing.yml` | Run 42380002626 on `6d943d6`: success in 73 s. Runner: 4 vCPUs (AMD EPYC 7763). 5,000 generated rows: predictions 1.8 s, drivers 45.5 s (9.1 ms a row), both 47.4 s. API v2 answered from the runner (data date 2026-11-06, 610,756 records). A full run's 88,895 rows would take about 13.5 minutes of drivers, inside the 60-minute alarm, and far past Neon's 5-minute cut without the keep-alive |
+| 10. Neon storage | Database **259.1 MB**: tables of `live`, `serving` and `monitoring` 250.9 MB, catalogs 8.7 MB. By table: state 104.0, latest 39.8, markers 33.7, display 31.5, history 23.5, sponsor file 13.2, sponsors 3.7, reason counts 0.8, not scored 0.4, the rest under 0.1 each |
+
+**Storage against the estimate.** The estimate's parts for this same day-0 state add to 246.8 MB; Neon holds 250.9 MB of tables, 4.1 MB more, nearly all in the display rows (35.1 MB against 30.6 measured locally after VACUUM FULL). Catalogs are 8.7 MB against the 32.5 MB the estimate allows. The 12-month estimate stays **683.9 MB**, under the 700 MB line; with the measured catalogs and display it would be about 664 MB.
+
+**Found and fixed: the runner's bundle named itself by its trees' digest.** The champion's registered `meta.json` was logged before the registration wrote its version into the laptop's copy, so a bundle fetched from the registry loaded as `d7a9493c8533`, while every stored score on Neon carries `trialpulse-m4/1`. The first daily run on a runner would have taken the champion for a new model and rescored every trial (88,895 new history rows). `live.registry` now fetches the alias's own version and writes `trialpulse-m4/<version>` into the fetched `meta.json`, refusing one that names another version (ADR 0045: the model version comes from the registry at load). Fetched again, the bundle loads as `trialpulse-m4/1`. The timing run used the earlier fetch; the version does not enter its timings.
+
+**Noted, not changed:** `serving.data_status` has no data-as-of date or model version yet; the bootstrap writes neither, and the first daily run sets both. The API's answers would carry a null data-as-of date before then (it is not deployed).
+
+`daily.yml` stays disabled; no gap read and no deployment.
 
 ## Step 14, phase B on the laptop (2026-11-06)
 
