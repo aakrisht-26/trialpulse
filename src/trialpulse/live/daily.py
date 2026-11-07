@@ -52,6 +52,7 @@ from trialpulse.config import ProjectConfig, Secrets, load_project_config
 from trialpulse.ingest.ctgov_api import ApiClient
 from trialpulse.live import display, engine, pull, runs, store
 from trialpulse.live import features as live_features
+from trialpulse.live.keepalive import keep_alive
 from trialpulse.live.state import lapse_events
 from trialpulse.scoring import serving
 from trialpulse.scoring.predict import Scored, classify
@@ -236,7 +237,8 @@ def run_daily(
             mark = runs.watermark(latest, day)
             since = runs.pull_since(mark, live.overlap_days)
             source = fetch or api_fetch(api, rules, secret, live.page_size)
-            fetched = source(since, day)
+            with keep_alive(con, live.keepalive_seconds):  # the pull (ADR 0072)
+                fetched = source(since, day)
             converted = fetched.converted
             store.renew(cur, report.run_id)
             records = [r for r in converted.rows if r["effective_date"] <= day]
@@ -264,12 +266,13 @@ def run_daily(
                 if len(missing) > live.max_missing_overlap:
                     raise pull.PullError(f"{len(missing)} stored overlap rows were not returned")
             lapsed = store.lapsed_between(cur, previous["data_timestamp"], day)
-            done = engine.ingest(memory, records, rules, day, live.recent_post_days)
-            exits = lapse_events(lapsed, previous["data_timestamp"], day)
-            # Display rows (ADR 0051) of the live trials whose record was applied today.
-            applied = {str(r["nct_id"]) for r in records}
-            shown = [r for r in display.display_rows(fetched.studies, secret)
-                     if r.nct_id in applied and r.nct_id in memory.wides]  # fmt: skip
+            with keep_alive(con, live.keepalive_seconds):  # the ingest's computation
+                done = engine.ingest(memory, records, rules, day, live.recent_post_days)
+                exits = lapse_events(lapsed, previous["data_timestamp"], day)
+                # Display rows (ADR 0051) of the live trials whose record was applied today.
+                applied = {str(r["nct_id"]) for r in records}
+                shown = [r for r in display.display_rows(fetched.studies, secret)
+                         if r.nct_id in applied and r.nct_id in memory.wides]  # fmt: skip
             with con.transaction():
                 store.renew(cur, report.run_id)  # first in every write (ADR 0060)
                 store.save_ingest(cur, done, report.run_id)
@@ -296,7 +299,9 @@ def run_daily(
             pending = [v for v in store.versions_after(cur, sponsors.last_run_id)
                        if v["run_id"] <= report.run_id]  # fmt: skip
             if pending or sponsors.through_day < day - dt.timedelta(days=1):
-                engine.advance(engine.Memory({}, sponsors), pending, day, rules, report.run_id)
+                with keep_alive(con, live.keepalive_seconds):  # the sponsor pass
+                    engine.advance(engine.Memory({}, sponsors), pending, day, rules,
+                                   report.run_id)  # fmt: skip
                 with con.transaction():
                     store.renew(cur, report.run_id)
                     store.save_file(cur, sponsors)  # the pass's one commit point
@@ -431,7 +436,8 @@ def day_features(
     wides = store.load_wides(cur, chosen.rescore)
     keys = live_features.served_keys(scored, day, rules, cfg)
     count = store.open_count(cur, day, rules.open_statuses, rules.study_type)
-    features = live_features.compute_live(wides, keys, sponsors, count, rules)
+    with keep_alive(cur.connection, cfg.live.keepalive_seconds):  # the features (ADR 0072)
+        features = live_features.compute_live(wides, keys, sponsors, count, rules)
     return DayFeatures(people, chosen, scored, features)
 
 
@@ -450,7 +456,8 @@ def score_day(
     runs with no transaction open (ADR 0058)."""
     found = day_features(cur, cfg, rules, day, sponsors, model, full)
     people, chosen, scored, features = found.people, found.chosen, found.scored, found.features
-    scores = model.score(scored, features, day) if len(scored) else _empty_scores()
+    with keep_alive(cur.connection, cfg.live.keepalive_seconds):  # scores and drivers
+        scores = model.score(scored, features, day) if len(scored) else _empty_scores()
     if set(scores["model_version"]) - {model.version}:
         raise RefusedError(f"the scores are not of the model {model.version} that was scoped")
     unscored = people[people["reason"].notna() & people["trial_id"].isin(chosen.trials)]
@@ -477,14 +484,17 @@ def publish_day(
     store."""
     done = score_day(cur, cfg, rules, day, sponsors, model, full)
     scores, people = done.scores, done.people
-    serving.publish(Scored(scores, done.unscored, {}), cfg, dsn,
-                    scope=done.chosen.trials, run_id=run_id, day=day,
-                    lease=lambda c: store.renew(c, run_id))  # fmt: skip
-    file = None
-    if full and len(scores):
-        classes = dict(zip(people["trial_id"], people["sponsor_class"], strict=True))
-        with_class = scores.assign(sponsor_class=scores["nct_id"].map(classes))
-        file = (score_file(with_class), len(scores))
+    # Publication writes on its own connection, and the month's file is compressed here:
+    # the job's connection is quiet meanwhile (ADR 0072).
+    with keep_alive(cur.connection, cfg.live.keepalive_seconds):
+        serving.publish(Scored(scores, done.unscored, {}), cfg, dsn,
+                        scope=done.chosen.trials, run_id=run_id, day=day,
+                        lease=lambda c: store.renew(c, run_id))  # fmt: skip
+        file = None
+        if full and len(scores):
+            classes = dict(zip(people["trial_id"], people["sponsor_class"], strict=True))
+            with_class = scores.assign(sponsor_class=scores["nct_id"].map(classes))
+            file = (score_file(with_class), len(scores))
     return done.rescored, file
 
 

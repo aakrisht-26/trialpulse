@@ -116,3 +116,45 @@ def test_the_day0_check_compares_the_live_path_with_the_reference(scratch: str) 
     result = dayzero.check_cutoff(CFG, dsn, MODEL, (scores, pd.concat([unscored, unscored.iloc[
         [0]].assign(nct_id="NCT99999998")])))  # fmt: skip
     assert result["differences"] == ["unscored: 0 rows only new, 1 only in the reference"]
+
+
+@pytest.mark.parametrize("ping", [0.5, None])
+def test_the_day0_check_survives_neons_cut_of_a_quiet_connection(
+    scratch: str, ping: float | None
+) -> None:
+    """ADR 0072: the check scores with its connection held. With `idle_session_timeout` at
+    2 s (Neon's cut after about 5 minutes, scaled) and a scorer quiet for 3 s, it compares
+    with the keep-alive on and loses its connection without it."""
+    import time
+
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg import conninfo
+
+    dsn = scratch.replace("postgresql+psycopg://", "postgresql://", 1)
+    assert CFG.dataset.cutoff is not None
+    day = CFG.dataset.cutoff
+    scores, unscored, seeded = _reference(day)
+    with psycopg.connect(dsn, autocommit=True) as con, con.cursor() as cur:
+        with con.transaction():
+            run_id = store.start_bootstrap(cur, day, 120)
+        rows = store.prepare_bootstrap(cur, run_id, day, seeded.wides, seeded.sponsors,
+                                       seeded.markers, Scored(scores.copy(), unscored.copy(),
+                                                              {}))  # fmt: skip
+        with con.transaction():
+            store.load_bootstrap(cur, rows)
+
+    def slow(scored: pd.DataFrame, features: pd.DataFrame, at: dt.date) -> pd.DataFrame:
+        time.sleep(3.0)
+        return _scorer(scored, features, at)
+
+    cut = conninfo.make_conninfo(dsn, options="-c idle_session_timeout=2000")
+    cfg = CFG.model_copy(update={"live": CFG.live.model_copy(
+        update={"keepalive_seconds": ping or 200.0})})  # fmt: skip
+    model = daily.Model("stand-in/1", slow, DECISIONS)
+    if ping is None:
+        with pytest.raises(psycopg.OperationalError, match="idle-session timeout"):
+            dayzero.check_cutoff(cfg, cut, model, (scores, unscored))
+        return
+    result = dayzero.check_cutoff(cfg, cut, model, (scores, unscored))
+    assert result["differences"] == []
+    assert result["live_scored"] == len(scores)

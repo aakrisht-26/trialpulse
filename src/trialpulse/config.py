@@ -202,6 +202,7 @@ class LiveConfig(_Section):
     retention_alert_mb: tuple[PositiveInt, ...] = Field(min_length=1)
     retention_months: PositiveInt  # history rows older than this are exported, then deleted
     version_retention_months: PositiveInt  # the same for live.study_versions (ADR 0069)
+    keepalive_seconds: float = Field(gt=0, le=240)  # ADR 0072: under Neon's 5 minutes
 
     @model_validator(mode="after")
     def _kill_after_alarm(self) -> Self:

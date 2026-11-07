@@ -40,6 +40,7 @@ from trialpulse.cohort.rules import add_months
 from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.live import store
 from trialpulse.live.daily import _dsn
+from trialpulse.live.keepalive import keep_alive
 
 EXPORT_DIR = REPO_ROOT / "data" / "live_exports"
 
@@ -133,6 +134,7 @@ def retain(
     export_only: bool = False,
     stale_minutes: int = 120,
     version_months: int | None = None,
+    keepalive_seconds: float = 60,
 ) -> list[Exported]:
     """Export, verify and (unless `export_only`) delete the old rows of every table: those
     older than `months`, or for `live.study_versions` than `version_months` when given."""
@@ -155,7 +157,7 @@ def retain(
         try:
             for table in TABLES:
                 results.append(_one(con, table, cutoffs[table.name], run_id, out_dir,
-                                    export_only))  # fmt: skip
+                                    export_only, keepalive_seconds))  # fmt: skip
         except BaseException:
             from trialpulse.live.daily import record_failure
 
@@ -173,7 +175,7 @@ def retain(
 
 
 def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
-         export_only: bool) -> Exported:  # fmt: skip
+         export_only: bool, keepalive_seconds: float = 60) -> Exported:  # fmt: skip
     """One table (see the module text). `con` is in autocommit: the export and its check run
     with no transaction open, and the delete is one short transaction."""
     with con.cursor() as cur:
@@ -191,9 +193,10 @@ def _one(con: Any, table: Table, cutoff: dt.date, run_id: int, out_dir: Path,
             return Exported(table.name, 0, None, 0)
         stem = f"{table.name.replace('.', '_')}_before_{cutoff.isoformat()}_run{run_id}"
         path = out_dir / f"{stem}.parquet"
-        _write(path, rows)
-        expected = digest(rows)
-        back = _read(path)
+        with keep_alive(con, keepalive_seconds):  # the file and its check (ADR 0072)
+            _write(path, rows)
+            expected = digest(rows)
+            back = _read(path)
         if len(back) != len(rows) or digest(back) != expected:
             raise ExportMismatchError(
                 f"{path.name} does not hold the {len(rows)} rows of {table.name} it was "
@@ -235,7 +238,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg = load_project_config()
     for result in retain(_dsn(args.target), args.as_of, cfg.live.retention_months, args.out,
                          args.export_only, cfg.live.lease_stale_minutes,
-                         cfg.live.version_retention_months):  # fmt: skip
+                         cfg.live.version_retention_months,
+                         cfg.live.keepalive_seconds):  # fmt: skip
         where = result.path.name if result.path else "nothing to export"
         print(f"{result.table}: {result.rows} rows exported ({where}), {result.deleted} deleted")
     return 0

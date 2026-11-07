@@ -1003,3 +1003,76 @@ def test_display_rows_and_names_are_kept_for_served_trials_only(dsn: str) -> Non
         ).fetchone()[0]
     assert (unserved, gone, orphans) == (0, 0, 0)
     assert report.counts["details"]["display_pruned"] >= 1
+
+
+# Neon's cut of a quiet connection (ADR 0072) ------------------------------------------------
+
+CUT_MS = 2000  # Neon: about 300000 (its suspend after 5 minutes without a query)
+CUT_SLOW = 3.0  # each slow stage below is quiet for longer than the cut
+
+
+def _cut(dsn: str) -> str:
+    """The job's connection string with `idle_session_timeout` lowered on every connection
+    it opens: a session quiet outside a transaction for that long is ended, as Neon does."""
+    from psycopg import conninfo
+
+    return conninfo.make_conninfo(dsn, options=f"-c idle_session_timeout={CUT_MS}")
+
+
+def _pinging(seconds: float) -> Any:
+    return CFG.model_copy(update={"live": CFG.live.model_copy(
+        update={"keepalive_seconds": seconds})})  # fmt: skip
+
+
+def _cut_api() -> ApiClient:
+    import time
+
+    respx.get(VERSION_URL).mock(return_value=httpx.Response(200, json=_load("version.json")))
+
+    def page(request: httpx.Request) -> httpx.Response:
+        time.sleep(CUT_SLOW)
+        name = "delta_page_2.json" if "pageToken" in request.url.params else "delta_page_1.json"
+        return httpx.Response(200, json=_load(name))
+
+    respx.get(STUDIES_URL).mock(side_effect=page)
+    return ApiClient(httpx.Client(), per_minute=60_000, wait=wait_none(), sleep=lambda _: None)
+
+
+def _cut_scorer(scored: pd.DataFrame, features: pd.DataFrame, day: dt.date) -> pd.DataFrame:
+    import time
+
+    time.sleep(CUT_SLOW)  # the drivers of a full run
+    return _scorer(scored, features, day)
+
+
+@respx.mock
+@pytest.mark.parametrize("ping", [0.5, None])
+def test_a_full_run_survives_neons_cut_of_a_quiet_connection(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, ping: float | None
+) -> None:
+    """With the cut lowered to 2 s and a slow pull, sponsor pass and scorer, the full run
+    succeeds with the keep-alive pinging every 0.5 s. Without pings (an interval far longer
+    than the run) the same run loses its connection: the test reproduces the cut."""
+    import time
+
+    _bootstrap(dsn)
+    advance = daily.engine.advance
+
+    def slow_advance(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(CUT_SLOW)
+        return advance(*args, **kwargs)
+
+    monkeypatch.setattr(daily.engine, "advance", slow_advance)
+    model = daily.Model("stand-in/1", _cut_scorer, DECISIONS)
+    cfg = _pinging(ping or 200.0)
+    if ping is None:
+        with pytest.raises(daily.JobFailedError, match="ingest: IdleSessionTimeout"):
+            daily.run_daily(cfg, _cut(dsn), SECRET, _cut_api(), model)
+        return
+    report = daily.run_daily(cfg, _cut(dsn), SECRET, _cut_api(), model)
+    assert (report.status, report.exit_code) == ("succeeded", 0)
+    assert report.counts["details"]["full"]
+    with psycopg.connect(dsn) as con:
+        assert con.execute("SELECT data_as_of FROM serving.data_status").fetchone() == (DAY,)
+        assert con.execute("SELECT status FROM monitoring.pipeline_runs WHERE job = 'daily'"
+                           ).fetchall() == [("succeeded",)]  # fmt: skip

@@ -60,6 +60,7 @@ from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import REPO_ROOT, ProjectConfig, Secrets, load_project_config
 from trialpulse.live import contract, store
+from trialpulse.live.keepalive import keep_alive
 from trialpulse.live.seed import State, seed_trial, sponsor_pass, state_of
 from trialpulse.live.sponsors import SponsorFile
 from trialpulse.live.state import Wide
@@ -459,13 +460,18 @@ def run_bootstrap(
             def renew() -> None:
                 store.renew(cur, lease)
 
+            keepalive = cfg.live.keepalive_seconds
+
             stage, tick = "seed", clock.perf_counter()
-            with open_warehouse(inputs.warehouse) as wh:
+            # The seed's last part (the sponsor pass) runs without a batch to renew on, so
+            # the whole stage is under the keep-alive, renewed before and after (ADR 0072).
+            renew()
+            with open_warehouse(inputs.warehouse) as wh, keep_alive(con, keepalive):
                 streamed = stream_seed(
                     wh, day, rules, secret, cfg.live.recent_post_days,
                     cfg.features.sponsor_alias_min_trials, cfg.features.sponsor_alias_wait_days,
-                    tick=renew,
                 )  # fmt: skip
+            renew()
             report["counts"] = {**streamed.counts, "markers": len(streamed.markers),
                                 "sponsor_keys": len(streamed.sponsors.key_numbers),
                                 "sponsor_trials": len(streamed.sponsors.thin),
@@ -480,7 +486,8 @@ def run_bootstrap(
                     raise RefusedError(f"{len(missing)} trials of the cutoff's population have "
                                        "no wide row")  # fmt: skip
                 frame["content_hash"] = frame["nct_id"].map(hashes)
-            counts = reasons.counts_from_files(inputs.warehouse, inputs.outcomes)
+            with keep_alive(con, keepalive):  # the reason counts read the dataset's files
+                counts = reasons.counts_from_files(inputs.warehouse, inputs.outcomes)
             report["counts"].update(scored=len(scored.scores), unscored=len(scored.unscored),
                                     reason_count_rows=len(counts),
                                     labeled_early_stops=sum(c[3] for c in counts))  # fmt: skip
