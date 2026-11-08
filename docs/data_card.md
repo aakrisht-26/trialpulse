@@ -12,6 +12,7 @@ This card describes the data TrialPulse is built from. What the model does with 
 | --- | --- | --- |
 | Hugging Face dataset [`brbk/clinical_trials_history`](https://huggingface.co/datasets/brbk/clinical_trials_history), config `core` | Every version of every registry record: the version clock, the outcomes and every versioned feature | Revision `v2026.09.26` (commit `3007d00a5a07`): 4,444,542 versions of 604,583 trials, 96 columns ([data_dictionary_history.md](data_dictionary_history.md)) |
 | The same dataset, config `interventions` | The interventions of each version (ADR 0020) | Same revision |
+| Hugging Face dataset [`anamnesis-data/clinical_trials_history`](https://huggingface.co/datasets/anamnesis-data/clinical_trials_history), configs `core` and `interventions` (the gap source) | Once, before go-live: the versions posted after the pinned cutoff, for the live state's rebootstrap (ADRs 0041 and 0074), read under the pinned revision's rules (ADR 0073) with sponsor renames counted by cause (ADR 0075); never a source of the registered results, and its names are never written onto pinned rows | Release `v2026.11.04` (commit `2b7c8b0e4c00`) |
 | [ClinicalTrials.gov API v2](https://clinicaltrials.gov/data-api/api) | The stop-reason texts labeled in Step 6, the parity checks against the dataset, and the current-record phase of the descriptive phase tables of [eda.md](eda.md) (Tables 5 and 15; ADR 0006 keeps it out of every model and allows it only in a labeled sensitivity analysis, which has not been run); from Step 14, the daily updates | Snapshot pulled on 2026-09-23 |
 | ClinicalTrials.gov's internal history endpoint | Verification samples only, in Step 2 (ADR 0011); never a source of features, outcomes or scores | Step 2 samples |
 | Stop-reason labels | An LLM (`openai/gpt-oss-120b` on Groq) labeled a stratified sample of 10,000 reason texts; a TF-IDF and logistic regression classifier distilled from those labels labels every early stop ([reason_labeling.md](reason_labeling.md)) | Final classifier of 2026-10-21 |
@@ -20,6 +21,7 @@ TrialPulse uses v2026.09.26, the last release at `brbk/clinical_trials_history`,
 
 ## Licenses and terms
 
+- **The gap source**, the later release published by Anamnesis Data, carries the same license and the same gated terms (cite it, attribute the records to ClinicalTrials.gov, no commercial use). Its files stay in `data/` on the laptop, and only the live state's rows derived from them leave it (ADR 0040).
 - **The dataset** is licensed CC BY-NC 4.0, and access to it is gated by terms that ask users to cite it, to attribute the underlying data to ClinicalTrials.gov, and not to use the files commercially. TrialPulse is non-commercial, always (CLAUDE.md Section 2). The raw files are never redistributed: they stay in the gitignored `data/` folder.
 - **ClinicalTrials.gov records** are used under the [ClinicalTrials.gov terms and conditions](https://clinicaltrials.gov/about-site/terms-conditions): every page that shows registry data names the source, says when ClinicalTrials.gov processed the data ("data as of") and says that TrialPulse changed it (ADR 0008).
 - **TrialPulse's code** is MIT licensed ([LICENSE](../LICENSE)). TrialPulse publishes and uses the derived scores for non-commercial purposes only (CLAUDE.md Section 2), as the dataset's license and access terms require of TrialPulse.
@@ -34,6 +36,17 @@ Cite the version history as its author asks, and attribute the records to Clinic
   author = {Bret Gaulin},
   year   = {2026},
   url    = {https://huggingface.co/datasets/brbk/clinical_trials_history}
+}
+```
+
+Cite the gap source, used once for the rows posted after the cutoff (ADR 0041), as its card asks:
+
+```bibtex
+@misc{clinical_trials_history_2026,
+  title  = {Clinical Trials Version History},
+  author = {{Anamnesis Data}},
+  year   = {2026},
+  url    = {https://huggingface.co/datasets/anamnesis-data/clinical_trials_history}
 }
 ```
 

@@ -152,4 +152,15 @@ The version history is the Hugging Face dataset [`brbk/clinical_trials_history`]
 }
 ```
 
+The live state also holds, once, the versions posted after that revision's cutoff, from the later release [`anamnesis-data/clinical_trials_history`](https://huggingface.co/datasets/anamnesis-data/clinical_trials_history) at v2026.11.04 (commit `2b7c8b0e4c00`), published by Anamnesis Data under the same CC BY-NC 4.0 terms and not redistributed here (ADR 0041, read under the pinned rules of ADRs 0073 and 0075). It is never a source of the registered results. Cite it as its card asks:
+
+```bibtex
+@misc{clinical_trials_history_2026,
+  title  = {Clinical Trials Version History},
+  author = {{Anamnesis Data}},
+  year   = {2026},
+  url    = {https://huggingface.co/datasets/anamnesis-data/clinical_trials_history}
+}
+```
+
 Registry records: ClinicalTrials.gov, U.S. National Library of Medicine, https://clinicaltrials.gov, data as of 2026-09-25.
