@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; the overlap check stopped at 99.8131% agreement (bar 99.9%) from registry sponsor renames, so the gap store, parity 5b and the rebootstrap rehearsal (ADR 0074, Proposed) wait for a decision. Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08; the overlap check rerun under ADR 0075 stopped on its first condition (11 versions of 6 trials whose sponsor class the registry changed under the same name, not a rename), so the gap store, parity 5b and the rebootstrap wait for a decision. Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2499,6 +2499,40 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 14, the gap read under ADR 0075 (2026-11-08, afternoon): stopped at item A
+
+Aakrisht at the laptop (charger in). His decisions of 2026-11-08: ADR 0075 (sponsor renames counted by cause in the overlap check, three conditions), ADR 0074 accepted as written, the Render choices approved, the Step 15 verify line fixed, and the gap source cited. Then items A to E in order, stopping at the first failure. No Neon access of any kind in this run, no deployment, `daily.yml` untouched, no secret changed.
+
+### Done before item A
+
+- **ADR 0075** (`docs/adr/0075-the-overlap-check-counts-sponsor-renames-by-cause.md`, Accepted) and its line in CLAUDE.md's amendments; ADR 0074's status set to Accepted, with its amendment line; CLAUDE.md's Step 15 verify line now maps `-p 8000:10000` (`1e333f8`).
+- **`gap.compare`** (`1e333f8`): `classify_sponsor` reads the two releases' raw lead sponsor names for the same version (a changed name is a registry rename made without a new version; the same name, a name on one side, another Unicode form or no raw row is unexplained); `sponsor_renames` counts them, the renamed trials and their gap rows; `verdict` holds the three conditions; the overlap also reports the agreement on the feature columns other than the sponsor's. 15 tests in `tests/gap/test_compare.py` (6 new cases of the classifier, the counts, the agreement without the sponsor, the verdict).
+- **The gap source cited** in the README and the data card: `anamnesis-data/clinical_trials_history` at v2026.11.04 (commit `2b7c8b0e4c00`), published by Anamnesis Data, its card's citation, the same CC BY-NC 4.0 terms; no contact address (`ed5f3a0`).
+- **The seed date of ADR 0074 as code** (`3d89db6`): `rebootstrap.seed_date` takes the latest tail day on which the API pull holds no record the release lacks, and parity 5b writes it with the lacking records posted before the first daily pull would start (2 tests).
+
+### Item A: the overlap check under ADR 0075: FAILED (condition 1)
+
+`uv run python -m trialpulse.gap.compare` from `1e333f8`, clean tree (843 s: adapt 83, build 547, overlap 211). The release rebuilt as before: 4,476,761 versions of 610,078 trials, 0 quarantined. Log `data/logs/gap_compare_adr0075_20261108.log`, counts in data/gap/overlap.json. The command exited 4 (stopped) and wrote no gap store.
+
+| Condition of ADR 0075 | Value | Holds |
+| --- | --- | --- |
+| 1. Every sponsor difference a registry rename, 0 unexplained | 7,426 renames (7,424 another name, 2 case or punctuation); **11 unexplained**: the class changed under the same name | **No** |
+| 2. Renamed trials at most 2% of the release's trials | 4,471 of 610,078 (0.733%) | Yes |
+| 3. Other feature columns agree on at least 99.9%, 0 bugs | 4,444,395 of 4,445,303 (99.980%), 0 bugs | Yes |
+
+The other counts are those of the overnight run: 4,444,541 keys in both, 1 pinned only, 761 release only; the agreement on all feature columns, sponsor included, 99.8131%. Of the 4,471 renamed trials, 93 have gap rows, and all 93 show another sponsor key at their first gap version than at their last pinned one; over every trial with gap rows, 246 do (the other 153 changed sponsor with a new version).
+
+**The 11 unexplained versions, read-only** (`data/logs/gap_sponsor_class11_20261108.log`, counts only): 11 versions of 6 trials, every one with the same raw sponsor name in both releases and the class INDIV in the pinned revision against INDUSTRY in the release. So the pinned rows treat the sponsor as an individual (no name and no key, ADR 0012) and the release's rows give it a key. The class differs on every version of those 6 trials both hold (11 in all), on their latest pinned version too, posted between 2018 and 2026; 1 of the 6 has gap rows. This is the registry changing a record without a new version, as the renames are, but it is a change of class, not of name, and ADR 0075's first condition admits renames only. The rule was not widened.
+
+**Not run:** items B (the gap store), C (parity 5b), D (the local rehearsal) and E (the Neon runbook and the Neon run). Nothing pinned, registered or on Neon was touched.
+
+### Decision for Aakrisht
+
+1. **How to treat the 6 trials whose sponsor class changed under the same name:**
+   - **(a) Recommended:** amend ADR 0075's first condition to admit a class change under the same name as a registry change made without a new version, counted apart from the renames (it is the census's own cause "registry: the class changed under the same name", ADR 0042). Pinned rows keep the INDIV class (no stored name or key); the 1 trial with gap rows shows the change at its first gap version, as the live path would on its next update, and ADR 0059's allowlist still decides whether the name is shown.
+   - **(b)** Keep the condition as written and leave the 6 trials' gap rows out of the gap store (the store lacks them; the first daily run brings their latest record from API v2), counted in the store's info.
+   - **(c)** Gap (a) of ADR 0041: no gap rows at all.
 
 ## Step 14, the overnight run of 2026-11-08: ADR 0073, the gap read, the rebootstrap rehearsal, deployment prepared
 
