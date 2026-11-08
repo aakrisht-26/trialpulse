@@ -24,10 +24,12 @@ text. In order:
      on every column a served feature reads.
    - **ADR 0075:** the sponsor columns are judged by cause, from the two releases' raw lead
      sponsor names for the same version. The check passes only if every sponsor difference
-     is a registry rename made without a new version (0 unexplained), the renamed trials
-     are at most `MAX_RENAMED_SHARE` of the release's trials, and the agreement on every
-     other feature column is at least `MIN_AGREEMENT` with 0 bugs. Otherwise the command
-     stops before the store. Pinned rows keep their names.
+     is a registry change made without a new version (0 unexplained): a rename, or, as
+     amended on 2026-11-08, a class change under the same raw name, counted apart; the
+     trials with either change are at most `MAX_RENAMED_SHARE` of the release's trials; and
+     the agreement on every other feature column is at least `MIN_AGREEMENT` with 0 bugs.
+     Otherwise the command stops before the store. Pinned rows keep their names and their
+     classes.
 4. **The gap store.** The release's versions posted after the cutoff, their texts and their
    adapted intervention rows, into data/gap/store.duckdb, apart from everything pinned.
 
@@ -380,13 +382,15 @@ def classify_sponsor(
 ) -> str:
     """The cause of a sponsor difference on one version both releases hold, from the two raw
     lead sponsor names. The version number is the same in both, so a changed raw name is a
-    registry rename made without a new version; anything else is not one."""
+    registry rename made without a new version, and a changed class under the same raw name is
+    the registry changing the class without a new version (the census's cause, ADR 0042, as
+    amended in ADR 0075); anything else is unexplained."""
     if not found:
         return NO_RAW_SPONSOR
     left, right = census.name_form(pinned_name), census.name_form(release_name)
     if left == right:
         same_class = census.same_raw("lead_sponsor_class", pinned_class, release_class)
-        return BUG if same_class else NOT_RENAME_CLASS
+        return BUG if same_class else CLASS_CHANGED
     if left is None or right is None:
         return NOT_RENAME_MISSING
     if unicodedata.normalize("NFC", left) == unicodedata.normalize("NFC", right):
@@ -397,7 +401,7 @@ def classify_sponsor(
 
 
 NO_RAW_SPONSOR = "fail: no raw sponsor name"
-NOT_RENAME_CLASS = "not a rename: the class changed under the same name"
+CLASS_CHANGED = census.CLASS_CHANGED  # explained, counted apart from the renames
 NOT_RENAME_MISSING = "not a rename: a name on one side only"
 NOT_RENAME_UNICODE = "not a rename: the same name in another Unicode form"
 
@@ -424,13 +428,18 @@ def sponsor_renames(
     ).fetchall()
     causes: Counter[str] = Counter()
     renamed: set[str] = set()
+    class_changed: set[str] = set()
     for nct, p_name, r_name, p_class, r_class, found in rows:
         cause = classify_sponsor(p_name, r_name, p_class, r_class, bool(found))
         causes[cause] += 1
         if cause.startswith(RENAME):
             renamed.add(nct)
-    con.execute("CREATE OR REPLACE TEMP TABLE renamed_trials (nct_id VARCHAR)")
-    con.executemany("INSERT INTO renamed_trials VALUES (?)", [(n,) for n in sorted(renamed)])
+        elif cause == CLASS_CHANGED:
+            class_changed.add(nct)
+    con.execute("CREATE OR REPLACE TEMP TABLE renamed_trials (nct_id VARCHAR, kind VARCHAR)")
+    con.executemany("INSERT INTO renamed_trials VALUES (?, ?)",
+                    [(n, "rename") for n in sorted(renamed)]
+                    + [(n, "class") for n in sorted(class_changed)])  # fmt: skip
     day = f"DATE '{cutoff.isoformat()}'"
     gap = con.execute(
         f"""WITH last_pinned AS (
@@ -441,10 +450,13 @@ def sponsor_renames(
               SELECT nct_id, sponsor_key FROM rel.versions WHERE effective_date > {day}
               QUALIFY row_number() OVER (PARTITION BY nct_id
                                          ORDER BY effective_date, nct_version) = 1)
-        SELECT count(*) FILTER (WHERE t.nct_id IS NOT NULL),
-               count(*) FILTER (WHERE t.nct_id IS NOT NULL
+        SELECT count(*) FILTER (WHERE t.kind = 'rename'),
+               count(*) FILTER (WHERE t.kind = 'rename'
                                 AND g.sponsor_key IS DISTINCT FROM l.sponsor_key),
                count(*) FILTER (WHERE l.nct_id IS NOT NULL
+                                AND g.sponsor_key IS DISTINCT FROM l.sponsor_key),
+               count(*) FILTER (WHERE t.kind = 'class'),
+               count(*) FILTER (WHERE t.kind = 'class'
                                 AND g.sponsor_key IS DISTINCT FROM l.sponsor_key)
         FROM first_gap g LEFT JOIN last_pinned l USING (nct_id)
         LEFT JOIN renamed_trials t USING (nct_id)"""
@@ -452,32 +464,41 @@ def sponsor_renames(
     trials = con.execute("SELECT count(DISTINCT nct_id) FROM rel.versions").fetchone()
     assert gap is not None
     assert trials is not None
-    unexplained = sum(n for cause, n in causes.items() if not cause.startswith(RENAME))
+    unexplained = sum(n for cause, n in causes.items()
+                      if not (cause.startswith(RENAME) or cause == CLASS_CHANGED))  # fmt: skip
+    changed = len(renamed | class_changed)
     return {
         "versions_judged": len(rows),
         "causes": dict(sorted(causes.items())),
         "unexplained": unexplained,
         "renamed_trials": len(renamed),
+        "class_changed_trials": len(class_changed),
+        "registry_changed_trials": changed,
         "release_trials": int(trials[0]),
-        "renamed_share": len(renamed) / int(trials[0]) if trials[0] else 0.0,
+        "registry_changed_share": changed / int(trials[0]) if trials[0] else 0.0,
         "renamed_trials_with_gap_rows": int(gap[0]),
         "renamed_trials_whose_first_gap_version_shows_a_new_sponsor": int(gap[1]),
+        "class_changed_trials_with_gap_rows": int(gap[3]),
+        "class_changed_trials_whose_first_gap_version_shows_a_new_sponsor": int(gap[4]),
         "trials_whose_first_gap_version_has_another_sponsor_key": int(gap[2]),
     }
 
 
 def verdict(found: dict[str, Any], sponsors: dict[str, Any]) -> dict[str, Any]:
-    """The three conditions of ADR 0075, each with its value."""
+    """The three conditions of ADR 0075 as amended, each with its value. The share bound counts
+    every trial with a registry change to its sponsor, renamed or reclassed."""
     conditions = {
-        "every_sponsor_difference_a_rename": sponsors["unexplained"] == 0,
-        "renamed_trials_at_most": sponsors["renamed_share"] <= MAX_RENAMED_SHARE,
+        "every_sponsor_difference_a_registry_change": sponsors["unexplained"] == 0,
+        "registry_changed_trials_at_most": (
+            sponsors["registry_changed_share"] <= MAX_RENAMED_SHARE
+        ),
         "other_agreement_at_least": (
             found["agreement_on_other_feature_columns"] >= MIN_AGREEMENT
             and found["bugs_or_failures"] == 0
         ),
     }
     return {"rule": "ADR 0075", "agreement_at_least": MIN_AGREEMENT,
-            "renamed_share_at_most": MAX_RENAMED_SHARE, "conditions": conditions,
+            "registry_changed_share_at_most": MAX_RENAMED_SHARE, "conditions": conditions,
             "passes": all(conditions.values())}  # fmt: skip
 
 

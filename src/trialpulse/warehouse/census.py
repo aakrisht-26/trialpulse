@@ -144,6 +144,7 @@ NO_RAW = "fail: the raw values could not be read"
 UNKNOWN_LABEL = "the registry's UNKNOWN label only (the submitted status is equal)"
 FAILING: frozenset[str] = frozenset({BUG, PHASE_MOVED, NO_RAW})
 REGISTRY = "registry: "  # the prefix of every registry cause
+CLASS_CHANGED = "registry: the class changed under the same name"
 # The largest share of unchanged trials one column may show as changed by the registry. The
 # census of 2026-11-04 found at most 0.94% (sponsor names); a wrong API path would show
 # in nearly every record that has the field.
@@ -316,7 +317,7 @@ def _sponsor_cause(source: RowSources) -> str:
             api_raw(source.study, "lead_sponsor_class"),
             source.raw.get("lead_sponsor_class"),
         )
-        return "registry: the class changed under the same name" if classes_differ else BUG
+        return CLASS_CHANGED if classes_differ else BUG
     if folded(api) == folded(dataset):
         return "registry: the same name but for case or punctuation"
     return "registry: another name"

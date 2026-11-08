@@ -11,6 +11,7 @@ import pytest
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import load_project_config
 from trialpulse.gap import compare
+from trialpulse.warehouse import census
 
 CUTOFF = dt.date(2026, 9, 25)
 RULES = CohortRules.from_config(load_project_config())
@@ -209,7 +210,7 @@ def _core(path: Path, rows: list[tuple[str, int, str | None, str]]) -> str:
         (("ACME, Inc", "Acme Inc"), ("INDUSTRY", "INDUSTRY"),
          f"{compare.RENAME}: case or punctuation"),
         (("Acme &amp; Co", "Acme & Co"), ("INDUSTRY", "INDUSTRY"), compare.BUG),
-        (("Acme", "Acme"), ("INDUSTRY", "INDIV"), compare.NOT_RENAME_CLASS),
+        (("Acme", "Acme"), ("INDIV", "INDUSTRY"), compare.CLASS_CHANGED),
         (("Acme", None), ("INDUSTRY", "INDUSTRY"), compare.NOT_RENAME_MISSING),
         (("Café", "Café"), ("OTHER", "OTHER"), compare.NOT_RENAME_UNICODE),
     ],
@@ -218,6 +219,14 @@ def test_a_sponsor_difference_is_a_rename_only_when_the_raw_name_changed(
     names: tuple[str | None, str | None], classes: tuple[str, str], cause: str
 ) -> None:
     assert compare.classify_sponsor(*names, *classes) == cause
+
+
+def test_a_class_change_under_the_same_name_is_the_census_cause() -> None:
+    # ADR 0075 as amended on 2026-11-08: the overlap check and the census (ADR 0042) name
+    # the same registry change by the same cause, and neither counts it as unexplained
+    assert compare.CLASS_CHANGED == "registry: the class changed under the same name"
+    assert compare.CLASS_CHANGED.startswith(census.REGISTRY)
+    assert compare.CLASS_CHANGED not in census.FAILING
 
 
 def test_a_version_without_a_raw_name_is_unexplained() -> None:
@@ -231,7 +240,10 @@ def sponsors(tmp_path: Path) -> dict[str, Any]:
         _version("NCT21", 0, sponsor_key="beta", lead_sponsor_name="Beta"),  # a bug
         _version("NCT22", 0),  # the same
         _version("NCT23", 0),  # renamed, no gap row
-    ]
+        # an individual in the pinned revision (no name, no key), a company in the release
+        _version("NCT24", 0, sponsor_key=None, sponsor_is_individual=True,
+                 lead_sponsor_name=None),
+    ]  # fmt: skip
     release = [
         _version("NCT20", 0, sponsor_key="acmeholdings", lead_sponsor_name="Acme Holdings"),
         _version(
@@ -244,17 +256,24 @@ def sponsors(tmp_path: Path) -> dict[str, Any]:
         _version("NCT21", 0, sponsor_key="beta2", lead_sponsor_name="Beta"),
         _version("NCT22", 0),
         _version("NCT23", 0, sponsor_key="acmeholdings", lead_sponsor_name="Acme Holdings"),
+        _version("NCT24", 0, sponsor_key="delta", lead_sponsor_name="Delta"),
+        _version("NCT24", 1, effective_date=LATE, sponsor_key="delta", lead_sponsor_name="Delta"),
     ]
-    _warehouse(tmp_path / "pinned.duckdb", pinned, [_raw(r) for r in pinned])
+    pinned_raws = [_raw(r, lead_sponsor_class="INDIV" if r["nct_id"] == "NCT24" else "INDUSTRY")
+                   for r in pinned]  # fmt: skip
+    _warehouse(tmp_path / "pinned.duckdb", pinned, pinned_raws)
     _warehouse(tmp_path / "release.duckdb", release, [_raw(r) for r in release])
     holdings, ind = "Acme Holdings", "INDUSTRY"
     pinned_core = _core(tmp_path / "pcore", [("NCT20", 0, "Acme", ind), ("NCT21", 0, "Beta", ind),
                                              ("NCT22", 0, "Acme", ind),
-                                             ("NCT23", 0, "Acme", ind)])  # fmt: skip
+                                             ("NCT23", 0, "Acme", ind),
+                                             ("NCT24", 0, "Delta", "INDIV")])  # fmt: skip
     release_core = _core(tmp_path / "rcore", [("NCT20", 0, holdings, ind),
                                               ("NCT20", 1, holdings, ind),
                                               ("NCT21", 0, "Beta", ind), ("NCT22", 0, "Acme", ind),
-                                              ("NCT23", 0, holdings, ind)])  # fmt: skip
+                                              ("NCT23", 0, holdings, ind),
+                                              ("NCT24", 0, "Delta", ind),
+                                              ("NCT24", 1, "Delta", ind)])  # fmt: skip
     iv = _interventions(tmp_path / "iv", [("NCT22", 0, "Aspirin", "DRUG")])
     con = duckdb.connect()
     con.execute(f"ATTACH '{(tmp_path / 'pinned.duckdb').as_posix()}' AS pinned (READ_ONLY)")
@@ -266,37 +285,41 @@ def sponsors(tmp_path: Path) -> dict[str, Any]:
 
 def test_sponsor_differences_are_counted_by_cause(sponsors: dict[str, Any]) -> None:
     result = sponsors["sponsors"]
-    assert result["versions_judged"] == 3
-    assert result["causes"] == {f"{compare.RENAME}: another name": 2, compare.BUG: 1}
-    assert result["unexplained"] == 1
+    assert result["versions_judged"] == 4
+    assert result["causes"] == {
+        f"{compare.RENAME}: another name": 2,
+        compare.CLASS_CHANGED: 1,
+        compare.BUG: 1,
+    }
+    assert result["unexplained"] == 1  # the bug only; the class change is explained
     assert result["renamed_trials"] == 2
-    assert result["release_trials"] == 4
+    assert result["class_changed_trials"] == 1
+    assert result["registry_changed_trials"] == 3
+    assert result["release_trials"] == 5
+    assert result["registry_changed_share"] == pytest.approx(3 / 5)
     assert result["renamed_trials_with_gap_rows"] == 1
     assert result["renamed_trials_whose_first_gap_version_shows_a_new_sponsor"] == 1
+    assert result["class_changed_trials_with_gap_rows"] == 1
+    assert result["class_changed_trials_whose_first_gap_version_shows_a_new_sponsor"] == 1
 
 
 def test_the_other_feature_columns_leave_out_the_sponsor(sponsors: dict[str, Any]) -> None:
     found = sponsors["found"]
-    assert found["agreement_on_feature_columns"] == pytest.approx(1 / 4)
+    assert found["agreement_on_feature_columns"] == pytest.approx(1 / 5)
     assert found["agreement_on_other_feature_columns"] == pytest.approx(1.0)
 
 
 def test_the_verdict_needs_all_three_conditions(sponsors: dict[str, Any]) -> None:
     found, result = sponsors["found"], dict(sponsors["sponsors"])
     failed = compare.verdict(found, result)
-    assert failed["conditions"]["every_sponsor_difference_a_rename"] is False
-    assert failed["conditions"]["renamed_trials_at_most"] is False  # 2 of 4 trials
+    assert failed["conditions"]["every_sponsor_difference_a_registry_change"] is False
+    assert failed["conditions"]["registry_changed_trials_at_most"] is False  # 3 of 5 trials
     assert failed["passes"] is False
     assert found["bugs_or_failures"] == 1  # the same raw name under another key
     clean = {**found, "bugs_or_failures": 0}
-    passing = compare.verdict(clean, {**result, "unexplained": 0, "renamed_share": 0.02})
+    explained = {**result, "unexplained": 0, "registry_changed_share": 0.0}
+    passing = compare.verdict(clean, {**explained, "registry_changed_share": 0.02})
     assert passing["passes"] is True
-    assert (
-        compare.verdict(found, {**result, "unexplained": 0, "renamed_share": 0.0})["passes"]
-        is False
-    )
+    assert compare.verdict(found, explained)["passes"] is False
     worse = {**clean, "agreement_on_other_feature_columns": 0.9989}
-    assert (
-        compare.verdict(worse, {**result, "unexplained": 0, "renamed_share": 0.0})["passes"]
-        is False
-    )
+    assert compare.verdict(worse, explained)["passes"] is False
