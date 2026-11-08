@@ -116,3 +116,18 @@ def test_the_steps_refuse_on_a_runner(
         rebootstrap.combine(con, SEED, "x", tmp_path / "combined")
     with pytest.raises(RefusedError, match="ADR 0040"):
         rebootstrap.main(["combine", "--seed", SEED.isoformat()])
+
+
+def test_the_seed_is_the_latest_tail_day_the_release_holds_in_full() -> None:
+    """ADR 0074, decision 5: a day with an API record the release lacks is passed over."""
+    released = dt.date(2026, 11, 4)
+    lacking = {
+        "2026-11-03": {"records": 900, "not_in_the_release": 40},
+        "2026-11-02": {"records": 1200, "not_in_the_release": 0},
+    }
+    assert rebootstrap.seed_date(released, lacking) == dt.date(2026, 11, 2)
+    assert rebootstrap.seed_date(released, {}) == dt.date(2026, 11, 3)
+    full = {(released - dt.timedelta(days=d)).isoformat(): {"records": 1, "not_in_the_release": 1}
+            for d in range(1, 8)}  # fmt: skip
+    with pytest.raises(RefusedError, match="no seed date"):
+        rebootstrap.seed_date(released, full)

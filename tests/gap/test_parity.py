@@ -101,3 +101,16 @@ def test_the_parity_refuses_on_a_runner(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     with pytest.raises(RefusedError, match="ADR 0040"):
         parity.main([])
+
+
+def test_the_seed_summary_counts_lacking_records_before_the_first_pull() -> None:
+    from trialpulse.config import load_project_config
+
+    found = {"by_post_date": {
+        "2026-10-20": {"records": 10, "not_in_the_release": 2},
+        "2026-10-31": {"records": 10, "not_in_the_release": 1},
+        "2026-11-03": {"records": 10, "not_in_the_release": 5},
+    }}  # fmt: skip
+    summary = parity.seed_summary(load_project_config(), dt.date(2026, 11, 4), found)
+    assert summary == {"seed": "2026-11-02", "first_pull_starts": "2026-10-30",
+                       "lacking_records_before_the_first_pull": 2}  # fmt: skip

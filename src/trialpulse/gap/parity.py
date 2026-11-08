@@ -252,6 +252,18 @@ def scaled_analog(days: int) -> dict[str, Any]:
     }
 
 
+def seed_summary(cfg: ProjectConfig, release: dt.date, found: dict[str, Any]) -> dict[str, Any]:
+    """The seed date of ADR 0074 (decision 5), and the API records the release lacks that are
+    posted before the first daily run's pull starts (the seed minus the overlap days): those
+    the catch-up would not fetch again."""
+    seed = rebootstrap.seed_date(release, found["by_post_date"])
+    starts = seed - dt.timedelta(days=cfg.live.overlap_days)
+    before = sum(v["not_in_the_release"] for d, v in found["by_post_date"].items()
+                 if dt.date.fromisoformat(d) < starts)  # fmt: skip
+    return {"seed": seed.isoformat(), "first_pull_starts": starts.isoformat(),
+            "lacking_records_before_the_first_pull": before}  # fmt: skip
+
+
 # The command ------------------------------------------------------------------------------
 
 
@@ -298,6 +310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
               WHERE last_update_post_date IS NULL) f USING (nct_id, nct_version)""")
         result["hidden"] = hidden(con, cutoff, release)
         result["api_records_the_release_lacks"] = lacking(con, cutoff, release)
+        result["seed"] = seed_summary(cfg, release, result["api_records_the_release_lacks"])
         con.execute("""CREATE TEMP TABLE rel_versions AS
             SELECT v.*, o.text AS official_title, b.text AS brief_title
             FROM gap.versions v LEFT JOIN gap.texts o ON o.text_hash = v.official_title_hash

@@ -77,6 +77,18 @@ def check_seed(cfg: ProjectConfig, seed: dt.date) -> None:
         raise RefusedError("the seed must come after the pinned cutoff")
 
 
+def seed_date(released: dt.date, lacking_by_day: dict[str, dict[str, int]]) -> dt.date:
+    """ADR 0074, decision 5: the latest day, 1 to 7 days before the release, on which the API
+    pull holds no record the release lacks (`lacking_by_day` as parity layer 5b writes it,
+    keyed by ISO date; a day without records lacks none)."""
+    for days in range(TAIL_DAYS[0], TAIL_DAYS[1] + 1):
+        day = released - dt.timedelta(days=days)
+        if lacking_by_day.get(day.isoformat(), {}).get("not_in_the_release", 0) == 0:
+            return day
+    raise RefusedError(f"every day of the tail before the release of {released} has API "
+                       "records the release lacks: no seed date (ADR 0074)")  # fmt: skip
+
+
 def seeded_cfg(cfg: ProjectConfig, seed: dt.date) -> ProjectConfig:
     """The configuration of the rebootstrap: the data reach the seed date."""
     return cfg.model_copy(update={"dataset": cfg.dataset.model_copy(update={"cutoff": seed})})
