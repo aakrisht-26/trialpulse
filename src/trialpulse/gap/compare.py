@@ -21,8 +21,13 @@ text. In order:
      state; a difference is "the release changed the raw value" when the raw values of the
      two releases differ, and a bug when they are the same;
    - **agreement** is the share of all keys posted by the cutoff that are in both and agree
-     on every column a served feature reads. Below `MIN_AGREEMENT` the command stops before
-     the store.
+     on every column a served feature reads.
+   - **ADR 0075:** the sponsor columns are judged by cause, from the two releases' raw lead
+     sponsor names for the same version. The check passes only if every sponsor difference
+     is a registry rename made without a new version (0 unexplained), the renamed trials
+     are at most `MAX_RENAMED_SHARE` of the release's trials, and the agreement on every
+     other feature column is at least `MIN_AGREEMENT` with 0 bugs. Otherwise the command
+     stops before the store. Pinned rows keep their names.
 4. **The gap store.** The release's versions posted after the cutoff, their texts and their
    adapted intervention rows, into data/gap/store.duckdb, apart from everything pinned.
 
@@ -35,6 +40,7 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -63,7 +69,9 @@ ADAPTED_DIR = GAP_DIR / "release" / "adapted"
 RELEASE_WAREHOUSE = GAP_DIR / "release" / "warehouse.duckdb"
 STORE_PATH = GAP_DIR / "store.duckdb"
 RESULT_PATH = GAP_DIR / "overlap.json"
-MIN_AGREEMENT = 0.999  # on the columns a served feature reads (the gap read's item 4)
+MIN_AGREEMENT = 0.999  # on the feature columns other than the sponsor's (ADR 0075)
+MAX_RENAMED_SHARE = 0.02  # renamed trials over the release's trials (ADR 0075)
+RENAME = "registry rename without a new version"
 MEMORY_LIMIT = "8GB"
 log = logging.getLogger(__name__)
 
@@ -314,20 +322,24 @@ def overlap(
     for column in census.COUNTED_TEXTS:
         if counts.get(column):
             causes[column] = Counter({"text differs (no served feature reads it)": counts[column]})
-    # Agreement: the feature columns as features read them.
+    # Agreement: the feature columns as features read them; `other` leaves out the sponsor
+    # columns, which ADR 0075 judges by cause instead (`sponsor_renames`).
     feature = [c for c in columns if c in census.FEATURE_COLUMNS
                and c not in TITLES and c not in STATUS]  # fmt: skip
     disagree = " OR ".join([*(f"d_{c}" for c in feature), "submitted_differs"])
-    con.execute(f"CREATE TEMP TABLE feature_disagree AS SELECT nct_id, nct_version "
-                f"FROM overlap_flags WHERE {disagree}")  # fmt: skip
+    other = " OR ".join([*(f"d_{c}" for c in feature if c not in SPONSOR), "submitted_differs"])
+    con.execute(f"CREATE TEMP TABLE feature_disagree AS SELECT nct_id, nct_version, "
+                f"({other}) AS other FROM overlap_flags WHERE {disagree}")  # fmt: skip
     if phase_moved:
-        con.executemany("INSERT INTO feature_disagree VALUES (?, ?)", sorted(phase_moved))
+        con.executemany("INSERT INTO feature_disagree VALUES (?, ?, true)", sorted(phase_moved))
     disagreeing = con.execute(
-        "SELECT count(*) FROM (SELECT DISTINCT nct_id, nct_version FROM feature_disagree)"
+        "SELECT count(DISTINCT (nct_id, nct_version)), "
+        "count(DISTINCT (nct_id, nct_version)) FILTER (WHERE other) FROM feature_disagree"
     ).fetchone()
     assert disagreeing is not None
     union, both = int(totals[0]), int(totals[1])
     agreeing = both - int(disagreeing[0])
+    agreeing_other = both - int(disagreeing[1])
     bugs = sum(n for found in causes.values() for cause, n in found.items()
                if cause.startswith(("bug", "fail")))  # fmt: skip
     return {
@@ -343,6 +355,8 @@ def overlap(
         "causes": {c: dict(sorted(found.items())) for c, found in sorted(causes.items())},
         "feature_columns_agree": agreeing,
         "agreement_on_feature_columns": agreeing / union if union else 0.0,
+        "other_feature_columns_agree": agreeing_other,
+        "agreement_on_other_feature_columns": agreeing_other / union if union else 0.0,
         "bugs_or_failures": bugs,
         "trials_with_a_feature_difference": int(
             (con.execute("SELECT count(DISTINCT nct_id) FROM feature_disagree").fetchone() or (0,))[
@@ -350,6 +364,121 @@ def overlap(
             ]
         ),
     }
+
+
+# 3, ADR 0075: sponsor differences by cause ---------------------------------------------------
+
+JUDGED_SPONSOR = ("sponsor_key", "sponsor_is_individual")  # the sponsor columns features read
+
+
+def classify_sponsor(
+    pinned_name: str | None,
+    release_name: str | None,
+    pinned_class: str | None,
+    release_class: str | None,
+    found: bool = True,
+) -> str:
+    """The cause of a sponsor difference on one version both releases hold, from the two raw
+    lead sponsor names. The version number is the same in both, so a changed raw name is a
+    registry rename made without a new version; anything else is not one."""
+    if not found:
+        return NO_RAW_SPONSOR
+    left, right = census.name_form(pinned_name), census.name_form(release_name)
+    if left == right:
+        same_class = census.same_raw("lead_sponsor_class", pinned_class, release_class)
+        return BUG if same_class else NOT_RENAME_CLASS
+    if left is None or right is None:
+        return NOT_RENAME_MISSING
+    if unicodedata.normalize("NFC", left) == unicodedata.normalize("NFC", right):
+        return NOT_RENAME_UNICODE
+    if census.folded(left) == census.folded(right):
+        return f"{RENAME}: case or punctuation"
+    return f"{RENAME}: another name"
+
+
+NO_RAW_SPONSOR = "fail: no raw sponsor name"
+NOT_RENAME_CLASS = "not a rename: the class changed under the same name"
+NOT_RENAME_MISSING = "not a rename: a name on one side only"
+NOT_RENAME_UNICODE = "not a rename: the same name in another Unicode form"
+
+
+def sponsor_renames(
+    con: duckdb.DuckDBPyConnection, cutoff: dt.date, pinned_core: str, release_core: str
+) -> dict[str, Any]:
+    """Every version both releases hold whose sponsor columns differ, by cause (ADR 0075),
+    after `overlap` on the same connection. Counts only; no name leaves this function."""
+    judged = " OR ".join(f"f.d_{c}" for c in JUDGED_SPONSOR)
+
+    def raw(glob: str) -> str:
+        return f"""SELECT nct_id, nct_version, any_value(lead_sponsor_name) AS name,
+                          any_value(lead_sponsor_class) AS class, true AS found
+            FROM read_parquet('{glob}', union_by_name=true)
+            JOIN d USING (nct_id, nct_version) GROUP BY 1, 2"""
+
+    rows = con.execute(
+        f"""WITH d AS (SELECT nct_id, nct_version FROM overlap_flags f WHERE {judged}),
+        p AS ({raw(pinned_core)}), r AS ({raw(release_core)})
+        SELECT d.nct_id, p.name, r.name, p.class, r.class,
+               coalesce(p.found, false) AND coalesce(r.found, false)
+        FROM d LEFT JOIN p USING (nct_id, nct_version) LEFT JOIN r USING (nct_id, nct_version)"""
+    ).fetchall()
+    causes: Counter[str] = Counter()
+    renamed: set[str] = set()
+    for nct, p_name, r_name, p_class, r_class, found in rows:
+        cause = classify_sponsor(p_name, r_name, p_class, r_class, bool(found))
+        causes[cause] += 1
+        if cause.startswith(RENAME):
+            renamed.add(nct)
+    con.execute("CREATE OR REPLACE TEMP TABLE renamed_trials (nct_id VARCHAR)")
+    con.executemany("INSERT INTO renamed_trials VALUES (?)", [(n,) for n in sorted(renamed)])
+    day = f"DATE '{cutoff.isoformat()}'"
+    gap = con.execute(
+        f"""WITH last_pinned AS (
+              SELECT nct_id, sponsor_key FROM pinned.versions WHERE effective_date <= {day}
+              QUALIFY row_number() OVER (PARTITION BY nct_id
+                                         ORDER BY effective_date DESC, nct_version DESC) = 1),
+            first_gap AS (
+              SELECT nct_id, sponsor_key FROM rel.versions WHERE effective_date > {day}
+              QUALIFY row_number() OVER (PARTITION BY nct_id
+                                         ORDER BY effective_date, nct_version) = 1)
+        SELECT count(*) FILTER (WHERE t.nct_id IS NOT NULL),
+               count(*) FILTER (WHERE t.nct_id IS NOT NULL
+                                AND g.sponsor_key IS DISTINCT FROM l.sponsor_key),
+               count(*) FILTER (WHERE l.nct_id IS NOT NULL
+                                AND g.sponsor_key IS DISTINCT FROM l.sponsor_key)
+        FROM first_gap g LEFT JOIN last_pinned l USING (nct_id)
+        LEFT JOIN renamed_trials t USING (nct_id)"""
+    ).fetchone()
+    trials = con.execute("SELECT count(DISTINCT nct_id) FROM rel.versions").fetchone()
+    assert gap is not None
+    assert trials is not None
+    unexplained = sum(n for cause, n in causes.items() if not cause.startswith(RENAME))
+    return {
+        "versions_judged": len(rows),
+        "causes": dict(sorted(causes.items())),
+        "unexplained": unexplained,
+        "renamed_trials": len(renamed),
+        "release_trials": int(trials[0]),
+        "renamed_share": len(renamed) / int(trials[0]) if trials[0] else 0.0,
+        "renamed_trials_with_gap_rows": int(gap[0]),
+        "renamed_trials_whose_first_gap_version_shows_a_new_sponsor": int(gap[1]),
+        "trials_whose_first_gap_version_has_another_sponsor_key": int(gap[2]),
+    }
+
+
+def verdict(found: dict[str, Any], sponsors: dict[str, Any]) -> dict[str, Any]:
+    """The three conditions of ADR 0075, each with its value."""
+    conditions = {
+        "every_sponsor_difference_a_rename": sponsors["unexplained"] == 0,
+        "renamed_trials_at_most": sponsors["renamed_share"] <= MAX_RENAMED_SHARE,
+        "other_agreement_at_least": (
+            found["agreement_on_other_feature_columns"] >= MIN_AGREEMENT
+            and found["bugs_or_failures"] == 0
+        ),
+    }
+    return {"rule": "ADR 0075", "agreement_at_least": MIN_AGREEMENT,
+            "renamed_share_at_most": MAX_RENAMED_SHARE, "conditions": conditions,
+            "passes": all(conditions.values())}  # fmt: skip
 
 
 # 4: the gap store ----------------------------------------------------------------------------
@@ -438,9 +567,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         found = overlap(con, cutoff, CohortRules.from_config(cfg), interventions_glob(cfg),
                         adapted_glob("interventions"))  # fmt: skip
         result["overlap"] = found
+        sponsors = sponsor_renames(con, cutoff, dataset_glob(cfg), adapted_glob("core"))
+        result["sponsor_differences"] = sponsors
         result["seconds"]["overlap"] = round(time.monotonic() - started, 1)
-        passes = found["agreement_on_feature_columns"] >= MIN_AGREEMENT
-        result["verdict"] = {"agreement_at_least": MIN_AGREEMENT, "passes": passes}
+        result["verdict"] = verdict(found, sponsors)
+        passes = bool(result["verdict"]["passes"])
         if passes:
             result["store"] = write_store(con, cutoff, adapted_glob("interventions"))
     result["seconds"]["total"] = round(time.monotonic() - started, 1)
@@ -448,9 +579,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     RESULT_PATH.write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, default=str))
     if not passes:
+        failed = [k for k, ok in result["verdict"]["conditions"].items() if not ok]
         raise StoppedEarlyError(
-            f"agreement on the feature columns is {found['agreement_on_feature_columns']:.4%}, "
-            f"below {MIN_AGREEMENT:.1%}: the gap store is not written (the gap read's item 4)"
+            f"the overlap check fails ADR 0075 ({', '.join(failed)}): the gap store is not "
+            "written (the gap read's item 4)"
         )
     return 0
 

@@ -1,14 +1,14 @@
 # 0074. The rebootstrap from the pinned rows and the gap rows, and its reference check
 
 - Date: 2026-11-08
-- Status: **Proposed.** Drafted in the overnight run of 2026-11-08; not decided. The code exists (`trialpulse.gap.rebootstrap`, tested on synthetic data) but was not run on real rows: the overlap check of the gap read stopped below its bar (docs/progress.md), which stops the rebootstrap until Aakrisht decides how to read that result.
+- Status: **Accepted** as written (decided by Aakrisht on 2026-11-08), with decision 5's seed-date rule. Drafted in the overnight run of 2026-11-08, when the overlap check had stopped below its bar; ADR 0075 decided how that check is read.
 - Refines ADR 0041 (decision 3, the bootstrap at the release minus a tail) and ADR 0038 (layer 3, the day-0 check, which has no Step 13 files at a later date).
 
 ## Context
 
 ADR 0041 seeds the live state at the release of the gap read minus a tail of 1 to 7 days, so that versions API v2 never shows (superseded, posted on one day with others, failed review) are in the state. The bootstrap of Step 14 is dated the data cutoff and is held to Step 13's files of that date, and the day-0 check compares the live path's scores with the same files. Step 13 wrote no files for a later date, so a later seed needs its own reference.
 
-## Decision (proposed)
+## Decision
 
 1. **The combined rows.** The pinned warehouse's versions plus the gap store's versions posted on or before the seed date (ADR 0073's rules on both), their texts and the pinned warehouse's stop reasons, in a warehouse file of their own under data/gap/combined/, with the pinned interventions config plus the gap rows' adapted interventions. Every gap version must be after every pinned version of its trial, by number and by post date, or the step refuses. Nothing pinned is modified.
 2. **The reference files.** Step 13's code (`scoring.score.score`) on the combined rows, dated the seed: `scores_<seed>.parquet` and `unscored_<seed>.parquet` under data/gap/reference/, with their SHA-256 values. They take the place of Step 13's files.
