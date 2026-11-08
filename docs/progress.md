@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres with every check equal. Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2570,6 +2570,30 @@ Neon holds the bootstrap at the cutoff of 2026-11-07 (run 1). Every command belo
 | e. Storage | Database size and every table's size | Under 700 MB | seconds |
 
 **The undo,** if b is not equal: `uv run python -m trialpulse.live.bootstrap --target neon --rebuild` (the bootstrap at the pinned cutoff, 740 s on 2026-11-07), then `uv run python -m trialpulse.live.dayzero --target neon`, which must report equal again; then stop.
+
+### E. The run on Neon (2026-11-08): every step as expected
+
+Neon held run 1 (the bootstrap at the cutoff of 2026-11-07, 88,895 served trials, 259.1 MB) before. Logs `data/logs/gap_rebootstrap_neon_20261108.log` and `gap_neon_loads_20261108.log` (counts only).
+
+| Step | Result |
+| --- | --- |
+| a. Rebootstrap at the seed (`--rebuild`) | Succeeded as run 2 in **850 s** (scores 436, seed 306, prepare 30, the write **59.5 s** for 168.2 MB); peak private 7,982 MiB. Held to the reference files: 88,426 and 2,752 rows in both, 0 columns apart. 224,241 state rows, 3,942 reason counts (32,144 early stops) |
+| b. Reference check | **Equal**: 0 differences, the content hash equal on all 91,178 served rows; 475 s, peak private 2,573 MiB. The undo was not needed |
+| c. Loads | 3,942 reason counts, labeled through 2026-09-25; the model statement (sha256 `6806e31b02c66683`); display rows at 30 requests a minute in 9.1 minutes: 222,704 records, 90,918 served trials with a row, 10,883 sponsors named, 4,657 hidden, 260 served trials without a row (the local counts exactly) |
+| d. The API role | As `trialpulse_api` through API_DATABASE_URL (never printed): the read of `serving.trial_scores_latest` answers 88,426 rows; an UPDATE of `serving.data_status` and an INSERT into `serving.reason_counts` are refused (SQLSTATE 25006, the role's read-only transactions), and reads of `live.trial_state` and `monitoring.pipeline_runs` are refused (42501, no privilege). TRUNCATE kept the grants: no restore, `api_role` not rerun, the password unchanged |
+| e. Storage | **260.2 MB** (tables 251.9): state 105.0, latest 39.6, markers 33.9, display 31.5 and sponsors 3.7, history 23.3, sponsor file 13.4, everything else 1.4. Under the 700 MB line by 439.8 MB; the projection at month 12 is about 692.5 MB (part D) |
+
+Not run on Neon, as ordered: the daily job. Neon now holds the state at the seed 2026-11-03; its first daily run (the catch-up, from 2026-10-31) waits for go-live, with `daily.yml` still disabled and no secret changed.
+
+### Decisions made without asking (flagged)
+
+1. **`--skip-build` for item A:** the release's adapter and build code are unchanged since the build of `1e333f8` (an empty diff), and only the overlap stage changed.
+2. **The share bound of the amended condition 2 counts renamed and reclassed trials together** (4,477), not the renamed only (4,471), the stricter reading and the census's (ADR 0071 bounds every registry change of a column).
+3. **The yes or no for the reclassed trial** reads its name and class in the release's latest gap version and ADR 0059's rule; the live display row comes from API v2 and passes the same rule.
+4. **`--per-minute`** on the daily job and the display load, instead of a scratch wrapper, so the run is the committed command.
+5. **The daily runs on local Postgres took the champion from the registry** with the workflow's own command into data/gap/bundle/ (the laptop's champion folder lacks the decisions file, which the runner gets from the registry): the four model files and the decisions file equal the laptop's, the model version the same.
+6. **The no-op shown on the data:** a row count and MD5 of every table before and after the second run, beside the job's own "noop".
+7. **The Neon projection** rebases the estimate of 2026-11-07 on the parts measured now, each at the larger value.
 
 ## Step 14, the gap read under ADR 0075 (2026-11-08, afternoon): stopped at item A
 
