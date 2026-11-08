@@ -34,7 +34,13 @@ from trialpulse.cli import RefusedError, run
 from trialpulse.config import Secrets, load_project_config
 from trialpulse.contracts.sponsor import sponsor, sponsor_key
 from trialpulse.contracts.text import normalize_text
-from trialpulse.ingest.ctgov_api import STUDIES_URL, ApiClient, get_path, scrub_personal_data
+from trialpulse.ingest.ctgov_api import (
+    STUDIES_URL,
+    ApiClient,
+    capped_rate,
+    get_path,
+    scrub_personal_data,
+)
 from trialpulse.live.contract import display_name, sponsor_id
 
 ANCESTORS_PATH = "derivedSection.conditionBrowseModule.ancestors"
@@ -256,17 +262,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="keep every pulled record, not only the live trials (to measure the size)",
     )
+    parser.add_argument("--per-minute", type=float,
+                        help="a lower API v2 rate than live.requests_per_minute")  # fmt: skip
     args = parser.parse_args(argv)
     import psycopg
 
     from trialpulse.live.daily import _dsn
 
     cfg = load_project_config()
+    try:
+        per_minute = capped_rate(cfg.live.requests_per_minute, args.per_minute)
+    except ValueError as exc:
+        raise RefusedError(str(exc)) from None
     key = Secrets().sponsor_id_key
     if key is None:
         raise RefusedError("SPONSOR_ID_KEY is not set (environment, .env or a secret)")
     started = clock.perf_counter()
-    api = ApiClient(httpx.Client(timeout=60), per_minute=cfg.live.requests_per_minute)
+    api = ApiClient(httpx.Client(timeout=60), per_minute=per_minute)
     studies = pull_live_records(api, cfg.live.page_size)
     rows = display_rows(studies, key.get_secret_value().encode("utf-8"))
     with psycopg.connect(_dsn(args.target), connect_timeout=10) as con, con.cursor() as cur:

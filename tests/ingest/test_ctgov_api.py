@@ -8,6 +8,7 @@ import pytest
 import respx
 from tenacity import wait_none
 
+from trialpulse.ingest import ctgov_api
 from trialpulse.ingest.ctgov_api import (
     STUDIES_URL,
     ApiClient,
@@ -146,3 +147,23 @@ def test_get_path() -> None:
 def test_rate_must_be_positive() -> None:
     with pytest.raises(ValueError, match="positive"):
         ApiClient(httpx.Client(), per_minute=0)
+
+
+def test_a_command_may_lower_the_request_rate_but_never_raise_it() -> None:
+    assert ctgov_api.capped_rate(40, None) == 40
+    assert ctgov_api.capped_rate(40, 30) == 30
+    assert ctgov_api.capped_rate(40, 40) == 40
+    for refused in (41, 0, -1):
+        with pytest.raises(ValueError, match="at most 40"):
+            ctgov_api.capped_rate(40, refused)
+
+
+@pytest.mark.parametrize("command", ["trialpulse.live.daily", "trialpulse.live.display"])
+def test_the_live_commands_refuse_a_rate_above_the_configured_one(command: str) -> None:
+    import importlib
+
+    from trialpulse.cli import RefusedError
+
+    main = importlib.import_module(command).main
+    with pytest.raises(RefusedError, match="--per-minute"):
+        main(["--target", "local", "--per-minute", "41"])

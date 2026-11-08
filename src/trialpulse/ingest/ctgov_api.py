@@ -70,6 +70,16 @@ def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, RetryableStatusError | httpx.TransportError)
 
 
+def capped_rate(configured: float, requested: float | None) -> float:
+    """The request rate of a command: the configured one, or a lower one asked for on the
+    command line. A rate above the configured one (CLAUDE.md Section 7) is refused."""
+    if requested is None:
+        return configured
+    if not 0 < requested <= configured:
+        raise ValueError(f"--per-minute must be above 0 and at most {configured:g}")
+    return requested
+
+
 class ApiClient:
     """GET JSON at most per_minute times a minute, retrying transient failures."""
 

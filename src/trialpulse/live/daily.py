@@ -49,7 +49,7 @@ import pandas as pd
 from trialpulse.cli import RefusedError, run
 from trialpulse.cohort.rules import CohortRules
 from trialpulse.config import ProjectConfig, Secrets, load_project_config
-from trialpulse.ingest.ctgov_api import ApiClient
+from trialpulse.ingest.ctgov_api import ApiClient, capped_rate
 from trialpulse.live import display, engine, pull, runs, store
 from trialpulse.live import features as live_features
 from trialpulse.live.keepalive import keep_alive
@@ -562,8 +562,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--target", choices=("local", "neon"), required=True)
     parser.add_argument("--bundle", type=Path, help="the champion's bundle folder")
     parser.add_argument("--force", action="store_true", help="run even if today succeeded")
+    parser.add_argument("--per-minute", type=float,
+                        help="a lower API v2 rate than live.requests_per_minute")  # fmt: skip
     args = parser.parse_args(argv)
     cfg = load_project_config()
+    try:
+        per_minute = capped_rate(cfg.live.requests_per_minute, args.per_minute)
+    except ValueError as exc:
+        raise RefusedError(str(exc)) from None
     key = Secrets().sponsor_id_key
     if key is None:
         raise RefusedError("SPONSOR_ID_KEY is not set (environment, .env or a secret)")
@@ -572,7 +578,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = clock.perf_counter()
     try:
         model = champion_model(cfg, args.bundle or CHAMPION_DIR)
-        api = ApiClient(httpx.Client(timeout=60), per_minute=cfg.live.requests_per_minute)
+        api = ApiClient(httpx.Client(timeout=60), per_minute=per_minute)
         report = run_daily(cfg, _dsn(args.target), key.get_secret_value().encode("utf-8"), api,
                            model, force=args.force)  # fmt: skip
     except BaseException as exc:
