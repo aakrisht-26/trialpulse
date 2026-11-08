@@ -90,7 +90,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08; the overlap check rerun under ADR 0075 stopped on its first condition (11 versions of 6 trials whose sponsor class the registry changed under the same name, not a rename), so the gap store, parity 5b and the rebootstrap wait for a decision. Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
+| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres with every check equal. Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
@@ -2499,6 +2499,77 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 14, the gap read and the rebootstrap (2026-11-08, evening)
+
+Aakrisht at the laptop (charger in). His decision on the 6 reclassed trials: option (a), ADR 0075 amended. Then items A to E of the afternoon's prompt, in order, stopping at the first failure. `daily.yml` disabled, no deployment, no secret changed, nothing from either dataset sent anywhere but the live state (ADR 0040).
+
+### Before item A
+
+- **The CI wait, fixed.** The two background waits of the last runs never ended: `gh run list --commit <short sha>` matches the full 40-character head SHA only, so the loop read an empty list forever. Both were already stopped. No script in the repository waits on CI; from now on every wait uses `git rev-parse HEAD`, gives up after 30 minutes with a message, and treats a failed run as a stop.
+- **ADR 0075 amended** (`0dc3afa`): a sponsor class change under the same raw name is a registry change made without a new version, named by the census's own cause (`census.CLASS_CHANGED`, "registry: the class changed under the same name", ADR 0042), counted apart from the renames; 0 unexplained is still required; the share bound counts trials with either change. Pinned rows keep their class (INDIV: no stored name or key); the release's rows go through the same conversion, so the personal-title check (ADRs 0012 and 0022) and the display allowlist (ADR 0059) apply to them as to every row. Tests: the classifier's case, the cause named as the census names it and not failing, and the counts (renamed and reclassed trials, their gap rows) on the synthetic pair.
+- **`--per-minute` on the daily job and the display load** (`4135e9c`): a lower API v2 rate than `live.requests_per_minute`, refused above it (3 tests), so the laptop runs keep to 30 requests a minute without a scratch wrapper.
+
+### A. The overlap check under the amended ADR 0075: passes
+
+`uv run python -m trialpulse.gap.compare --skip-build` from `0dc3afa` (the adapter and the build are unchanged since the release was built from `1e333f8`, so their outputs were reused): 70 s. Log `data/logs/gap_compare_adr0075_amended_20261108.log`, counts in data/gap/overlap.json.
+
+| Condition | Value | Holds |
+| --- | --- | --- |
+| 1. Every sponsor difference a registry change, 0 unexplained | 7,437 versions: 7,424 renames to another name, 2 of case or punctuation, 11 class changes under the same name; **0 unexplained** | Yes |
+| 2. Trials with such a change at most 2% | 4,477 of 610,078 (4,471 renamed, 6 reclassed): 0.734% | Yes |
+| 3. Other feature columns at least 99.9%, 0 bugs | 4,444,395 of 4,445,303 (99.980%), 0 bugs | Yes |
+
+**The reclassed trial with gap rows** (1 of the 6; counts only, `data/logs/gap_class_privacy_20261108.log`): its first gap version shows the new key, as API v2 would on its next update. **Stored key: yes** (class INDUSTRY in the release, the personal-title check passes). **Shown name: yes** (the name holds an organization word of ADR 0059's list, so it is shown whatever the number of trials it leads). The other 5 have no gap rows and keep their pinned INDIV rows.
+
+### B. The gap store
+
+data/gap/store.duckdb (124 MB): **31,459 versions of 23,678 trials** posted 2026-09-28 to 2026-11-03, 91,961 texts, 65,009 intervention rows; 0 versions on or before the cutoff. data/warehouse.duckdb unchanged (last written 2026-11-04); no tracked file changed; `tests/eval/test_results.py` 23 passed (the record test of ADR 0031 included).
+
+### C. Parity layer 5b
+
+`uv run python -m trialpulse.gap.parity` (385 s; the first try crashed on an import because I edited `live/daily.py` while it ran, and was rerun on the committed tree). API pull of 2026-11-06 (28,750 records). Counts in data/gap/parity_5b.json, log `data/logs/gap_parity_5b_20261108.log`.
+
+| What | Measured | Analog of ADR 0041 scaled to this gap (40 days) |
+| --- | --- | --- |
+| Gap versions API v2 never showed | **8,125** of 31,459 (4,053 trials): 445 failed review, 7,680 superseded by a later post date | 10,596 |
+| The trials' latest public versions | 22,262 shown by the pull; 778 replaced by a record posted after the release; 292 by a later record within the release; 2 with no API record | |
+| Field differences on the 22,262 versions both hold | 65 content hashes differ: sponsor name and key 27 (renames, all with another raw name), official title 2 (no change of the phase stated), summary 15, eligibility 21 | |
+| Served trials whose features differ on the release date | 88,420 of 88,420: every one on `open_interventional_trials`, the registry-wide count of open trials, which the hidden versions move. Per trial feature: sponsor prior ended 4,951, version counts 2,282, sponsor prior stopped 288, start slip 71, 35 or fewer on each other feature | 2,944 scored rows (the analog counted per trial features only) |
+| Population | 3 trials only on the full history, 32 only on the API-shaped feed; of the trials on both, 3 differ in the reversal flag and 3 in the reason code | |
+
+**The seed (ADR 0074, decision 5):** every API record posted 2026-09-28 to 2026-11-03 is in the release; the 1,225 records of 2026-11-04 are not (the release's own date). **Seed 2026-11-03**; the first daily pull starts at 2026-10-31, with 0 records the release lacks before it.
+
+### D. The local rehearsal at the seed 2026-11-03 (`--target local`)
+
+Logs `data/logs/gap_rehearsal_local_20261108.log`, `gap_rehearsal_local_bcde_20261108.log`, `gap_rehearsal_local_daily_20261108.log`. Peak memory from a wrapper that reads the process's peak counters.
+
+| Item | Result |
+| --- | --- |
+| a. combine | 4,476,001 versions (31,459 from the gap, 23,678 trials), 2,915,766 texts, 9,466,456 intervention rows: 36 s, peak private 6,766 MiB |
+| a. reference | 88,426 scored, 2,752 unscored (beyond 120 months 2,240, reversal 512), 18,845 flagged: 328 s (drivers 279), peak private 7,593 MiB. SHA-256: scores `2978063ee5048629315ae408b190dae3beb6311a7f5033f4cd6806d05c1a25c4`, unscored `d0cf54c79d35fad7caf3727302778a744f6b146d67e442119a86ec5ca4beb0ee` |
+| a. rebootstrap `--rebuild` | 718 s (scores 374, seed 300, prepare 30, write 10); peak private 8,002 MiB. Held to the reference files: 88,426 and 2,752 rows in both, every column equal (risks with maximum difference 0.0, drivers, flags, indexes, model, content hash). Written: 224,241 state rows and markers, 88,426 latest and history rows, 2,752 not scored, the sponsor file, 3,942 reason counts; 168.5 MB sent |
+| b. reference check | **Equal**: the live path equals the reference on every trial, risk and driver, and on the content hash of every served row: 363 s, peak private 2,560 MiB |
+| c. loads | Reason counts and the model statement (seconds each); display rows at 30 requests a minute in 7.6 minutes: 222,704 records, 90,918 served trials with a row, 10,883 sponsors named and 4,657 hidden by the allowlist, 260 served trials without a display row |
+| d. first catch-up daily run | Succeeded for API v2's data date 2026-11-06 (a full run): pull from 2026-10-31 (the seed minus 3 days), 7 pages, 6,132 records, 0 quarantined, 3,787 versions added (2,751 new versions, 706 new trials, 330 closed trials, 2,345 overlap records already held); 88,667 trials rescored. **520 s**: ingest (pull and conversion) 144, sponsor pass 8, publication 362, compaction 1; peak private 2,663 MiB. The champion came from the registry with the workflow's own command (`live.registry --alias champion`), its files equal to the laptop's and its decisions file equal to Step 13's |
+| e. second daily run the same day | **No-op**: "noop for 2026-11-06", 5.5 s; a row count and an MD5 of every row of all 18 tables in `live`, `serving` and `monitoring`, before and after: **0 tables changed** (the first run changed 13) |
+| f. storage | Local database 267.8 MB after the first run (tables 258.6 MB): state 106.2, latest 39.5, markers 34.3, display 33.0 and sponsors 3.7, history 24.3, sponsor file 13.4, everything else 4.2 |
+
+**Neon's size, projected.** The estimate of 2026-11-07 (683.9 MB) rebased on the parts measured now, each kept at the larger of the two: state +1.6, history +0.5, markers +0.4, display rows +6.1 (36.7 MB against 30.6; 3.7% of the rows dead after the run, and longer rows), not scored and reasons +0.1, latest and the sponsor file kept at the estimate. **About 692.5 MB at month 12, under the 700 MB line by 7.5 MB, 30.8% headroom against 1 GB.** The display growth is the part to watch.
+
+### E. The Neon runbook
+
+Neon holds the bootstrap at the cutoff of 2026-11-07 (run 1). Every command below runs on the laptop in PowerShell from `E:\trialpulse`, one at a time, stopping at the first that does not give its expected output. The daily job is never run on Neon in this step.
+
+| Step | Command | Expected | Local time |
+| --- | --- | --- | --- |
+| a. Rebootstrap at the seed | `uv run python -m trialpulse.gap.rebootstrap bootstrap --seed 2026-11-03 --target neon --rebuild` | Exit 0; held to the reference files with 0 differences; 224,241 state rows, 88,426 scored, 2,752 unscored, 3,942 reason counts | 718 s, plus about 135 s for the write at 10 Mbit/s |
+| b. Reference check | `uv run python -m trialpulse.gap.rebootstrap check --seed 2026-11-03 --target neon` | "reference check: the live path equals the reference on every trial, risk and driver", 0 content hashes apart | 363 s |
+| c. Loads | `uv run python -m trialpulse.live.reasons --target neon`, then `uv run python -m trialpulse.live.statement --target neon`, then `uv run python -m trialpulse.live.display --target neon --per-minute 30` | 3,942 reason counts; the statement; about 90,900 display rows and 10,900 named sponsors | seconds, seconds, 7.6 minutes |
+| d. The API role | As `trialpulse_api` (API_DATABASE_URL, never printed): a read of `serving.trial_scores_latest` answers 88,426; an UPDATE of `serving.data_status`, an INSERT into `serving.reason_counts`, and reads of `live.trial_state` and `monitoring.pipeline_runs` are refused | The rebuild TRUNCATEs, which keeps grants. If a grant is missing, a grant-only step restores ADR 0049's grants with the current password kept; `api_role` is never rerun | seconds |
+| e. Storage | Database size and every table's size | Under 700 MB | seconds |
+
+**The undo,** if b is not equal: `uv run python -m trialpulse.live.bootstrap --target neon --rebuild` (the bootstrap at the pinned cutoff, 740 s on 2026-11-07), then `uv run python -m trialpulse.live.dayzero --target neon`, which must report equal again; then stop.
 
 ## Step 14, the gap read under ADR 0075 (2026-11-08, afternoon): stopped at item A
 
