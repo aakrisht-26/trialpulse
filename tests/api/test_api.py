@@ -199,6 +199,20 @@ def test_the_rate_limit_is_per_forwarded_client_not_per_proxy(make_client: Make)
     assert client.get("/health", headers={"X-Forwarded-For": "203.0.113.5"}).status_code == 200
 
 
+@pytest.mark.parametrize("on", [True, False])
+def test_the_forwarded_shape_is_logged_only_when_turned_on(
+    make_client: Make, caplog: pytest.LogCaptureFixture, on: bool
+) -> None:
+    client, _, _ = make_client(forwarded_diagnostic=on)
+    headers = {"X-Forwarded-For": "203.0.113.5, 198.51.100.7", "CF-Connecting-IP": "203.0.113.5"}
+    with caplog.at_level("INFO", logger="trialpulse.api"):
+        assert client.get("/v1/areas", headers=headers).status_code == 200
+        assert client.get("/health", headers=headers).status_code == 200
+    lines = [r.getMessage() for r in caplog.records if "forwarded shape" in r.getMessage()]
+    assert len(lines) == (1 if on else 0)  # /v1/ paths only
+    assert not any("203.0.113.5" in m or "198.51.100.7" in m for m in caplog.messages)
+
+
 def test_prepared_statements_are_off(seeded: str) -> None:
     engine = engine_for(seeded, 10)
     with engine.connect() as con:

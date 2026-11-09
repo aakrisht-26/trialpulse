@@ -229,6 +229,7 @@ class ApiConfig(_Section):
     unavailable_retry_after_seconds: PositiveInt
     rate_limit_per_minute: PositiveInt
     trusted_proxies: NonNegativeInt  # proxies that append to X-Forwarded-For (Spaces: 1)
+    forwarded_diagnostic: bool = False  # temporary: log the proxy chain's shape (ADR 0065)
     cache_entries: PositiveInt
     page_size_max: PositiveInt
 

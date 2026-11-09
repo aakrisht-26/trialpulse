@@ -25,7 +25,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from trialpulse.api import areas as area_list
 from trialpulse.api import schemas as s
 from trialpulse.api.db import Database, DatabaseRefused, Unavailable, engine_for
-from trialpulse.api.guards import AnswerCache, DataClock, RateLimiter, client_address
+from trialpulse.api.guards import (
+    AnswerCache,
+    DataClock,
+    ForwardedShape,
+    RateLimiter,
+    client_address,
+)
 from trialpulse.config import ApiConfig, Secrets, load_project_config
 from trialpulse.contracts.sponsor import sponsor_key
 from trialpulse.features.registry import model_columns
@@ -71,6 +77,7 @@ class Api:
                                clock)  # fmt: skip
         self.cache = AnswerCache(cfg.cache_entries)
         self.limiter = RateLimiter(cfg.rate_limit_per_minute, clock)
+        self.shape = ForwardedShape()
 
     def _read_data_as_of(self) -> dt.date | None:
         rows = self.db.rows("SELECT data_as_of FROM serving.data_status WHERE status_id = 1")
@@ -135,6 +142,11 @@ def create_app(api: Api) -> FastAPI:
     async def rate_limit(request: Request, call_next: Any) -> Any:
         if request.url.path.startswith("/v1/"):
             peer = request.client.host if request.client else None
+            if api.cfg.forwarded_diagnostic:  # the headers' shape only (ADR 0065)
+                head = request.headers
+                LOG.info(api.shape.describe(head.get("x-forwarded-for"),
+                                            head.get("cf-connecting-ip"),
+                                            head.get("true-client-ip"), peer))  # fmt: skip
             who = client_address(request.headers.get("x-forwarded-for"), peer,
                                  api.cfg.trusted_proxies)  # fmt: skip
             wait = api.limiter.allow(who)

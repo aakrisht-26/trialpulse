@@ -120,5 +120,7 @@ api:
   unavailable_retry_after_seconds: 30
   rate_limit_per_minute: 60         # per client address
   trusted_proxies: 1                # Render: measured on the deployed service (ADR 0065)
+  forwarded_diagnostic: true       # temporary, while ADR 0065's measurement runs: logs
+                                   # the headers' shape, never an address
   cache_entries: 20000
   page_size_max: 200
