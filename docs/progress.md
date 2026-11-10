@@ -2525,6 +2525,23 @@ Run 2 is the rebootstrap at the seed (2026-11-08, 338 s). No run has an error, a
 
 Two observations, no action taken: API v2's data date stayed at 2026-11-06 through the weekend and moved to 2026-11-09 on Monday, so the weekend's runs were no-ops by design (ADR 0045: the date of a run is API v2's dataTimestamp). And GitHub started the scheduled runs 3.6 to 7.1 hours after their cron times (21:30 and 00:30 UTC), so the job really runs between about 01:00 and 08:00 UTC (06:30 to 13:30 India time); the backup's schedule (item 3) avoids that span too.
 
+### 3. Weekly backups
+
+Built `trialpulse.live.backup` (`aff9415`) and `scripts/backup_weekly.ps1`, from ADR 0045's rule (a weekly scheduled task on the laptop, backups in `data/`, never published):
+
+- **Backup:** one `REPEATABLE READ, READ ONLY` transaction on Neon, so the 18 tables of `live`, `serving` and `monitoring` are one consistent snapshot. Each table goes out as Postgres's COPY text format in primary-key order, gzipped, under fixed session settings (UTC, ISO dates, hex bytea, shortest exact floats), so the same rows always give the same bytes. Its rows are checked against `count(*)` in the snapshot. Its SHA-256 is taken from the stream and again from the file read back after the connection closes. Only then does a manifest make the folder a backup. 8 backups are kept (`live.backup_keep`), and a backup is never overwritten.
+- **Restore:** only into the laptop's Postgres (localhost or 127.0.0.1, as ADR 0062), into a fresh `trialpulse_restore` database. That database is migrated to the backup's Alembic revision and loaded with COPY, foreign keys first, with the identity sequences moved past the loaded ids. Every table is then dumped again in the backup's form, and its rows and digest must equal the manifest's.
+- **Tests:** 11 on local scratch databases (every table backed up, a restore equal value for value with tabs, newlines and bytea, a damaged file caught, a file differing from the stream not kept, no overwrite, 8 kept, no restore outside localhost, the restore prefix, the load order, no connection string printed).
+- **Run on 2026-11-10 at 13:03 UTC:** 18 tables, 747,781 rows, **68.3 MB on disk, 51 s** (the snapshot 50 s); peak private memory 1,220 MiB. **Restore check: equal** on all 18 tables and 747,781 rows, in 9.7 s. Logs `data/logs/backup_neon_20261110.log`, `backup_restore_20261110.log`.
+- **The task script, run once by hand:** it refused cleanly (today's backup exists, exit code 2), and its log is plain text.
+- **The scheduled task is not registered.** The commands that register, show, run and remove it are in `docs/deploy.md`, Part 4: Sundays at 19:00 India time (13:30 UTC), with `StartWhenAvailable`.
+
+**Decisions made on my own:**
+- (a) COPY text in place of Parquet. Parquet loses exactness on jsonb, arrays, numeric and bytea, while COPY text restores byte for byte. The alternative was the retention module's Parquet export.
+- (b) ADR 0072's keep-alive is not used. The connection is held only inside the snapshot transaction, where it is never idle (each chunk is written as the next is read) and where the keep-alive must not ping. The read-back runs with the connection closed. The alternative was one transaction per table, with the keep-alive between them, at the cost of a consistent snapshot.
+- (c) Sunday 19:00 India time, chosen as above. The alternatives were a weekday evening or an early morning, which falls in the job's real span.
+- (d) A same-day second backup is refused rather than given a suffix.
+
 ## Go-live, and the API's client key behind Render (2026-11-10)
 
 Verified by Aakrisht: `daily.yml` enabled on 2026-11-08, when run 3 (full) succeeded on GitHub (a manual dispatch) in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API went live on Render the same day, at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.

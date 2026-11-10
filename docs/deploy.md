@@ -112,3 +112,39 @@ What to check after Part 2:
 2. The X-Forwarded-For measurement is recorded in ADR 0065 (section "Measured (2026-11-10)"): the rate limit is keyed by `CF-Connecting-IP`.
 3. `daily.yml` has been enabled since 2026-11-08: its first run on Neon was a manual dispatch that day, and it runs on its schedule since. It must not be disabled except to stop a failing job; a failed run opens a "Daily live run failed" issue.
 4. If anything fails, the API can be suspended from its service page on Render, and the app can be deleted or rebooted from the Community Cloud workspace. Neither holds data.
+
+## Part 4: Backups
+
+ADR 0045 (decision 11): a weekly scheduled task on the laptop backs up the live system to `data/backups/` (gitignored, never published). The command is `uv run python -m trialpulse.live.backup backup --target neon`: one read-only snapshot of every `live`, `serving` and `monitoring` table, each file checked by row count and SHA-256 after it is written, the last 8 backups kept (`live.backup_keep`). The task runs it through `scripts/backup_weekly.ps1`, which logs to `data/logs/backup_<date>.log` and, if the task starts late inside the daily job's window (21:30 to 00:30 UTC), waits until 00:30 UTC.
+
+**When:** Sundays at 19:00 India time (13:30 UTC). That is outside the daily job's cron window (21:30 to 00:30 UTC, 03:00 to 06:00 India time) and outside the span in which GitHub has really started the job so far (about 01:00 to 08:00 UTC, 06:30 to 13:30 India time), at an hour the laptop is likely on. `StartWhenAvailable` runs a missed backup when the laptop wakes. One backup takes about a minute (51 s on 2026-11-10, 68 MB), so it may run on battery.
+
+Register the task (PowerShell, once, as Aakrisht; no administrator rights needed):
+
+```
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File E:\trialpulse\scripts\backup_weekly.ps1" -WorkingDirectory "E:\trialpulse"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At "19:00"
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3)
+Register-ScheduledTask -TaskName "TrialPulse weekly backup" -Action $action -Trigger $trigger -Settings $settings -Description "Weekly backup of the live system to data/backups (ADR 0045)"
+```
+
+The time limit of 3 hours covers the wait of a late start inside the job's window (at most 3 hours) plus the backup itself.
+
+See it, run it now, see its last result, and remove it:
+
+```
+Get-ScheduledTask -TaskName "TrialPulse weekly backup" | Get-ScheduledTaskInfo
+Start-ScheduledTask -TaskName "TrialPulse weekly backup"
+Get-Content (Get-ChildItem E:\trialpulse\data\logs\backup_*.log | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+Unregister-ScheduledTask -TaskName "TrialPulse weekly backup" -Confirm:$false
+```
+
+`LastTaskResult` 0 is a backup written; 2 is a refusal (for example, a backup for that date already exists, which is never overwritten). `uv` must be on the PATH of Aakrisht's account, as it is in his terminal.
+
+**Restore,** only into the laptop's Postgres, never Neon (it refuses any host but localhost and 127.0.0.1): it creates a fresh database `trialpulse_restore` (dropped first if it exists), migrates it to the backup's Alembic revision, loads every table and checks each table's rows and digest against the backup:
+
+```
+uv run python -m trialpulse.live.backup restore --from data/backups/2026-11-10
+```
+
+Expected: `"equal": true` and exit code 0.
