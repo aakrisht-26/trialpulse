@@ -124,6 +124,12 @@ dashboard = [
 dataset = [
     "huggingface-hub>=1.32.0",
 ]
+# The weekly drift report (Step 17, ADR 0076): Evidently needs plotly below 6 and the dashboard
+# plotly 7, so the two groups conflict. The daily job installs this group without the
+# dashboard's (`--no-group dashboard --group drift`); CI runs the drift tests the same way.
+drift = [
+    "evidently>=0.7",
+]
 dev = [
     "mypy>=2.3.1",
     "playwright>=1.50",
@@ -136,3 +142,4 @@ dev = [
 
 [tool.uv]
 default-groups = ["api", "dashboard", "dataset", "dev"]
+conflicts = [[{ group = "dashboard" }, { group = "drift" }]]

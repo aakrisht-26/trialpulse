@@ -16,6 +16,7 @@ mlruns/
 __pycache__/
 *.py[cod]
 .venv/
+.venv-drift/
 build/
 dist/
 *.egg-info/
