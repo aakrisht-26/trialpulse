@@ -51,6 +51,7 @@ from trialpulse.contracts.versions import COLUMN_TYPES
 from trialpulse.live import export
 
 OUT_DIR = REPO_ROOT / "data" / "parity_5a"
+EXPORT_DIR = REPO_ROOT / "data" / "live_exports"  # the retention's exports (ADR 0069)
 COMPARED = ("as_of_date", "landmark_index", "true_landmark_index", "flagged", "model_version",
             "risk_12m", "risk_24m", "driver_months", "driver_features", "driver_values",
             "driver_contributions")  # fmt: skip
@@ -89,6 +90,20 @@ def _frame(con: Any, query: str, params: Sequence[Any] = ()) -> pd.DataFrame:
     cur = con.execute(query, params)
     names = [c.name for c in cur.description]
     return pd.DataFrame(cur.fetchall(), columns=names)
+
+
+def with_exported(versions: pd.DataFrame, export_dir: Path = EXPORT_DIR) -> pd.DataFrame:
+    """Neon's live versions with those the retention exported to the laptop and deleted
+    (ADR 0069), once each: after a retention, Neon alone no longer holds every live version
+    since go-live, which the offline path of 5a needs."""
+    files = sorted(export_dir.glob("live_study_versions_before_*.parquet"))
+    if not files:
+        return versions
+    exported = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    both = pd.concat([versions, exported[versions.columns]], ignore_index=True)
+    key = both["feature_hash"].map(lambda h: bytes(h) if h is not None else None)
+    both = both.assign(_key=key).drop_duplicates(["nct_id", "effective_date", "_key"])
+    return both.drop(columns="_key").reset_index(drop=True)
 
 
 def sponsor_keys_by_id(keys: Sequence[str], secret: bytes) -> dict[str, str]:
@@ -222,6 +237,8 @@ def run_5a(cfg: ProjectConfig, dsn: str, secret: bytes, out_dir: Path = OUT_DIR)
     if not rebootstrap.COMBINED_WAREHOUSE.is_file():
         raise RefusedError("no combined warehouse: run the rebootstrap's combine step first")
     neon = read_neon(dsn)
+    on_neon = len(neon["versions"])
+    neon["versions"] = with_exported(neon["versions"])
     day = neon["day"]
     seconds = {"neon": round(clock.perf_counter() - started, 1)}
     warehouse, interventions, counts = build_warehouse(
@@ -245,6 +262,10 @@ def run_5a(cfg: ProjectConfig, dsn: str, secret: bytes, out_dir: Path = OUT_DIR)
     result = {
         "day": day.isoformat(),
         "served_rows_by_date": neon["served_dates"],
+        "live_versions": {
+            "on_neon": on_neon,
+            "from_retention_exports": len(neon["versions"]) - on_neon,
+        },
         "warehouse": counts,
         "offline": {"scored": len(off_latest), "unscored": len(off_unscored)},
         "scores": compare(off_latest, latest, COMPARED),

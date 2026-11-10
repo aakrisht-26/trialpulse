@@ -3,6 +3,7 @@ live rows and the comparison. Synthetic rows only; the run itself reads Neon and
 warehouse."""
 
 import datetime as dt
+from pathlib import Path
 
 import pandas as pd
 
@@ -82,3 +83,17 @@ def test_a_contribution_beyond_the_stored_precision_differs() -> None:
     assert parity_5a._same([0.123], [0.1234], "driver_contributions")
     assert not parity_5a._same([0.123], [0.124], "driver_contributions")
     assert not parity_5a._same([0.123], [0.123, 0.1], "driver_contributions")
+
+
+def test_the_retention_exports_join_neons_rows_once_each(tmp_path: Path) -> None:
+    def row(nct: str, day: int, h: bytes) -> dict[str, object]:
+        return {"nct_id": nct, "effective_date": dt.date(2026, 11, day), "feature_hash": h}
+
+    neon = pd.DataFrame([row("NCT1", 9, b"\x01"), row("NCT2", 9, b"\x02")])
+    assert parity_5a.with_exported(neon, tmp_path).equals(neon)  # no export: Neon's rows
+    exported = pd.DataFrame([row("NCT1", 3, b"\x09"), row("NCT2", 9, b"\x02")])
+    exported["run_id"] = 3  # a column 5a does not read
+    exported.to_parquet(tmp_path / "live_study_versions_before_2026-11-05_run7.parquet")
+    both = parity_5a.with_exported(neon, tmp_path)
+    assert len(both) == 3  # the deleted version added, the one on both sides once
+    assert list(both.columns) == list(neon.columns)

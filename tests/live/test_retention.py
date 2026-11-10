@@ -276,14 +276,16 @@ DAILY_READERS = {"latest_live", "versions_after", "latest_post_date", "overlap_r
 
 def _readers_of_versions() -> set[str]:
     """Every function of the package whose code reads live.study_versions (an INSERT is not
-    a read), but the retention itself and the laptop's replay."""
+    a read), but the retention itself and the laptop's checks that are not the daily job: the
+    replay and parity layer 5a, which reads the retention's exports beside Neon's rows
+    (`parity_5a.with_exported`, tested in test_parity_5a.py), so a retention leaves it whole."""
     import ast
 
     from trialpulse.config import REPO_ROOT
 
     found = set()
     for path in (REPO_ROOT / "src" / "trialpulse").rglob("*.py"):
-        if path.name in ("retention.py", "replay_parity.py"):
+        if path.name in ("retention.py", "replay_parity.py", "parity_5a.py"):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
