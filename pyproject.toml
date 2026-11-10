@@ -69,6 +69,7 @@ plugins = ["pydantic.mypy"]
 module = [
     "sklearn", "sklearn.*", "joblib", "threadpoolctl", "pandas", "pandas.*", "pyarrow", "pyarrow.*",
     "lifelines", "lifelines.*", "plotly", "plotly.*",
+    "evidently", "evidently.*",  # the drift group only (ADR 0076)
 ]
 ignore_missing_imports = true
 
