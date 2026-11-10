@@ -2500,6 +2500,31 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
 
+## Unattended run of 2026-11-10 (afternoon): doc fixes, nightly runs, backups, parity 5a, screenshots, the Step 17 plan
+
+Aakrisht possibly away; each item independent, the most conservative reversible choice taken where he would be asked (recorded under each item). Read-only on Neon, nothing deployed, no scheduled task registered, no change to app/, daily.yml or GitHub secrets.
+
+### 1. Doc fixes
+
+The README and this file said the daily job and the API were live since 2026-11-09; the first run on Neon (a manual dispatch of `daily.yml`, run 3) and the API's go-live were on 2026-11-08, so both read 2026-11-08 now. `docs/deploy.md` Part 2 names the repository `aakrisht-26/trialpulse`, branch `main`, `app/Home.py`, Python 3.12, the secret line `API_URL = "https://trialpulse-api.onrender.com"`, and a scored and an unserved id for the check; Part 3 states the real state (API live, the measurement in ADR 0065, `daily.yml` enabled since 2026-11-08) instead of "keep daily.yml disabled" (`705497e`).
+
+### 2. The nightly runs since go-live
+
+`gh run list --workflow daily.yml`: 6 runs since 2026-11-08, all succeeded (2 manual dispatches, 4 scheduled). `monitoring.pipeline_runs` on Neon, read in a read-only session:
+
+| GitHub run (start, UTC) | Trigger | Neon run | Kind | Data date | Records fetched | Versions added | Quarantined | Rescored | Duration |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 11-08 12:33 | dispatch | 3 | full | 2026-11-06 | 6,132 | 3,787 | 0 | 88,667 | 928 s |
+| 11-08 12:56 | dispatch | none (no-op: 2026-11-06 already succeeded) | | | | | | | |
+| 11-09 01:08 | schedule | none (no-op, the same data date) | | | | | | | |
+| 11-09 07:01 | schedule | none (no-op, the same data date) | | | | | | | |
+| 11-10 03:43 | schedule | 4 | daily | 2026-11-09 | 6,111 | 1,325 | 0 | 1,904 | 132 s |
+| 11-10 07:37 | schedule | none (no-op: 2026-11-09 already succeeded) | | | | | | | |
+
+Run 2 is the rebootstrap at the seed (2026-11-08, 338 s). No run has an error, and no "Daily live run failed" issue exists, open or closed. **Neon: 283.5 MB**, under the 700 MB line by 416.5 MB.
+
+Two observations, no action taken: API v2's data date stayed at 2026-11-06 through the weekend and moved to 2026-11-09 on Monday, so the weekend's runs were no-ops by design (ADR 0045: the date of a run is API v2's dataTimestamp). And GitHub started the scheduled runs 3.6 to 7.1 hours after their cron times (21:30 and 00:30 UTC), so the job really runs between about 01:00 and 08:00 UTC (06:30 to 13:30 India time); the backup's schedule (item 3) avoids that span too.
+
 ## Go-live, and the API's client key behind Render (2026-11-10)
 
 Verified by Aakrisht: `daily.yml` enabled on 2026-11-08, when run 3 (full) succeeded on GitHub (a manual dispatch) in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API went live on Render the same day, at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.
