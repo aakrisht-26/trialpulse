@@ -56,19 +56,23 @@ def served_origin(cfg: ProjectConfig) -> dt.date:
 
 
 def training_matrix(
-    cfg: ProjectConfig, origin: dt.date, features_dir: Path = FEATURES_DIR
+    cfg: ProjectConfig,
+    origin: dt.date,
+    features_dir: Path = FEATURES_DIR,
+    landmarks: Path = LANDMARKS_PATH,
+    extra_features: Sequence[Path] = (),
 ) -> tuple[LandmarkRows, np.ndarray, np.ndarray, SponsorPriors]:
-    """The final cohort's landmark rows with their features, as training rows of `origin`,
-    and the sponsor priors fitted on them."""
-    rows, time, event = training_rows(
-        load_landmark_rows(LANDMARKS_PATH), np.datetime64(origin, "D")
-    )
+    """The landmark rows of `landmarks` (by default the final cohort's) with their features,
+    as training rows of `origin`, and the sponsor priors fitted on them. `extra_features`
+    are feature files of rows the main build does not hold (the replay's origin, ADR 0078)."""
+    rows, time, event = training_rows(load_landmark_rows(landmarks), np.datetime64(origin, "D"))
     keys = pd.DataFrame({"trial_id": rows.trial_id.astype(str),  # noqa: F841
                          "landmark_index": rows.landmark_index})  # fmt: skip
+    files = [(features_dir / FEATURES_NAME).as_posix(), *(p.as_posix() for p in extra_features)]
     with duckdb.connect() as con:
         frame = con.execute(
             f"""SELECT f.* FROM keys k LEFT JOIN
-            read_parquet('{(features_dir / FEATURES_NAME).as_posix()}') f
+            read_parquet({files!r}, union_by_name = true) f
               USING (trial_id, landmark_index)
             ORDER BY k.trial_id, k.landmark_index"""
         ).df()
