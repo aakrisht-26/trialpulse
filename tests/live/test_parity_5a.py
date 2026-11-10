@@ -97,3 +97,16 @@ def test_the_retention_exports_join_neons_rows_once_each(tmp_path: Path) -> None
     both = parity_5a.with_exported(neon, tmp_path)
     assert len(both) == 3  # the deleted version added, the one on both sides once
     assert list(both.columns) == list(neon.columns)
+
+
+def test_risks_compare_within_the_reproduction_tolerance_and_no_further() -> None:
+    # ADR 0038, amended 2026-11-10: the risks within 1e-12, every other column exact
+    assert parity_5a.RISK_TOLERANCE == 1e-12
+    assert parity_5a._same(0.25, 0.25 + 1.4e-17, "risk_12m")  # the measured platform bits
+    assert parity_5a._same(0.25, 0.25 + 9e-13, "risk_24m")
+    assert not parity_5a._same(0.25, 0.25 + 2e-12, "risk_12m")
+    assert not parity_5a._same(0.25, 0.2501, "risk_24m")
+    assert not parity_5a._same(2, 3, "landmark_index")  # exact columns stay exact
+    live = pd.DataFrame([_latest(risk_12m=0.1234 + 5e-12)])
+    result = parity_5a.compare(pd.DataFrame([_latest()]), live, parity_5a.COMPARED)
+    assert result["columns"]["risk_12m"]["different"] == 1

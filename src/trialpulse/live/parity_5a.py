@@ -57,6 +57,9 @@ COMPARED = ("as_of_date", "landmark_index", "true_landmark_index", "flagged", "m
             "driver_contributions")  # fmt: skip
 UNSCORED_COMPARED = ("as_of_date", "true_landmark_index", "reason")
 CONTRIBUTION_TOLERANCE = 5e-4  # Neon stores contributions as float4 of 3 decimals
+# ADR 0038, amended 2026-11-10: the risks within ADR 0034's reproduction tolerance, since the
+# live risks come from a Linux runner and 5a runs on Windows (platform math, last bits only)
+RISK_TOLERANCE = 1e-12
 
 
 def read_neon(dsn: str) -> dict[str, Any]:
@@ -199,7 +202,7 @@ def _same(a: Any, b: Any, column: str) -> bool:
     if a is None or b is None or (isinstance(a, float) and pd.isna(a)):
         return (a is None or pd.isna(a)) and (b is None or pd.isna(b))
     if column.startswith("risk_"):
-        return float(a) == float(b)
+        return abs(float(a) - float(b)) <= RISK_TOLERANCE
     return str(a) == str(b)
 
 

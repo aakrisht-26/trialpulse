@@ -2,6 +2,7 @@
 
 - Date: 2026-11-01
 - Status: **Accepted.** Decided by Aakrisht on 2026-11-01 (Step 14 decision 2: Parity C).
+- Amended 2026-11-10 (decided by Aakrisht): layer 5a compares the risks with an absolute tolerance of 1e-12 (see "Amendment of 2026-11-10").
 - Refines CLAUDE.md Section 12 ("Serving parity") and the Step 14 acceptance.
 
 ## Context
@@ -24,6 +25,12 @@ Under ADR 0037 the live path computes features from compact state, not from vers
 | 5b | Laptop, once | The later dataset read of ADR 0041 against the real API pull: what the API really hid |
 
 4. Layers 1 to 4 pass before go-live.
+
+## Amendment of 2026-11-10: layer 5a's risks
+
+Layer 5a compares `risk_12m` and `risk_24m` with an absolute tolerance of **1e-12**, the project's existing reproduction tolerance (ADR 0034, decision 2: a refit is used only if it reproduces the saved scores to 1e-12); every other column (the landmark indexes, the flag, the model version, the four driver arrays, and the unscored rows' index and reason) stays exact, and so does the population.
+
+Why: the live risks are computed on GitHub's Linux runner and 5a's offline risks on the laptop (Windows). The first run of 5a (2026-11-10) found 15 of 3,808 risks apart by at most 1.4e-17. The same `predict()` inputs, run in a local Linux container with the locked packages, reproduced Neon's risks bit for bit on all 1,904 trials, while Windows differed on exactly those 15: the difference is the platforms' math libraries, not the live path. A difference above 1e-12 still fails layer 5a.
 
 ## Alternatives
 
