@@ -44,6 +44,15 @@ The research of 2026-11-01 (docs/progress.md, "Finding 2: where the API can run"
 
 The diagnostic is turned off (`api.forwarded_diagnostic: false`); its code stays, off by default, for a later change of host.
 
+**Verified on the deployed fix** (commit `fa7d056`, live on Render 2026-11-10). ADR 0049's limit is a token bucket: 60 requests of burst, refilled at one a second. A run of 70 requests in 19 s therefore stays within 60 + 19 tokens and shows no 429 even with a stable key, so the first symptom alone proved nothing; the header shapes above are the evidence of the cause. The runs below send 130 requests, more than the bucket refills in their span:
+
+| Run (130 requests to `/v1/model`) | Answers | Expected with one stable key |
+| --- | --- | --- |
+| Plain, 30 s | 88 x 200, then 42 x 429 | about 60 + 30 = 90 answered |
+| X-Forwarded-For forged per request, 36 s, started 75 s later | 95 x 200, 34 x 429, 1 dropped connection | about 60 + 36 = 96 answered |
+
+Both runs are limited at the bucket's size: one client keeps one key (a), and a forged X-Forwarded-For does not buy a new budget (b).
+
 ## Alternatives
 
 - **Hugging Face Spaces, as planned.** Outbound port 5432 is blocked, and a Docker Space needs a paid plan.
