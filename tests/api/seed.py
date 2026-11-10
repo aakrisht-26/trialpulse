@@ -122,9 +122,45 @@ def seed(dsn: str, scored: int = 40, unscored: int = 6, rng_seed: int = 7) -> di
             (DAY, MODEL, DAY),
         )
         statement.load(cur, Path(statement.STATEMENT_PATH))
+        _monitoring(cur)
         con.commit()
     return {"scored": len(latest), "unscored": len(missing), "display": len(display),
             "sponsors": len(sponsors)}  # fmt: skip
+
+
+def _monitoring(cur: Any) -> None:
+    """Step 17's aggregates (ADRs 0076 to 0080): replay and live grades, a week of drift and
+    one gate decision, all synthetic."""
+    grade = """INSERT INTO monitoring.graded_predictions (prediction_date, horizon_months,
+        landmark_index, row_group, model_version, source, n_rows, n_early_stop, n_completed,
+        n_censored, n_open, mean_risk, auc, brier, calibration_slope, calibration_intercept,
+        lift_top_10, matured) VALUES (%s, %s, -1, 'all', %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s)"""
+    for week in range(3):
+        day = dt.date(2023, 1, 6) + dt.timedelta(days=7 * week)
+        for months, auc in ((12, 0.71 + week / 100), (24, 0.69)):
+            values = (day, months, "trialpulse-m4-replay-2023-01-01", "replay", 1000, 60, 200,
+                      40, 700, 0.07, auc, 0.05, 0.95, -0.1, 2.4, True)  # fmt: skip
+            cur.execute(grade, values)
+    for months in (12, 24):
+        cur.execute(grade, (DAY, months, MODEL, "live", 900, 0, 1, 0, 899, 0.08, None, 0.0,
+                            None, None, None, False))  # fmt: skip
+    for name, kind, value, drifted in (("enrollment_count", "feature", 0.03, False),
+                                       ("months_since_last_update", "feature", 0.18, True),
+                                       ("risk_12m", "score", 0.05, False)):  # fmt: skip
+        cur.execute(
+            """INSERT INTO monitoring.drift (week_date, column_name, kind, method, statistic,
+               threshold, drifted, n_current) VALUES (%s, %s, %s, 'psi', %s, 0.1, %s, 900)""",
+            (DAY, name, kind, value, drifted),
+        )
+    cur.execute(
+        """INSERT INTO monitoring.promotions (decided_at, champion_version, challenger_version,
+           promoted, reason, challenger_calibration_slope)
+           VALUES ('2026-11-10 12:00:00+00', %s, 'trialpulse-m4/challenger', false,
+           'not promoted: no window after the champion''s training data with matured outcomes
+           yet', 0.97)""",
+        (MODEL,),
+    )
 
 
 def _copy(cur: Any, table: str, columns: tuple[str, ...], types: tuple[str, ...],

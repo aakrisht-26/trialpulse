@@ -176,6 +176,65 @@ class ReasonSummary(Envelope):
     note: str
 
 
+class Grade(BaseModel):
+    prediction_date: dt.date
+    horizon_months: int
+    source: str = Field(description="'live' or 'replay' (ADR 0079)")
+    model_version: str
+    n_rows: int
+    n_early_stop: int
+    n_completed: int
+    n_censored: int
+    n_open: int
+    mean_risk: float | None
+    auc: float | None
+    brier: float | None
+    calibration_slope: float | None
+    calibration_intercept: float | None
+    lift_top_10: float | None
+    matured: bool = Field(description="Whether the horizon has passed (else partial-horizon)")
+
+
+class Performance(Envelope):
+    grades: list[Grade]
+    note: str
+
+
+class DriftColumn(BaseModel):
+    column_name: str
+    kind: str
+    method: str
+    statistic: float | None
+    threshold: float
+    drifted: bool
+    n_current: int
+
+
+class Drift(Envelope):
+    week_date: dt.date | None
+    features_drifted_share: float | None
+    columns: list[DriftColumn]
+    note: str
+
+
+class Promotion(BaseModel):
+    decided_at: dt.datetime
+    champion_version: str | None
+    challenger_version: str
+    window_start: dt.date | None
+    window_end: dt.date | None
+    champion_auc_12m: float | None
+    challenger_auc_12m: float | None
+    challenger_calibration_slope: float | None
+    promoted: bool
+    reason: str
+
+
+class Promotions(Envelope):
+    decisions: list[Promotion]
+    note: str
+
+
 class ModelInfo(Envelope):
     model_version: str | None
     statement: dict[str, object] | None

@@ -457,7 +457,82 @@ def create_app(api: Api) -> FastAPI:
 
         return api.answer(("model",), compute)
 
+    @app.get("/v1/monitoring/performance", response_model=s.Performance, tags=["monitoring"])
+    def performance() -> dict[str, Any]:
+        """Graded predictions over all landmark indexes and all rows, by date and horizon:
+        the live grades and the replay's (ADRs 0077 to 0079)."""
+
+        def compute() -> dict[str, Any]:
+            grades = api.db.rows(
+                """SELECT prediction_date, horizon_months, source, model_version, n_rows,
+                       n_early_stop, n_completed, n_censored, n_open, mean_risk, auc, brier,
+                       calibration_slope, calibration_intercept, lift_top_10, matured
+                FROM serving.monitoring_grades
+                WHERE landmark_index = -1 AND row_group = 'all'
+                ORDER BY source, prediction_date, horizon_months"""
+            )
+            return {"grades": grades, "note": PERFORMANCE_NOTE}
+
+        return api.answer(("performance",), compute)
+
+    @app.get("/v1/monitoring/drift", response_model=s.Drift, tags=["monitoring"])
+    def drift() -> dict[str, Any]:
+        """The latest weekly drift summary of the full run (ADR 0076)."""
+
+        def compute() -> dict[str, Any]:
+            columns = api.db.rows(
+                """SELECT week_date, column_name, kind, method, statistic, threshold, drifted,
+                       n_current
+                FROM serving.monitoring_drift
+                WHERE week_date = (SELECT max(week_date) FROM serving.monitoring_drift)
+                ORDER BY kind, drifted DESC, column_name"""
+            )
+            features = [c for c in columns if c["kind"] == "feature"]
+            share = (sum(1 for c in features if c["drifted"]) / len(features)) if features else None
+            return {
+                "week_date": columns[0]["week_date"] if columns else None,
+                "features_drifted_share": share,
+                "columns": [{k: v for k, v in c.items() if k != "week_date"} for c in columns],
+                "note": DRIFT_NOTE,
+            }
+
+        return api.answer(("drift",), compute)
+
+    @app.get("/v1/monitoring/promotions", response_model=s.Promotions, tags=["monitoring"])
+    def promotions() -> dict[str, Any]:
+        """The latest decisions of the promotion gate (ADR 0080)."""
+
+        def compute() -> dict[str, Any]:
+            decisions = api.db.rows(
+                """SELECT decided_at, champion_version, challenger_version, window_start,
+                       window_end, champion_auc_12m, challenger_auc_12m,
+                       challenger_calibration_slope, promoted, reason
+                FROM serving.monitoring_promotions ORDER BY decided_at DESC LIMIT 20"""
+            )
+            return {"decisions": decisions, "note": PROMOTIONS_NOTE}
+
+        return api.answer(("promotions",), compute)
+
     return app
+
+
+PERFORMANCE_NOTE = (
+    "Live grades are of served predictions; a horizon not yet passed is graded on its "
+    "follow-up so far (partial horizon). Replay grades come from the dataset, scored by a "
+    "model fitted as of 2023-01-01 like a walk-forward origin: monitoring evidence of the "
+    "champion's method, not a registered result (ADRs 0032 and 0078)."
+)
+DRIFT_NOTE = (
+    "Population stability (PSI) of each feature and of the served risks against the "
+    "champion's training rows, from the weekly full run; drifted at or above the threshold "
+    "(ADR 0076). Drift describes the registry's trials changing, not an error."
+)
+PROMOTIONS_NOTE = (
+    "A challenger is promoted only if its 12-month AUC is at least the champion's minus "
+    "0.005 and its 12-month calibration slope lies in [0.8, 1.2], on a window of matured "
+    "outcomes after the champion's training data; none exists before about November 2027 "
+    "(ADR 0080)."
+)
 
 
 FLAG_NOTE = (

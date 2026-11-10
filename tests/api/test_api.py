@@ -500,3 +500,23 @@ def test_no_endpoint_names_a_trial_outside_the_served_set(make_client: Make, see
                 assert answer.status_code == 404, path
             assert gone not in text, path
     assert called > len(routes)
+
+
+def test_the_monitoring_answers_label_replay_and_live(make_client: Make) -> None:
+    """ADRs 0076 to 0080: grades by source, the latest drift week and the gate's decisions,
+    through the serving views."""
+    client, _, _ = make_client()
+    grades = client.get("/v1/monitoring/performance").json()
+    _envelope(grades)
+    assert {g["source"] for g in grades["grades"]} == {"live", "replay"}
+    assert "not a registered result" in grades["note"]
+    live = [g for g in grades["grades"] if g["source"] == "live"]
+    assert all(g["auc"] is None and not g["matured"] for g in live)
+    drift = client.get("/v1/monitoring/drift").json()
+    _envelope(drift)
+    assert drift["features_drifted_share"] == 0.5
+    assert {c["kind"] for c in drift["columns"]} == {"feature", "score"}
+    gate = client.get("/v1/monitoring/promotions").json()
+    _envelope(gate)
+    assert gate["decisions"][0]["promoted"] is False
+    assert gate["decisions"][0]["reason"].startswith("not promoted")

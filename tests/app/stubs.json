@@ -11433,6 +11433,248 @@
     "url": "https://clinicaltrials.gov"
    },
    "data_as_of": "2026-09-25",
+   "grades": [
+    {
+     "auc": null,
+     "brier": 0.0,
+     "calibration_intercept": null,
+     "calibration_slope": null,
+     "horizon_months": 12,
+     "lift_top_10": null,
+     "matured": false,
+     "mean_risk": 0.08,
+     "model_version": "trialpulse-m4/1",
+     "n_censored": 0,
+     "n_completed": 1,
+     "n_early_stop": 0,
+     "n_open": 899,
+     "n_rows": 900,
+     "prediction_date": "2026-09-25",
+     "source": "live"
+    },
+    {
+     "auc": null,
+     "brier": 0.0,
+     "calibration_intercept": null,
+     "calibration_slope": null,
+     "horizon_months": 24,
+     "lift_top_10": null,
+     "matured": false,
+     "mean_risk": 0.08,
+     "model_version": "trialpulse-m4/1",
+     "n_censored": 0,
+     "n_completed": 1,
+     "n_early_stop": 0,
+     "n_open": 899,
+     "n_rows": 900,
+     "prediction_date": "2026-09-25",
+     "source": "live"
+    },
+    {
+     "auc": 0.71,
+     "brier": 0.05,
+     "calibration_intercept": -0.1,
+     "calibration_slope": 0.95,
+     "horizon_months": 12,
+     "lift_top_10": 2.4,
+     "matured": true,
+     "mean_risk": 0.07,
+     "model_version": "trialpulse-m4-replay-2023-01-01",
+     "n_censored": 40,
+     "n_completed": 200,
+     "n_early_stop": 60,
+     "n_open": 700,
+     "n_rows": 1000,
+     "prediction_date": "2023-01-06",
+     "source": "replay"
+    },
+    {
+     "auc": 0.69,
+     "brier": 0.05,
+     "calibration_intercept": -0.1,
+     "calibration_slope": 0.95,
+     "horizon_months": 24,
+     "lift_top_10": 2.4,
+     "matured": true,
+     "mean_risk": 0.07,
+     "model_version": "trialpulse-m4-replay-2023-01-01",
+     "n_censored": 40,
+     "n_completed": 200,
+     "n_early_stop": 60,
+     "n_open": 700,
+     "n_rows": 1000,
+     "prediction_date": "2023-01-06",
+     "source": "replay"
+    },
+    {
+     "auc": 0.72,
+     "brier": 0.05,
+     "calibration_intercept": -0.1,
+     "calibration_slope": 0.95,
+     "horizon_months": 12,
+     "lift_top_10": 2.4,
+     "matured": true,
+     "mean_risk": 0.07,
+     "model_version": "trialpulse-m4-replay-2023-01-01",
+     "n_censored": 40,
+     "n_completed": 200,
+     "n_early_stop": 60,
+     "n_open": 700,
+     "n_rows": 1000,
+     "prediction_date": "2023-01-13",
+     "source": "replay"
+    },
+    {
+     "auc": 0.69,
+     "brier": 0.05,
+     "calibration_intercept": -0.1,
+     "calibration_slope": 0.95,
+     "horizon_months": 24,
+     "lift_top_10": 2.4,
+     "matured": true,
+     "mean_risk": 0.07,
+     "model_version": "trialpulse-m4-replay-2023-01-01",
+     "n_censored": 40,
+     "n_completed": 200,
+     "n_early_stop": 60,
+     "n_open": 700,
+     "n_rows": 1000,
+     "prediction_date": "2023-01-13",
+     "source": "replay"
+    },
+    {
+     "auc": 0.73,
+     "brier": 0.05,
+     "calibration_intercept": -0.1,
+     "calibration_slope": 0.95,
+     "horizon_months": 12,
+     "lift_top_10": 2.4,
+     "matured": true,
+     "mean_risk": 0.07,
+     "model_version": "trialpulse-m4-replay-2023-01-01",
+     "n_censored": 40,
+     "n_completed": 200,
+     "n_early_stop": 60,
+     "n_open": 700,
+     "n_rows": 1000,
+     "prediction_date": "2023-01-20",
+     "source": "replay"
+    },
+    {
+     "auc": 0.69,
+     "brier": 0.05,
+     "calibration_intercept": -0.1,
+     "calibration_slope": 0.95,
+     "horizon_months": 24,
+     "lift_top_10": 2.4,
+     "matured": true,
+     "mean_risk": 0.07,
+     "model_version": "trialpulse-m4-replay-2023-01-01",
+     "n_censored": 40,
+     "n_completed": 200,
+     "n_early_stop": 60,
+     "n_open": 700,
+     "n_rows": 1000,
+     "prediction_date": "2023-01-20",
+     "source": "replay"
+    }
+   ],
+   "note": "Live grades are of served predictions; a horizon not yet passed is graded on its follow-up so far (partial horizon). Replay grades come from the dataset, scored by a model fitted as of 2023-01-01 like a walk-forward origin: monitoring evidence of the champion's method, not a registered result (ADRs 0032 and 0078).",
+   "notice": "Research demo. Not medical advice. Not for patient decision-making."
+  },
+  "name": null,
+  "params": {},
+  "path": "/v1/monitoring/performance",
+  "retry_after": null,
+  "status": 200
+ },
+ {
+  "body": {
+   "attribution": {
+    "note": "Source: ClinicalTrials.gov. TrialPulse normalizes the registry records and adds derived early-stop risk scores and drivers, which are not part of ClinicalTrials.gov.",
+    "source": "ClinicalTrials.gov",
+    "url": "https://clinicaltrials.gov"
+   },
+   "columns": [
+    {
+     "column_name": "months_since_last_update",
+     "drifted": true,
+     "kind": "feature",
+     "method": "psi",
+     "n_current": 900,
+     "statistic": 0.18,
+     "threshold": 0.1
+    },
+    {
+     "column_name": "enrollment_count",
+     "drifted": false,
+     "kind": "feature",
+     "method": "psi",
+     "n_current": 900,
+     "statistic": 0.03,
+     "threshold": 0.1
+    },
+    {
+     "column_name": "risk_12m",
+     "drifted": false,
+     "kind": "score",
+     "method": "psi",
+     "n_current": 900,
+     "statistic": 0.05,
+     "threshold": 0.1
+    }
+   ],
+   "data_as_of": "2026-09-25",
+   "features_drifted_share": 0.5,
+   "note": "Population stability (PSI) of each feature and of the served risks against the champion's training rows, from the weekly full run; drifted at or above the threshold (ADR 0076). Drift describes the registry's trials changing, not an error.",
+   "notice": "Research demo. Not medical advice. Not for patient decision-making.",
+   "week_date": "2026-09-25"
+  },
+  "name": null,
+  "params": {},
+  "path": "/v1/monitoring/drift",
+  "retry_after": null,
+  "status": 200
+ },
+ {
+  "body": {
+   "attribution": {
+    "note": "Source: ClinicalTrials.gov. TrialPulse normalizes the registry records and adds derived early-stop risk scores and drivers, which are not part of ClinicalTrials.gov.",
+    "source": "ClinicalTrials.gov",
+    "url": "https://clinicaltrials.gov"
+   },
+   "data_as_of": "2026-09-25",
+   "decisions": [
+    {
+     "challenger_auc_12m": null,
+     "challenger_calibration_slope": 0.97,
+     "challenger_version": "trialpulse-m4/challenger",
+     "champion_auc_12m": null,
+     "champion_version": "trialpulse-m4/1",
+     "decided_at": "2026-11-10T12:00:00Z",
+     "promoted": false,
+     "reason": "not promoted: no window after the champion's training data with matured outcomes\n           yet",
+     "window_end": null,
+     "window_start": null
+    }
+   ],
+   "note": "A challenger is promoted only if its 12-month AUC is at least the champion's minus 0.005 and its 12-month calibration slope lies in [0.8, 1.2], on a window of matured outcomes after the champion's training data; none exists before about November 2027 (ADR 0080).",
+   "notice": "Research demo. Not medical advice. Not for patient decision-making."
+  },
+  "name": null,
+  "params": {},
+  "path": "/v1/monitoring/promotions",
+  "retry_after": null,
+  "status": 200
+ },
+ {
+  "body": {
+   "attribution": {
+    "note": "Source: ClinicalTrials.gov. TrialPulse normalizes the registry records and adds derived early-stop risk scores and drivers, which are not part of ClinicalTrials.gov.",
+    "source": "ClinicalTrials.gov",
+    "url": "https://clinicaltrials.gov"
+   },
+   "data_as_of": "2026-09-25",
    "flagged": 0,
    "mean_risk_12m": 0.002265,
    "mean_risk_24m": 0.0038505,

@@ -1,6 +1,7 @@
 """Every page in AppTest against the recorded stubs (ADR 0056): the frame on every page, the
 waking, 503 and error cases (ADR 0054), the trial page (ADR 0052), flags (ADR 0055), Model
-health before Step 17 (ADR 0053) and the descriptive pages (ADR 0057)."""
+health with Step 17's monitoring (ADRs 0053 and 0076 to 0080) and the descriptive pages
+(ADR 0057)."""
 
 import datetime as dt
 import json
@@ -233,14 +234,18 @@ def test_an_error_answer_is_shown_in_plain_words(stub_api: StubApi, page: str) -
     assert at.warning[0].value == ui.NOTICE
 
 
+HEALTH_CALLS = ["/v1/model", "/v1/monitoring/performance", "/v1/monitoring/drift",
+                "/v1/monitoring/promotions"]  # fmt: skip
+
+
 def test_answers_are_kept_for_15_minutes_and_failures_never(stub_api: StubApi) -> None:
     app("model_health")
-    assert stub_api.data_calls() == ["/v1/model"]
+    assert stub_api.data_calls() == HEALTH_CALLS
     app("model_health")  # another viewer within 15 minutes: no call at all
-    assert stub_api.data_calls() == ["/v1/model"]
+    assert stub_api.data_calls() == HEALTH_CALLS
     stub_api.now += 15 * 60 + 1
     app("model_health")
-    assert stub_api.data_calls() == ["/v1/model"] * 2
+    assert stub_api.data_calls() == HEALTH_CALLS * 2
 
     stub_api.calls.clear()
     stub_api.fail("error", on="/v1/trials/")
@@ -420,7 +425,9 @@ def test_why_trials_stop_is_descriptive(stub_api: StubApi) -> None:
 # Model health (ADR 0053) ---------------------------------------------------------------------
 
 
-def test_model_health_before_step_17(stub_api: StubApi, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_health_with_step_17s_monitoring(
+    stub_api: StubApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(ui, "today", lambda: dt.date(2026, 9, 27))
     at = app("model_health")
     shown = texts(at)
@@ -438,9 +445,15 @@ def test_model_health_before_step_17(stub_api: StubApi, monkeypatch: pytest.Monk
         assert item in shown
     assert f"{model['flagged_share']:.1%}" in shown
     assert [h.value for h in at.header] == ["Freshness", "Served model", "Today's scope",
-                                            "Drift", "Graded performance"]  # fmt: skip
-    assert sum("Step 17" in i.value for i in at.info) == 2
-    assert "mature one year after go-live" in shown
+                                            "Graded performance", "Drift",
+                                            "Retraining and promotion"]  # fmt: skip
+    assert "not a registered result" in shown  # the replay's label (ADR 0078)
+    assert "graded on their follow-up so far" in shown  # live grades are partial-horizon
+    assert len(at.get("plotly_chart")) == 2
+    assert ("Features drifted", "50%") in [(m.label, m.value) for m in at.metric]
+    assert any(r.get("Promoted") == "no"
+               for i in range(len(at.dataframe)) for r in table(at, i))  # fmt: skip
+    assert not [i for i in at.info if "Step 17" in i.value]  # no placeholder is left
 
 
 def test_model_health_warns_when_the_data_is_older_than_3_days(
@@ -455,6 +468,8 @@ def test_model_health_warns_when_the_data_is_older_than_3_days(
 
 def test_model_health_without_a_statement_or_a_data_date(stub_api: StubApi) -> None:
     stub_api.override("/v1/model", statement=None, data_as_of=None, model_version=None)
+    for path in HEALTH_CALLS[1:]:
+        stub_api.override(path, data_as_of=None)
     at = app("model_health")
     assert not at.exception
     shown = texts(at)

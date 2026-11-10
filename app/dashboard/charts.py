@@ -105,3 +105,35 @@ def reasons(counts: list[dict[str, Any]], by_year: bool) -> go.Figure:
                       legend={"orientation": "h", "y": -0.25},
                       margin={"l": 10, "r": 10, "t": 10, "b": 10}, height=420)  # fmt: skip
     return fig
+
+
+SOURCE_NAMES = {
+    "replay": "Replay (dataset; model fitted as of 2023-01-01)",
+    "live": "Live (served champion)",
+}
+
+
+def graded(grades: list[dict[str, Any]], metric: str, label: str,
+           band: tuple[float, float] | None = None) -> go.Figure:  # fmt: skip
+    """One metric of the graded predictions over the prediction dates, replay and live apart
+    (ADRs 0078 and 0079); a partial-horizon live grade is drawn hollow."""
+    fig = go.Figure()
+    if band is not None:
+        fig.add_hrect(y0=band[0], y1=band[1], line_width=0, fillcolor="rgba(0,0,0,0.06)",
+                      annotation_text="Gate range", annotation_position="top left")  # fmt: skip
+    for source in ("replay", "live"):
+        rows = [g for g in grades if g["source"] == source and g.get(metric) is not None]
+        if not rows:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[_date(g["prediction_date"]) for g in rows], y=[g[metric] for g in rows],
+            mode="lines+markers" if source == "replay" else "markers",
+            name=SOURCE_NAMES[source],
+            marker={"symbol": ["circle" if g["matured"] else "circle-open" for g in rows],
+                    "size": 8},
+            hovertemplate="%{x}: %{y:.3f}<extra>" + SOURCE_NAMES[source] + "</extra>",
+        ))  # fmt: skip
+    fig.update_layout(yaxis={"title": label}, xaxis={"title": "Prediction date"},
+                      legend={"orientation": "h", "y": -0.3},
+                      margin={"l": 10, "r": 10, "t": 10, "b": 10}, height=340)  # fmt: skip
+    return fig

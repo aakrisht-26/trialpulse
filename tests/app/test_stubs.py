@@ -43,6 +43,8 @@ def requests() -> list[tuple[str, dict[str, Any]]]:
     """Every request the pages make on the seeded data."""
     out: list[tuple[str, dict[str, Any]]] = [
         ("/health", {}), ("/v1/model", {}), ("/v1/areas", {}), ("/v1/reasons/summary", {}),
+        ("/v1/monitoring/performance", {}), ("/v1/monitoring/drift", {}),
+        ("/v1/monitoring/promotions", {}),
     ]  # fmt: skip
     slugs = [a.slug for a in areas.AREAS] + [areas.NOT_CLASSIFIED_SLUG]
     out += [(f"/v1/areas/{slug}/landscape", {}) for slug in slugs]

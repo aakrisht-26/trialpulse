@@ -1,10 +1,11 @@
 """Model health: data freshness, the served model with its registered results, and today's
-scope. Drift and graded performance arrive with the monitoring stage, Step 17 (ADR 0053)."""
+scope (ADR 0053); and Step 17's monitoring: graded performance, drift and the promotion gate
+(ADRs 0076 to 0080)."""
 
 from typing import Any
 
 import streamlit as st
-from dashboard import ui
+from dashboard import charts, ui
 
 STALE_AFTER_DAYS = 3  # CLAUDE.md Section 14: watermark lag at most 3 days
 METRICS = (("auc", "AUC"), ("brier", "Brier score"), ("lift", "Lift at 10%"),
@@ -90,18 +91,72 @@ def main(page: ui.Page) -> None:
                       for k, v in sorted(info["not_scored"].items())],
                      hide_index=True)  # fmt: skip
 
-    st.header("Drift")
-    st.info(
-        "Not available yet. Weekly reports of feature and score drift against the training "
-        "data arrive with the monitoring stage of the project (Step 17).",
-        icon=":material/pending:",
-    )
+    graded_performance(page)
+    drift(page)
+    promotions(page)
+
+
+def graded_performance(page: ui.Page) -> None:
     st.header("Graded performance")
-    st.info(
-        "Not available yet. Grading arrives with the monitoring stage (Step 17), and the first "
-        "12-month predictions mature one year after go-live.",
-        icon=":material/pending:",
-    )
+    perf = page.get("/v1/monitoring/performance").body
+    st.caption(perf["note"])
+    grades = perf["grades"]
+    if not grades:
+        st.info("No graded predictions yet.", icon=":material/pending:")
+        return
+    choice = st.radio("Horizon", ["12 months", "24 months"], horizontal=True, key="horizon")
+    months = 12 if str(choice).startswith("12") else 24
+    rows = [g for g in grades if g["horizon_months"] == months]
+    st.plotly_chart(charts.graded(rows, "auc", f"AUC at {months} months"), key="graded_auc")
+    band = (0.8, 1.2) if months == 12 else None  # the gate reads the 12-month slope (ADR 0080)
+    st.plotly_chart(charts.graded(rows, "calibration_slope", "Calibration slope", band),
+                    key="graded_slope")  # fmt: skip
+    if months == 24:
+        st.caption("The 24-month slope is tracked as a known limitation (ADR 0032), not gated.")
+    live = [g for g in rows if g["source"] == "live"]
+    if not live:
+        st.caption("No live prediction graded yet.")
+    elif not any(g["matured"] for g in live):
+        st.caption(
+            f"{len(live)} live prediction dates graded on their follow-up so far (hollow "
+            "markers); the first live 12-month horizon passes about one year after go-live."
+        )
+
+
+def drift(page: ui.Page) -> None:
+    st.header("Drift")
+    answer = page.get("/v1/monitoring/drift").body
+    st.caption(answer["note"])
+    if answer["week_date"] is None:
+        st.info("No drift summary yet: the first comes with the daily job's next weekly full "
+                "run.", icon=":material/pending:")  # fmt: skip
+        return
+    share = answer["features_drifted_share"]
+    cols = st.columns(2)
+    cols[0].metric("Week", answer["week_date"])
+    cols[1].metric("Features drifted", "none" if share is None else f"{share:.0%}")
+    st.dataframe(
+        [{"Column": c["column_name"], "Kind": c["kind"], "PSI": c["statistic"],
+          "Threshold": c["threshold"], "Drifted": "yes" if c["drifted"] else ""}
+         for c in answer["columns"]],
+        hide_index=True,
+    )  # fmt: skip
+
+
+def promotions(page: ui.Page) -> None:
+    st.header("Retraining and promotion")
+    gate = page.get("/v1/monitoring/promotions").body
+    st.caption(gate["note"])
+    if not gate["decisions"]:
+        st.info("No retraining has run yet.", icon=":material/pending:")
+        return
+    st.dataframe(
+        [{"Decided": d["decided_at"][:10], "Challenger": d["challenger_version"],
+          "Promoted": "yes" if d["promoted"] else "no", "Reason": d["reason"],
+          "Calibration slope, 12 months": d["challenger_calibration_slope"]}
+         for d in gate["decisions"]],
+        hide_index=True,
+    )  # fmt: skip
 
 
 ui.run(main, "Model health")
