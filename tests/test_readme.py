@@ -126,9 +126,11 @@ def test_the_wording_rules() -> None:
     assert [w for w in HYPE if w in lowered] == []
 
 
-def test_no_live_link_before_a_deployment_exists() -> None:
-    """Status says plainly that nothing is deployed yet; no Spaces or Streamlit app URL."""
+def test_live_links_only_for_what_is_deployed() -> None:
+    """The API is live on Render (ADR 0065); the dashboard is not deployed yet, so no
+    Streamlit app URL, and no Spaces URL at all."""
     text = _text()
+    assert "https://trialpulse-api.onrender.com" in text
     assert "hf.space" not in text
     assert "streamlit.app" not in text
-    assert "there is no public link yet" in text
+    assert "there is no public dashboard link yet" in text
