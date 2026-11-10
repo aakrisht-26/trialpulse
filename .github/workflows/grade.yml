@@ -1,0 +1,85 @@
+name: Monthly grading
+
+# ADR 0077: grades the live score files against the outcome events, as aggregates. It reads
+# Neon only: no Hugging Face token, no dataset and no dataset module reach this runner
+# (ADR 0040, held by tests/test_workflows.py). A dispatch with fail_on_purpose raises on
+# purpose, to prove the failure issue (ADR 0081).
+on:
+  schedule:
+    - cron: "0 12 2 * *"  # the 2nd of each month, outside the daily job's span
+  workflow_dispatch:
+    inputs:
+      fail_on_purpose:
+        description: "Raise after reading, to prove the failure issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-grade
+  cancel-in-progress: false
+
+env:
+  HF_HUB_OFFLINE: "1"
+  UV_NO_SYNC: "1"
+
+jobs:
+  grade:
+    name: Grade the live predictions
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      error_class: ${{ steps.run.outputs.error_class }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.11.26"
+          enable-cache: true  # dependencies only
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked --no-dev --no-group dataset  # no dataset client (ADR 0040)
+
+      - name: Grade
+        id: run
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          FAIL_ON_PURPOSE: ${{ inputs.fail_on_purpose && '--fail-on-purpose' || '' }}
+        run: |
+          uv run python -m trialpulse.monitor.grade --target neon ${FAIL_ON_PURPOSE} || {
+            echo "error_class=GradingFailed" >> "$GITHUB_OUTPUT"; exit 1; }
+
+  notify:
+    name: Open or update the failure issue
+    needs: grade
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.grade.result == 'failure' || needs.grade.result == 'cancelled')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.grade.result }}
+          ERROR_CLASS: ${{ needs.grade.outputs.error_class }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Monthly grading failed"
+          body="Run ${RUN_URL}: ${RESULT}, error class ${ERROR_CLASS:-unknown}."
+          number=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi

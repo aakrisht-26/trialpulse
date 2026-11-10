@@ -134,7 +134,7 @@ def test_a_missing_postgres_skips_locally_and_fails_where_it_is_required(
 
 # The dataset client stays off the runners (item 2 of the last cloud task) ---------------------
 
-LIVE_WORKFLOWS = ("daily.yml", "timing.yml")
+LIVE_WORKFLOWS = ("daily.yml", "grade.yml", "timing.yml")
 DATASET_PACKAGES = ("huggingface-hub", "datasets")
 
 
@@ -196,3 +196,30 @@ def test_the_lockfile_gives_the_runners_no_dataset_client() -> None:
     assert not runner & set(DATASET_PACKAGES)
     assert "huggingface-hub" in laptop
     assert {"psycopg", "lightgbm", "httpx", "mlflow-skinny"} <= runner
+
+
+def test_the_drift_environment_holds_evidently_and_no_dataset_client() -> None:
+    """The daily job's install with the drift group in place of the dashboard's (ADR 0076):
+    Evidently, and still no dataset package (ADR 0040)."""
+    import shutil
+
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not on PATH")
+    out = subprocess.run(
+        [uv, "export", "--frozen", "--no-hashes", "--no-header", "--no-emit-project",
+         "--format", "requirements-txt", "--no-dev", "--no-group", "dataset",
+         "--no-group", "dashboard", "--group", "drift"],
+        capture_output=True, text=True, check=True, cwd=REPO_ROOT,
+    )  # fmt: skip
+    names = {_name(line) for line in out.stdout.splitlines() if line and line[0].isalnum()}
+    assert "evidently" in names
+    assert not names & set(DATASET_PACKAGES)
+
+
+def test_grading_has_its_own_failure_issue_and_a_failure_on_purpose() -> None:
+    grade = _load(REPO_ROOT / ".github" / "workflows" / "grade.yml")
+    triggers = grade[True] if True in grade else grade["on"]
+    assert "fail_on_purpose" in triggers["workflow_dispatch"]["inputs"]
+    assert grade["jobs"]["notify"]["needs"] == "grade"
+    assert "Monthly grading failed" in str(grade["jobs"]["notify"])
