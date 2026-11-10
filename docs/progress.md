@@ -2575,6 +2575,10 @@ By the bar as written (equal on every column), 5a on the laptop **does not pass*
 
 **Decisions made on my own:** (a) Playwright drives the installed Chrome (`channel="chrome"`) instead of downloading Playwright's own browser (alternative: `playwright install chromium`, about 150 MB); (b) the screenshots are palette PNGs to stay under the 500 KB hook (alternative: raising the hook's limit for docs/figures/); (c) a committed screenshot script, so the figures can be retaken from the deployed app (alternative: a one-off scratch script); (d) Portfolio is checked without a date, since it calls the API only after a search.
 
+### 6. The Step 17 plan (a proposal; nothing built)
+
+`docs/step17_plan.md`, from Section 14, Step 17 and ADRs 0032, 0039, 0040 and 0053. It covers the six parts (the weekly drift report, grading of matured predictions, the replay 2023-01-01 to 2024-06-30, retraining and the promotion gate on the laptop, the Model health page's sections, the alert path), with options and a recommendation for each decision that has tradeoffs, what runs where, the Neon cost of each new table (about 1.5 MB in all, inside the 7.5 MB margin under the 700 MB line), time estimates per part, and nine numbered decisions for Aakrisht. Two facts shape it: Neon holds no features, so drift must run where features are computed (the weekly full run); and the replay with drivers would take about 8 hours, so the plan splits it into quarterly chunks of scores without drivers (about 15 to 20 minutes each).
+
 ## Go-live, and the API's client key behind Render (2026-11-10)
 
 Verified by Aakrisht: `daily.yml` enabled on 2026-11-08, when run 3 (full) succeeded on GitHub (a manual dispatch) in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API went live on Render the same day, at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.
