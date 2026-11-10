@@ -160,6 +160,22 @@ def fit_model(cfg: ProjectConfig) -> dict[str, Any]:
     return summary
 
 
+def sponsor_classes(day: dt.date) -> dict[str, str]:
+    """Each trial's lead sponsor class in the version in effect on `day` (on a tie of post
+    dates, the higher version), as Step 13's population reads it; 'MISSING' when empty."""
+    from trialpulse.warehouse.build import WAREHOUSE_PATH
+
+    with duckdb.connect() as con:
+        con.execute(f"ATTACH '{WAREHOUSE_PATH.as_posix()}' AS wh (READ_ONLY)")
+        rows = con.execute(
+            f"""SELECT nct_id, coalesce(lead_sponsor_class, 'MISSING') FROM wh.versions
+            WHERE effective_date <= DATE '{day.isoformat()}'
+            QUALIFY row_number() OVER (PARTITION BY nct_id
+                                       ORDER BY effective_date DESC, nct_version DESC) = 1"""
+        ).fetchall()
+    return {str(n): str(c) for n, c in rows}
+
+
 def score_dates(cfg: ProjectConfig, days: Sequence[dt.date]) -> dict[str, Any]:
     """Score each date not scored yet with the replay model (see the module text)."""
     from trialpulse.scoring.bundle import load_bundle
@@ -177,7 +193,10 @@ def score_dates(cfg: ProjectConfig, days: Sequence[dt.date]) -> dict[str, Any]:
             continue
         started = clock.perf_counter()
         scored = score(cfg, day, bundle, decisions, with_drivers=False)
-        frame = scored.scores[list(SCORE_COLUMNS)].copy()
+        classes = sponsor_classes(day)  # Step 13's scores carry no class (as the daily job adds)
+        frame = scored.scores.assign(
+            sponsor_class=scored.scores["nct_id"].map(classes).fillna("MISSING")
+        )[list(SCORE_COLUMNS)].copy()
         frame["as_of_date"] = pd.to_datetime(frame["as_of_date"]).dt.date
         frame.to_parquet(path.with_suffix(".tmp"), index=False)
         path.with_suffix(".tmp").replace(path)  # a date is done only once its file is whole
