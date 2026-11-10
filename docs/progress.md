@@ -91,7 +91,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
-| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); its host is open (review finding 2: Spaces block port 5432); the deployment and Neon parts are left for the laptop |
+| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-09 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
 | 18 | Documentation and polish | README written in the cloud on `readme-cloud` (2026-11-01), waiting for review; the live links, the demo GIF, the CHANGELOG and the fresh-clone check on Windows wait for the deployments |
@@ -2499,6 +2499,24 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Go-live, and the API's client key behind Render (2026-11-10)
+
+Verified by Aakrisht on 2026-11-09: `daily.yml` enabled; run 3 (full) succeeded on GitHub in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API is live on Render at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.
+
+| Item | What | Evidence | Commit |
+| --- | --- | --- | --- |
+| 1. The measuring script | `scripts/measure_forwarded.py` counts a dropped connection or a timeout by its error class instead of crashing, prints counts per status and error, and can forge Cloudflare's headers (`--forge-cf`) | A test of the counted errors | `eb57d63` |
+| 2. The diagnostic | One log line per `/v1/` request behind `api.forwarded_diagnostic` (off by default): the number of X-Forwarded-For entries, whether CF-Connecting-IP and True-Client-IP are present, the position from the end equal to CF-Connecting-IP, and whether each value stayed the same; never an address or a hash of one | Tests that the line holds no address and appears only when turned on; deployed and live on Render | `41df250` |
+| 3. The cause, read in Render's log | Plain run: 3 entries, CF-Connecting-IP the first and the same on every request, the last two entries changing between requests. Forged X-Forwarded-For: 4 entries, CF-Connecting-IP unchanged. Forged CF-Connecting-IP: 70 of 70 refused by Cloudflare (403, error code 1000) | ADR 0065, section "Measured (2026-11-10)" | |
+| 3. The key | `api.client_ip_header: cf-connecting-ip`, the X-Forwarded-For rule as fallback; the diagnostic turned off. Rejected: `trusted_proxies: 2` (its hop changed per request), `trusted_proxies: 3` (rests on an undocumented hop count), True-Client-IP (documented as spoofable; a forged one was not refused) | Tests of the key (one client, a forged X-Forwarded-For, another network, no header); the full suite 1,594 passed with Postgres required; CI green; live on Render | `c3ee5c0`, `fa7d056` |
+| 4. Measured on the deployed fix | Plain, 130 requests: 88 x 200 then 42 x 429. Forged, 130 requests: 95 x 200, 34 x 429. The phone on mobile data got the JSON while the laptop's run held its bucket empty (543 x 429) | ADR 0065; logs `data/logs/phone_test_20261110.log` | `d1d5b92` and this record |
+| 5. The dashboard's budget | Per page on a cold cache: Overview 1, Portfolio 1 per search plus 1 per page, Trial detail 2, Landscape 2 plus 1 per other area, Why trials stop 1, Model health 0 more. Shared answers cost at most 4 requests per 15 minutes; about 10 viewers can start in the same minute. Decided by Aakrisht: no change to the limit | ADR 0065 | this record |
+| 6. The README | The API's live link and the Render host in the diagram; the dashboard still not deployed; the README test now requires the API link and still refuses a dashboard or Spaces link | `tests/test_readme.py` | this record |
+
+**A note on the first symptom.** ADR 0049's limit is a token bucket of 60 with one request a second after it, so 70 requests in about 20 s never reach a 429 even with a stable key; my first run after the fix showed 70 x 200 for that reason. The measurements above send 130 requests, and the cause rests on the header shapes, not on the first symptom.
+
+**Decisions made without asking (flagged):** CF-Connecting-IP read only when present, with ADR 0049's rule as fallback (local runs and tests have no Cloudflare); the diagnostic's code kept, off by default, for a later change of host; the phone test run against a laptop run that kept the bucket empty for 3 minutes instead of one request after a run, because the bucket refills one request a second.
 
 ## Step 14, the gap read and the rebootstrap (2026-11-08, evening)
 

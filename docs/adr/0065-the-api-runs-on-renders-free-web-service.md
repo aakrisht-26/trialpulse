@@ -53,6 +53,21 @@ The diagnostic is turned off (`api.forwarded_diagnostic: false`); its code stays
 
 Both runs are limited at the bucket's size: one client keeps one key (a), and a forged X-Forwarded-For does not buy a new budget (b).
 
+**Two networks, two budgets (c).** A single request after a run that reached 429 would not tell: the bucket refills one request a second, so it would pass even on a shared key. So the laptop sent 800 requests to `/v1/model` from 12:27:21 to 12:31:00 UTC, keeping its bucket empty after the burst (255 x 200, 543 x 429, 2 dropped connections). Inside that window, at 17:59 India time (12:29 UTC), Aakrisht opened `/v1/model` on his phone on mobile data with Wi-Fi off, and it answered with the JSON statement, not a 429: the phone's network had its own budget while the laptop's was spent.
+
+**The dashboard's budget** (decided by Aakrisht on 2026-11-10: no change to the limit). Every dashboard viewer reaches the API from the Streamlit server, so all of them share one key. The `/v1/` requests each page makes on a cold cache (`/health` is outside the limit):
+
+| Page | `/v1/` requests |
+| --- | --- |
+| Overview | 1 (`/v1/model`) |
+| Portfolio | 1 per sponsor-name search, plus 1 per page of a portfolio |
+| Trial detail | 2 (risk and timeline; 1 for an id the API does not serve) |
+| Landscape | 2 (the areas and the selected area), plus 1 per other area chosen |
+| Why trials stop | 1 |
+| Model health | 0 beyond Overview's (the same `/v1/model` answer) |
+
+The dashboard keeps answers 15 minutes in its process, shared by every viewer (ADR 0054), so the answers that are the same for everyone (the model, the areas, the first area, the reasons) cost at most 4 requests per 15 minutes in all. What each viewer adds is their own sponsors and trials: about 6 requests for one sponsor and two trials. With 60 requests of burst and one a second after it, about 10 such viewers can start in the same minute, then about 60 viewer actions a minute; a viewer who meets a 429 is waited out within the dashboard's 3-minute budget (ADR 0054). A normal demo visit (a few viewers, every page) does not reach the limit.
+
 ## Alternatives
 
 - **Hugging Face Spaces, as planned.** Outbound port 5432 is blocked, and a Docker Space needs a paid plan.
