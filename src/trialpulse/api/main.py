@@ -147,8 +147,10 @@ def create_app(api: Api) -> FastAPI:
                 LOG.info(api.shape.describe(head.get("x-forwarded-for"),
                                             head.get("cf-connecting-ip"),
                                             head.get("true-client-ip"), peer))  # fmt: skip
+            edge = api.cfg.client_ip_header
             who = client_address(request.headers.get("x-forwarded-for"), peer,
-                                 api.cfg.trusted_proxies)  # fmt: skip
+                                 api.cfg.trusted_proxies,
+                                 request.headers.get(edge) if edge else None)  # fmt: skip
             wait = api.limiter.allow(who)
             if wait:
                 return _envelope(api, 429, "too many requests from this address",

@@ -3,7 +3,7 @@ of a request's headers and never writes an address."""
 
 import re
 
-from trialpulse.api.guards import ForwardedShape
+from trialpulse.api.guards import ForwardedShape, client_address
 from trialpulse.config import ApiConfig
 
 CLIENT, EDGE_A, EDGE_B, RENDER = "203.0.113.5", "198.51.100.7", "198.51.100.8", "10.1.2.3"
@@ -55,3 +55,20 @@ def test_a_missing_cloudflare_header_has_no_position() -> None:
 
 def test_the_diagnostic_is_off_unless_the_project_file_turns_it_on() -> None:
     assert ApiConfig.model_fields["forwarded_diagnostic"].default is False
+
+
+def test_the_client_key_is_the_edge_header_when_present() -> None:
+    measured = f"{CLIENT}, {EDGE_A}, {RENDER}"  # Render's shape: the client, then two hops
+    assert client_address(measured, RENDER, 1, CLIENT) == CLIENT
+    assert client_address(f"198.51.100.99, {measured}", RENDER, 1, f" {CLIENT} ") == CLIENT
+    assert client_address(measured, RENDER, 1, "") == RENDER  # blank: the fallback rule
+    assert client_address(measured, RENDER, 1, None) == RENDER
+    assert client_address(None, "10.0.0.1", 1, None) == "10.0.0.1"
+
+
+def test_the_configured_edge_header_is_cloudflares() -> None:
+    from trialpulse.config import load_project_config
+
+    api = load_project_config().api
+    assert api.client_ip_header == "cf-connecting-ip"  # ADR 0065, measured
+    assert api.forwarded_diagnostic is False  # the diagnostic is off after the measurement

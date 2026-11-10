@@ -119,8 +119,8 @@ api:
   retry_wait_seconds: 2             # one retry for a compute that is waking up
   unavailable_retry_after_seconds: 30
   rate_limit_per_minute: 60         # per client address
-  trusted_proxies: 1                # Render: measured on the deployed service (ADR 0065)
-  forwarded_diagnostic: true       # temporary, while ADR 0065's measurement runs: logs
-                                   # the headers' shape, never an address
+  client_ip_header: cf-connecting-ip  # Render sits behind Cloudflare, which sets it (ADR 0065)
+  trusted_proxies: 1                # the fallback when that header is absent (ADR 0049)
+  forwarded_diagnostic: false      # ADR 0065's measurement: logs the headers' shape only
   cache_entries: 20000
   page_size_max: 200

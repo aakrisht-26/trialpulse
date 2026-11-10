@@ -228,7 +228,8 @@ class ApiConfig(_Section):
     retry_wait_seconds: float = Field(ge=0)  # before the one retry of a waking database
     unavailable_retry_after_seconds: PositiveInt
     rate_limit_per_minute: PositiveInt
-    trusted_proxies: NonNegativeInt  # proxies that append to X-Forwarded-For (Spaces: 1)
+    client_ip_header: str | None = None  # a header the edge sets to the client (ADR 0065)
+    trusted_proxies: NonNegativeInt  # proxies that append to X-Forwarded-For (fallback)
     forwarded_diagnostic: bool = False  # temporary: log the proxy chain's shape (ADR 0065)
     cache_entries: PositiveInt
     page_size_max: PositiveInt

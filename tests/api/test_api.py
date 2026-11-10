@@ -199,6 +199,23 @@ def test_the_rate_limit_is_per_forwarded_client_not_per_proxy(make_client: Make)
     assert client.get("/health", headers={"X-Forwarded-For": "203.0.113.5"}).status_code == 200
 
 
+def test_behind_cloudflare_the_key_is_cf_connecting_ip(make_client: Make) -> None:
+    """ADR 0065, measured: Render's X-Forwarded-For ends in hops that change per request, and
+    a client can prepend entries; Cloudflare's CF-Connecting-IP is the same for one client."""
+    client, _, _ = make_client(rate_limit_per_minute=3, client_ip_header="cf-connecting-ip")
+
+    def ask(cf: str | None, forwarded: str) -> int:
+        headers = {"X-Forwarded-For": forwarded} | ({"CF-Connecting-IP": cf} if cf else {})
+        return client.get("/v1/areas", headers=headers).status_code
+
+    hops = ["203.0.113.5, 10.1.0.1, 10.2.0.1", "203.0.113.5, 10.1.0.2, 10.2.0.9",
+            "198.51.100.1, 203.0.113.5, 10.1.0.3, 10.2.0.4"]  # fmt: skip
+    assert [ask("203.0.113.5", h) for h in hops] == [200, 200, 200]  # (a) one key
+    assert ask("203.0.113.5", "198.51.100.2, 203.0.113.5, 10.1.0.5, 10.2.0.6") == 429  # (b)
+    assert ask("192.0.2.44", "192.0.2.44, 10.1.0.1, 10.2.0.1") == 200  # (c) another network
+    assert ask(None, "198.51.100.3, 10.9.9.9") == 200  # no header: the X-Forwarded-For rule
+
+
 @pytest.mark.parametrize("on", [True, False])
 def test_the_forwarded_shape_is_logged_only_when_turned_on(
     make_client: Make, caplog: pytest.LogCaptureFixture, on: bool

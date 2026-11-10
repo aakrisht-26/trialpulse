@@ -5,10 +5,11 @@
   read fails it keeps the last date it had.
 - `AnswerCache` keeps answers keyed by the data-as-of date and the request, so a new day's
   data never serves yesterday's answer, least recently used first out.
-- `RateLimiter` allows `per_minute` requests per client address. Behind Hugging Face Spaces
-  every request comes from the proxy, which appends the client's address to
-  X-Forwarded-For; with `trusted_proxies` proxies in front, the client is the entry that
-  many places from the end. Entries before it can be written by anyone and are ignored.
+- `RateLimiter` allows `per_minute` requests per client address. On Render the API sits
+  behind Cloudflare, which sets `CF-Connecting-IP` to the address that connected to it and
+  refuses a request that carries its own (ADR 0065, measured), so that header is the key
+  (`client_ip_header`). Without it, the key is the X-Forwarded-For entry `trusted_proxies`
+  places from the end; entries before it can be written by anyone and are ignored.
 """
 
 import datetime as dt
@@ -70,8 +71,12 @@ class AnswerCache:
         return value
 
 
-def client_address(forwarded_for: str | None, peer: str | None, trusted_proxies: int) -> str:
-    """The client's address: the entry the nearest trusted proxy appended (see above)."""
+def client_address(forwarded_for: str | None, peer: str | None, trusted_proxies: int,
+                   client_ip: str | None = None) -> str:  # fmt: skip
+    """The client's address: the edge's client header when present, else the entry the
+    nearest trusted proxy appended (see above)."""
+    if client_ip and client_ip.strip():
+        return client_ip.strip()
     if trusted_proxies and forwarded_for:
         hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
         if len(hops) >= trusted_proxies:
