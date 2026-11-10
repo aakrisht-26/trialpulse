@@ -2542,6 +2542,27 @@ Built `trialpulse.live.backup` (`aff9415`) and `scripts/backup_weekly.ps1`, from
 - (c) Sunday 19:00 India time, chosen as above. The alternatives were a weekday evening or an early morning, which falls in the job's real span.
 - (d) A same-day second backup is refused rather than given a suffix.
 
+### 4. Parity layer 5a: equal but for the last bit of 15 risks, which the runner's platform explains
+
+Built `trialpulse.live.parity_5a` (`1893baa`, 5 tests). It reads Neon in one read-only snapshot: the latest run's date D, the 5,112 live versions since go-live, and the rows served on D. It builds a 5a warehouse in `data/parity_5a/`: the rebootstrap's combined pinned and gap rows through the seed, plus the live versions through ADR 0037's export adapter, with their keyed sponsor ids mapped back to the sponsor keys whose HMAC they are, and their intervention types as interventions rows. It then runs Step 13's `score()` dated D and compares the rows Neon served on D, in the serving tables' compact form. Run on 2026-11-10 (332 s; peak private memory 7,597 MiB; `data/parity_5a/parity_5a.json`):
+
+| What | Result |
+| --- | --- |
+| D | 2026-11-09 (run 4, a daily run: 1,904 trials rescored; the other served rows keep 2026-11-06, run 3's full run, and are not compared) |
+| Live rows in the 5a warehouse | 5,112 versions of 4,836 trials (957 new since the seed); 4,984 with a sponsor id mapped back to its key, 51 without a sponsor identity, 77 with an id first seen live; 9,800 intervention rows |
+| Population | 1,904 scored and 70 unscored on Neon, all on the offline side too; 0 scored on one side and unscored on the other |
+| Landmark indexes, flags, model, the four driver arrays, the unscored rows' index and reason | **Equal on every row** |
+| `risk_12m` | 1,898 equal, **6 differ**, by at most 6.9e-18 |
+| `risk_24m` | 1,895 equal, **9 differ**, by at most 1.4e-17 |
+| Content hashes (apart, ADR 0037) | 733 and 21 equal, 1,171 and 49 differ: the offline side holds canonical hashes for trials whose newest version is a pinned or gap row, the live side feature hashes |
+
+**The cause of the 15 differences, tested** (counts only, `data/logs/parity_5a_batch_20261110.log`):
+- Scoring only the live batch of 1,904 offline gives the same 15, so batch size is not the cause.
+- Run 4 computed its risks on GitHub's Linux runner. The same `predict()` inputs, captured on the laptop and run in a local Linux container (`python:3.12-slim`, the locked packages of `uv.lock`), reproduce Neon's risks **bit for bit on all 1,904 trials**. Windows differs from both on exactly those 15 values.
+- So the difference is the platforms' floating-point math (at most 1.4e-17, below a millionth of the 4 decimals the score files keep), not the live path. At the reference check (item D of 2026-11-08) both sides ran on the laptop, and the difference was 0.0.
+
+By the bar as written (equal on every column), 5a on the laptop **does not pass**; on the runner's platform it is equal on every column. Nothing was changed to make it pass. **Decision for Aakrisht:** accept a platform tolerance for risks in layer 5a (for example 1e-15), or run 5a's offline scoring in a Linux container as here.
+
 ## Go-live, and the API's client key behind Render (2026-11-10)
 
 Verified by Aakrisht: `daily.yml` enabled on 2026-11-08, when run 3 (full) succeeded on GitHub (a manual dispatch) in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API went live on Render the same day, at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.
