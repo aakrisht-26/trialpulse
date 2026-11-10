@@ -110,6 +110,7 @@ live:
   retention_months: 12           # score history kept on Neon (ADR 0045)
   version_retention_months: 6    # live.study_versions kept on Neon (ADR 0069)
   keepalive_seconds: 60          # SELECT 1 on a held connection while a command works
+  backup_keep: 8                 # weekly backups kept in data/backups/ (ADR 0045)
                                  # (ADR 0072: Neon cuts a connection idle for 5 minutes)
 
 # The read-only API (ADR 0049).
