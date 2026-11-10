@@ -61,8 +61,8 @@ def test_migrate_upgrades_the_explicit_url_and_never_reads_database_url(
     command.downgrade(Config(str(REPO_ROOT / "alembic.ini")), "0005")  # DATABASE_URL: local
     monkeypatch.setenv("DATABASE_URL", NEON)  # would be refused, and is never read
     explicit = scratch.replace("postgresql+psycopg://", "postgresql://", 1)
-    assert migrate.upgrade(explicit) == ("0005", "0006")
-    assert migrate.upgrade(explicit) == ("0006", "0006")
+    assert migrate.upgrade(explicit) == ("0005", "0007")
+    assert migrate.upgrade(explicit) == ("0007", "0007")
 
 
 def _secrets_with(monkeypatch: pytest.MonkeyPatch, url: str | None) -> None:

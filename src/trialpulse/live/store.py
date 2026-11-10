@@ -29,7 +29,7 @@ from trialpulse.scoring import serving
 if TYPE_CHECKING:
     from trialpulse.scoring.predict import Scored
 
-HEAD = "0006"
+HEAD = "0007"
 WIDE_COLUMNS: tuple[str, ...] = (
     "nct_id", *LIVE_FIELDS, "feature_hash", *FIRST_FIELDS, "n_versions", "ever_suspended",
     "recent_post_dates", "lapse_from", "reversal", "run_id",
