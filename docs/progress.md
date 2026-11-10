@@ -91,7 +91,7 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
-| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-09 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
+| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-08 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
 | 17 | Monitoring, retraining and replay | Not started |
 | 18 | Documentation and polish | README written in the cloud on `readme-cloud` (2026-11-01), waiting for review; the live links, the demo GIF, the CHANGELOG and the fresh-clone check on Windows wait for the deployments |
@@ -2502,7 +2502,7 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 
 ## Go-live, and the API's client key behind Render (2026-11-10)
 
-Verified by Aakrisht on 2026-11-09: `daily.yml` enabled; run 3 (full) succeeded on GitHub in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API is live on Render at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.
+Verified by Aakrisht: `daily.yml` enabled on 2026-11-08, when run 3 (full) succeeded on GitHub (a manual dispatch) in 927 s (6,132 records, 3,787 versions, 0 quarantined, 88,667 rescored, data as of 2026-11-06), and a second dispatch the same day wrote no row. The API went live on Render the same day, at https://trialpulse-api.onrender.com, deployed from `6ceaf9e`. The per-client rate limit of ADR 0049 did not hold there: 70 requests in 23 s, 70 answers of 200.
 
 | Item | What | Evidence | Commit |
 | --- | --- | --- | --- |

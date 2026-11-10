@@ -75,7 +75,7 @@ Stack: Python, uv, DuckDB, LightGBM, scikit-learn, lifelines, Optuna, MLflow, Po
 | --- | --- |
 | Data, cohort, features, models, locked test, explanations, model and data cards, scoring pipeline (roadmap Steps 1 to 13) | Built and run on the full data |
 | Daily job, API and dashboard (Steps 14 to 16) | Built and tested in CI against Postgres, recorded API responses and a seeded database |
-| Live database on Neon, daily job and API (Steps 14 and 15) | Live since 2026-11-09: the daily job runs on GitHub Actions, and the read-only API is at https://trialpulse-api.onrender.com (its documentation at https://trialpulse-api.onrender.com/docs). The free instance sleeps when idle and takes about a minute to wake ([ADR 0065](docs/adr/0065-the-api-runs-on-renders-free-web-service.md)) |
+| Live database on Neon, daily job and API (Steps 14 and 15) | Live since 2026-11-08: the daily job runs on GitHub Actions, and the read-only API is at https://trialpulse-api.onrender.com (its documentation at https://trialpulse-api.onrender.com/docs). The free instance sleeps when idle and takes about a minute to wake ([ADR 0065](docs/adr/0065-the-api-runs-on-renders-free-web-service.md)) |
 | Dashboard on Streamlit Community Cloud (Step 16) | Not deployed yet; there is no public dashboard link yet |
 | Monitoring, drift reports, grading of matured predictions, retraining (Step 17) | Not started |
 

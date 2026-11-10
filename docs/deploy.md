@@ -87,13 +87,13 @@ Steps:
 
 1. Sign in at <https://share.streamlit.io> with GitHub. Community Cloud needs admin access to the repository to deploy it.
 2. Click **Create app**, then deploy from a GitHub repository.
-3. Fill in: repository `<GITHUB_USER>/trialpulse`, branch `main`, main file path `app/Home.py`. An app address (subdomain) is optional.
+3. Fill in: repository `aakrisht-26/trialpulse`, branch `main`, main file path `app/Home.py`. An app address (subdomain) is optional.
 4. Open **Advanced settings**:
    - **Python version:** 3.12 (the project's version; it is also Community Cloud's default).
    - **Secrets:** paste exactly one line in TOML form, with the API's address from Part 1:
 
 ```
-API_URL = "https://<SERVICE>.onrender.com"
+API_URL = "https://trialpulse-api.onrender.com"
 ```
    The API's address is not a secret, but this is where the app reads it. No database URL or key goes here: the dashboard never talks to the database.
 5. Click **Deploy**. The first install takes a few minutes.
@@ -102,13 +102,13 @@ What to check after Part 2:
 
 1. The home page loads and shows the notice "Research demo. Not medical advice. Not for patient decision-making." and the source attribution with the data-as-of date (ADR 0008).
 2. Open each page in the sidebar: Overview, Portfolio, Trial detail, Landscape, Why trials stop and Model health. Each shows the notice and the attribution.
-3. Trial detail: enter `<A_SCORED_NCT_ID>`. Expect the score card (risks at 12 and 24 months, five drivers per horizon) and the timeline. Enter an id that is not served: expect the plain "not found" message, not an error.
+3. Trial detail: enter `NCT02957968` (a scored trial). Expect the score card (risks at 12 and 24 months, five drivers per horizon) and the timeline. Enter `NCT00000000`, which is not served: expect the plain "not found" message, not an error.
 4. Cold start: after the API has idled for over 15 minutes, open a page. Expect the waiting message (the service starting), then the page; never a traceback (ADR 0054).
 5. Secrets can be changed later in the app's settings in your workspace; the app restarts with them.
 
-## Part 3: after both are live
+## Part 3: the state after go-live
 
-1. Put the two public addresses in the README's "Live links" (Step 18 owns the README's wording).
-2. Record the X-Forwarded-For measurement in ADR 0065.
-3. Keep `daily.yml` disabled until the Neon runbook says to enable it.
+1. The API has been live on Render since 2026-11-08, at https://trialpulse-api.onrender.com, and the README links it. The dashboard is not deployed yet; its link replaces the README's "not deployed yet" after Part 2.
+2. The X-Forwarded-For measurement is recorded in ADR 0065 (section "Measured (2026-11-10)"): the rate limit is keyed by `CF-Connecting-IP`.
+3. `daily.yml` has been enabled since 2026-11-08: its first run on Neon was a manual dispatch that day, and it runs on its schedule since. It must not be disabled except to stop a failing job; a failed run opens a "Daily live run failed" issue.
 4. If anything fails, the API can be suspended from its service page on Render, and the app can be deleted or rebooted from the Community Cloud workspace. Neither holds data.
