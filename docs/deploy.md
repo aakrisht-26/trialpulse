@@ -102,9 +102,23 @@ What to check after Part 2:
 
 1. The home page loads and shows the notice "Research demo. Not medical advice. Not for patient decision-making." and the source attribution with the data-as-of date (ADR 0008).
 2. Open each page in the sidebar: Overview, Portfolio, Trial detail, Landscape, Why trials stop and Model health. Each shows the notice and the attribution.
-3. Trial detail: enter `NCT02957968` (a scored trial). Expect the score card (risks at 12 and 24 months, five drivers per horizon) and the timeline. Enter `NCT00000000`, which is not served: expect the plain "not found" message, not an error.
+3. Trial detail: enter `NCT06447662` (a scored trial on 2026-11-10). Expect the score card (risks at 12 and 24 months, five drivers per horizon) and the timeline. Enter `NCT00000000`, which is not served: expect the plain "not found" message, not an error.
 4. Cold start: after the API has idled for over 15 minutes, open a page. Expect the waiting message (the service starting), then the page; never a traceback (ADR 0054).
 5. Secrets can be changed later in the app's settings in your workspace; the app restarts with them.
+
+### After the dashboard is deployed
+
+1. **Check every page of the deployed app** from the laptop (Playwright drives the installed Chrome, headless, in a fresh profile; it waits out a sleeping app and the API's cold start within the dashboard's 3-minute budget):
+
+```
+uv run python scripts/check_dashboard.py --url https://<APP>.streamlit.app
+```
+
+   Expected: seven lines starting with `ok` (Overview, Portfolio, Trial detail for a scored trial, Trial detail for `NCT00000000` with the plain not-found message, Landscape, Why trials stop, Model health), then `7 of 7 pages passed` and exit code 0. A line starting with `FAIL` names what was missing (the notice, the attribution with its data-as-of date, the page's own content) or found (an error box, a traceback). If the scored trial has since closed, pass another with `--scored <NCT id>`.
+
+2. **The README's link.** In README.md's Status table, the row "Dashboard on Streamlit Community Cloud (Step 16)" changes from "Not deployed yet; there is no public dashboard link yet" to the app's address, and `tests/test_readme.py::test_live_links_only_for_what_is_deployed` changes with it: it then requires the `https://<APP>.streamlit.app` address and no longer requires the "not deployed yet" sentence (it keeps refusing any Hugging Face Spaces address). The README and the test change in one commit.
+
+3. **Closing Step 16 in docs/progress.md.** Status row 16 becomes "Approved 2026-11-01 (ADRs 0052 to 0057 accepted); deployed on Streamlit Community Cloud on <date> at <address>; every page checked against the deployed API by `scripts/check_dashboard.py` (7 of 7)". The screenshots of Step 16's acceptance are already in `docs/figures/dashboard_*.png`, taken on 2026-11-10 from the dashboard run locally against the live API (`scripts/dashboard_screenshots.py`); retake them from the deployed app only if a page changes. Step 16's acceptance is then met: every page works against the deployed API, cold starts are handled, the notice is on every page, and the screenshots are saved.
 
 ## Part 3: the state after go-live
 
