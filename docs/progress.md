@@ -2519,7 +2519,7 @@ Layer 5a compares `risk_12m` and `risk_24m` within 1e-12 (ADR 0034's reproductio
 
 - `monitor.grading`: for each prediction date and model, each horizon, each landmark index (and all) and each group (all, flagged): counts and the harness's IPCW AUC, Brier score, calibration slope and intercept and lift at 10%, matured or partial-horizon. Trials with a status reversal are left out (Section 6; `d98cb0d`, found during the run).
 - Migration 0007: `source` ('live' or 'replay') in the grades' key, `monitoring.drift`, and read-only views in `serving` for the API role. Applied on Neon at 15:04 UTC on 2026-11-10 with no daily run in progress; Neon 283.5 MB before, 275.3 MB on the next full run's measurement (2026-11-14).
-- `grade.yml`, monthly (the 2nd at 12:00 UTC), reads Neon's score files and outcome events, never the dataset. A dispatch on 2026-11-10 graded 89,011 predictions of 2026-11-13 into 20 rows. **The forced failure:** run 43899383438 with `fail_on_purpose` opened issue #11 ("Monthly grading failed", error class GradingFailed), closed afterwards with a comment.
+- `grade.yml`, monthly (the 2nd at 12:00 UTC), reads Neon's score files and outcome events, never the dataset. A manual dispatch graded the 89,011 predictions of the score file of data date 2026-11-13 into 20 rows. **The forced failure:** run 43899383438 with `fail_on_purpose` opened issue #11 ("Monthly grading failed", error class GradingFailed), closed afterwards with a comment.
 
 ### Part 2: the replay (ADR 0078)
 
