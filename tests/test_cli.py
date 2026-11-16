@@ -121,3 +121,19 @@ def test_a_refusal_still_prints_one_line_and_its_exit_code(
     monkeypatch.setattr(cli, "opt_out_of_throttling", lambda: False)
     assert cli.run(main) == cli.REFUSED_EXIT_CODE
     assert capsys.readouterr().err == "refused: not today\n"
+
+
+def test_an_unexpected_error_prints_no_address_or_host(capsys: pytest.CaptureFixture[str]) -> None:
+    def main(argv: object) -> int:
+        raise RuntimeError(
+            "failed to resolve host 'ep-quiet-lake-12345.eu-central-1.aws.neon.tech': "
+            "[Errno 11001]; postgresql://user:secret@db.internal:5432/x; "
+            "host=10.1.2.3 port=5432; https://trialpulse-api.onrender.com/v1"
+        )
+
+    assert cli.run(main) == 1
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err  # the traceback stays
+    for leaked in ("ep-quiet-lake", "neon.tech", "secret", "db.internal", "10.1.2.3",
+                   "onrender.com"):  # fmt: skip
+        assert leaked not in err

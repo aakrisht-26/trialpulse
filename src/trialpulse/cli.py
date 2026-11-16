@@ -18,7 +18,9 @@ about 4.7 times slower with the same results. Outside Windows the request does n
 """
 
 import ctypes
+import re
 import sys
+import traceback
 from collections.abc import Callable, Sequence
 
 REFUSED_EXIT_CODE = 2
@@ -74,12 +76,35 @@ def opt_out_of_throttling() -> bool:
     return bool(done)
 
 
+# What an unexpected error may carry that never reaches a log (the backup of 2026-11-15 logged
+# a database host name in a resolver error): a connection string, a host quoted by a client
+# library, a keyword connection string's host, a cloud database host name.
+ADDRESSES = (
+    (re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+", re.IGNORECASE), "<address>"),
+    (re.compile(r"(\bhost\s*(?:=|\s)\s*['\"]?)[^\s'\",)]+", re.IGNORECASE), r"\1<host>"),
+    (
+        re.compile(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:neon\.tech|render\.com)\b", re.IGNORECASE),
+        "<host>",
+    ),
+)
+
+
+def without_addresses(text: str) -> str:
+    for pattern, replacement in ADDRESSES:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def run(main: Callable[[Sequence[str] | None], int], argv: Sequence[str] | None = None) -> int:
     """Call a command's main, opted out of Windows' throttling, and turn an expected refusal
-    into one line and an exit code."""
+    into one line and an exit code. Any other error prints its traceback with every address
+    and host name masked (scheduled tasks keep it in a log) and exits with 1."""
     opt_out_of_throttling()
     try:
         return main(argv)
     except RefusedError as exc:
         print(f"{exc.prefix}: {' '.join(str(exc).split())}", file=sys.stderr)
         return exc.exit_code
+    except Exception:
+        print(without_addresses(traceback.format_exc()), file=sys.stderr)
+        return 1
