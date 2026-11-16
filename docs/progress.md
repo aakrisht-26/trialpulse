@@ -73,7 +73,9 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-11-04): items 1 (the contract changes of guidance items 10 and 13 and the rebuild), 2 (the bootstrap, its rehearsal and the day-0 check) and 3 (the census) are done, and item 4 (parity layer 2) is built and measured, its full run waiting for his choice; phase A's report waits for his review (see "Step 14, phase A on the laptop"). Step 18's README part was done on 2026-11-01; the rest of Step 18 waits for the deployments. Step 17 is not started.
+Current step: **Step 17, monitoring, retraining and replay** (approved by Aakrisht on 2026-11-10; his decisions of 2026-11-16 added: main is production, a network guard in tests, the drift reference at the seed date, the replay check for the reviewers, Neon writes from his hotspot). Built and run on the laptop; see "Step 17" below.
+
+Next step: the drift reference at the seed date 2026-11-03 (ADR 0076 amended), then the full suite, the two-reviewer review after the usage window resets, fixes, push, CI and Render; then stop for Aakrisht's hotspot and do the waiting Neon writes.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -93,8 +95,13 @@ Current step: **Step 14, phase A on the laptop** (approved by Aakrisht on 2026-1
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-08 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
-| 17 | Monitoring, retraining and replay | Not started |
+| 17 | Monitoring, retraining and replay | Approved 2026-11-10 (ADRs 0076 to 0081); built and run on the laptop 2026-11-10 to 2026-11-16; the Neon writes wait for a network that reaches port 5432 |
 | 18 | Documentation and polish | README written in the cloud on `readme-cloud` (2026-11-01), waiting for review; the live links, the demo GIF, the CHANGELOG and the fresh-clone check on Windows wait for the deployments |
+
+## Working notes
+
+- **Main is production** (Aakrisht, 2026-11-16): `daily.yml` runs whatever is on main. Nothing is pushed to main unless the full suite (slow tests included, Postgres required) passed locally on that exact tree. If CI goes red, the next push is the fix and nothing else. Why: CI was red on four pushes of Step 17 (from `19955a6` to `d6ac893`, pushed without waiting for CI), Render deployed none of them, and two daily-job tests without respx called the live ClinicalTrials.gov API. Since `5e3ef4f`, tests/conftest.py refuses every connection and name lookup to another machine and fails a test that tried one (tests/test_network_guard.py proves it).
+- **Usage limits:** commit after every small finished change, keep the "Next step" line above current, and never start a Neon write, a migration or a push that a cut-off would leave half done.
 
 ## Guidance for later steps (recorded 2026-09-30)
 
