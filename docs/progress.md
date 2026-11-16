@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: the overnight run of 2026-11-17, item 3 (the README); items 1 and 2 done.
+Next step: the overnight run of 2026-11-17, item 4 (CHANGELOG.md); items 1 to 3 done (the README's live loop, monitoring, architecture and limitations brought up to date; readme-cloud was merged in PR #8 and deleted on GitHub).
 
 | Step | Title | Status |
 | --- | --- | --- |

@@ -4,7 +4,7 @@
 
 > Research demo. Not medical advice. Not for patient decision-making.
 
-TrialPulse is operational risk analytics for clinical trial portfolios. For every open interventional trial registered on ClinicalTrials.gov, it estimates the probability of an early stop (terminated or withdrawn) within the next 12 and 24 months, names the five features that moved each score, and is built to update the estimates daily as sponsors amend their records. It is meant for clinical operations and portfolio teams at sponsors and contract research organizations who want to know which trials to review first. It reads registry metadata only: it holds no patient data, and a high score means elevated early-stop risk for operational planning, not a statement about whether a treatment works.
+TrialPulse is operational risk analytics for clinical trial portfolios. For every open interventional trial registered on ClinicalTrials.gov, it estimates the probability of an early stop (terminated or withdrawn) within the next 12 and 24 months, names the five features that moved each score, and has updated the estimates every day since 2026-11-08 as sponsors amend their records. It is meant for clinical operations and portfolio teams at sponsors and contract research organizations who want to know which trials to review first. It reads registry metadata only: it holds no patient data, and a high score means elevated early-stop risk for operational planning, not a statement about whether a treatment works.
 
 ## Results
 
@@ -36,7 +36,9 @@ What was falsified, and is published as such:
 
 **A pre-registered locked test.** Models were developed on the 2016 and 2017 origins only. The hypotheses, with numeric predictions and acceptable ranges, were committed and tagged before the 2018, 2019 and 2020 origins could be evaluated, and the evaluation harness refuses those origins without the published tag. Falsified predictions are reported, not removed ([docs/results.md](docs/results.md)).
 
-**A live loop.** A daily GitHub Actions job pulls changed records from the official ClinicalTrials.gov API v2, turns them into the same features through the same SQL as the offline path, rescores the affected trials and writes compact tables to Postgres on Neon. A read-only FastAPI service and a Streamlit dashboard read only those tables. Tests on synthetic histories check that the live path gives the same features as the offline path ([docs/adr/0038-serving-parity-c.md](docs/adr/0038-serving-parity-c.md)).
+**A live loop.** Since 2026-11-08 a daily GitHub Actions job pulls changed records from the official ClinicalTrials.gov API v2, turns them into the same features through the same SQL as the offline path, rescores the affected trials and writes compact tables to Postgres on Neon. A read-only FastAPI service and a Streamlit dashboard read only those tables. Parity is checked in layers, from synthetic histories in CI to the live rows themselves, scored again offline on the laptop and compared with what was served ([docs/adr/0038-serving-parity-c.md](docs/adr/0038-serving-parity-c.md)).
+
+**Monitoring and an honest gate.** A monthly workflow grades served predictions against the outcomes that have arrived; a replay of 2023 and 2024, scored by a model fitted as of 2023-01-01, gives monitoring history with matured outcomes, labeled as evidence, never as a registered result; each weekly full run measures drift of the features and risks against the trials served on 2026-11-03; alerts open GitHub issues. A quarterly retrain on the laptop trains a challenger, but the promotion gate waits until 12-month outcomes have matured for predictions made after the champion's training data, about November 2027, rather than compare the two models on data the champion was trained on ([ADR 0080](docs/adr/0080-retrain-on-the-laptop-and-a-gate-that-waits.md)).
 
 ## Architecture
 
@@ -63,6 +65,10 @@ flowchart LR
     WH -.->|"one-time bootstrap"| NEON
     CTG --> DAILY --> NEON
     NEON --> API --> DASH
+    GRADE["Monthly grading<br/>GitHub Actions"]
+    RETRAIN["Quarterly retrain and gate,<br/>weekly backup, on the laptop"]
+    NEON --> GRADE --> NEON
+    NEON -.->|"live rows, decisions"| RETRAIN
 ```
 
 The gated dataset never leaves the laptop except through the one-time bootstrap; after that only aggregates, models and named summaries do ([ADR 0040](docs/adr/0040-the-gated-dataset-stays-on-the-laptop.md)). Decisions are recorded as ADRs in [docs/adr/](docs/adr/).
@@ -77,7 +83,7 @@ Stack: Python, uv, DuckDB, LightGBM, scikit-learn, lifelines, Optuna, MLflow, Po
 | Daily job, API and dashboard (Steps 14 to 16) | Built and tested in CI against Postgres, recorded API responses and a seeded database |
 | Live database on Neon, daily job and API (Steps 14 and 15) | Live since 2026-11-08: the daily job runs on GitHub Actions, and the read-only API is at https://trialpulse-api.onrender.com (its documentation at https://trialpulse-api.onrender.com/docs). The free instance sleeps when idle and takes about a minute to wake ([ADR 0065](docs/adr/0065-the-api-runs-on-renders-free-web-service.md)) |
 | Dashboard on Streamlit Community Cloud (Step 16) | Not deployed yet; there is no public dashboard link yet |
-| Monitoring, drift reports, grading of matured predictions, retraining (Step 17) | Built on 2026-11-16: a monthly grading workflow, a replay of 2023 and 2024 (monitoring evidence, never a registered result), a weekly drift summary in the daily job's full run, the quarterly retrain on the laptop with its promotion gate (no promotion before matured outcomes exist after the champion's training data, about November 2027) and alerts as GitHub issues |
+| Monitoring, drift reports, grading of matured predictions, retraining (Step 17) | Live since 2026-11-17: a monthly grading workflow, a replay of 2023 and 2024 (monitoring evidence, never a registered result) on the Model health page, a weekly drift summary in the daily job's full run, the quarterly retrain on the laptop with its promotion gate (no promotion before matured outcomes exist after the champion's training data, about November 2027) and alerts as GitHub issues |
 
 Progress, step by step, with evidence and the open items: [docs/progress.md](docs/progress.md).
 
@@ -132,7 +138,8 @@ On an empty local database the pages show what exists and say what does not.
 - **At registration** M4 and the static classifier M1 rank trials about equally (H1). The amendment signals add more the longer a trial has been registered (H2); the static classifier scores registration only, so there is no comparison with it after registration.
 - **Self-reported, US-centric data**, with estimated post dates before 2018 and records that go stale ([docs/data_card.md](docs/data_card.md)).
 - **Older trials.** Trials 42 to 119 months after registration are scored outside the validated range and flagged; in development their scores ran above the observed risk ([docs/model_card.md](docs/model_card.md), served scope).
-- **Not live yet.** The live loop has run only in tests, not in production.
+- **Live outcomes are young.** The live system started on 2026-11-08, so no live prediction has a matured 12-month outcome before November 2027; until then graded performance is partial-horizon, and the replay of 2023 and 2024 is monitoring evidence, not a registered result.
+- **Free hosting.** The API sleeps when idle and takes about a minute to wake; the database runs on a free plan with a storage cap ([docs/deploy.md](docs/deploy.md)).
 
 More in [docs/model_card.md](docs/model_card.md) and [docs/data_card.md](docs/data_card.md).
 
