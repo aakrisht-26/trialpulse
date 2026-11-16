@@ -121,6 +121,22 @@ def compare_scores(champion: pd.DataFrame, challenger: pd.DataFrame) -> dict[str
     return out
 
 
+def last_5a() -> tuple[dt.date, Path, str, dict[str, Any]]:
+    """The data date, warehouse, interventions glob and counts of the last parity 5a run: the
+    same rows (pinned, gap and Neon's live versions) read from the laptop, for a retrain on a
+    network that cannot reach Neon."""
+    from trialpulse.live import parity_5a
+
+    record = parity_5a.OUT_DIR / "parity_5a.json"
+    warehouse = parity_5a.OUT_DIR / "warehouse.duckdb"
+    if not (record.is_file() and warehouse.is_file()):
+        raise RefusedError("no parity 5a run to reuse; run: uv run python -m "
+                           "trialpulse.live.parity_5a")  # fmt: skip
+    found = json.loads(record.read_text(encoding="utf-8"))
+    glob = (parity_5a.OUT_DIR / "interventions" / "*.parquet").as_posix()
+    return dt.date.fromisoformat(found["day"]), warehouse, glob, dict(found["warehouse"])
+
+
 def write_promotion(dsn: str, row: dict[str, Any]) -> None:
     import psycopg
 
@@ -134,7 +150,9 @@ def write_promotion(dsn: str, row: dict[str, Any]) -> None:
                     tuple(row.values()))  # fmt: skip
 
 
-def retrain(cfg: ProjectConfig, dsn: str, out_dir: Path = RETRAIN_DIR) -> dict[str, Any]:
+def retrain(
+    cfg: ProjectConfig, dsn: str, out_dir: Path = RETRAIN_DIR, from_5a: bool = False
+) -> dict[str, Any]:
     from trialpulse.gap import rebootstrap
     from trialpulse.live import parity_5a
     from trialpulse.live.daily import _dsn as live_dsn
@@ -149,12 +167,15 @@ def retrain(cfg: ProjectConfig, dsn: str, out_dir: Path = RETRAIN_DIR) -> dict[s
         raise RefusedError("SPONSOR_ID_KEY is not set (environment or .env)")
     if cfg.dataset.cutoff is None:
         raise RefusedError("config/project.yaml records no data cutoff")
-    neon = parity_5a.read_neon(live_dsn("neon"))  # read-only snapshot of the live versions
-    day: dt.date = neon["day"]
-    versions = parity_5a.with_exported(neon["versions"])
-    warehouse, interventions, counts = parity_5a.build_warehouse(
-        rebootstrap.COMBINED_WAREHOUSE, rebootstrap.combined_interventions(), versions,
-        key.get_secret_value().encode("utf-8"), out_dir / "warehouse")  # fmt: skip
+    if from_5a:  # the warehouse parity 5a built from Neon's live rows, reused as it is
+        day, warehouse, interventions, counts = last_5a()
+    else:
+        neon = parity_5a.read_neon(live_dsn("neon"))  # read-only snapshot of the live versions
+        day = neon["day"]
+        versions = parity_5a.with_exported(neon["versions"])
+        warehouse, interventions, counts = parity_5a.build_warehouse(
+            rebootstrap.COMBINED_WAREHOUSE, rebootstrap.combined_interventions(), versions,
+            key.get_secret_value().encode("utf-8"), out_dir / "warehouse")  # fmt: skip
     seconds["data"] = clock.perf_counter() - started
     dated = as_of(cfg, day)
     built = build_cohort_and_features(dated, warehouse, interventions, out_dir)
@@ -197,7 +218,8 @@ def retrain(cfg: ProjectConfig, dsn: str, out_dir: Path = RETRAIN_DIR) -> dict[s
            "reason": decision.reason, "mlflow_run_id": run_id}  # fmt: skip
     write_promotion(dsn, row)
     result = {
-        "data_date": day.isoformat(), "warehouse": counts, "cohort": built["cohort"],
+        "data_date": day.isoformat(), "data_source": "parity 5a's warehouse" if from_5a
+        else "Neon's live rows, read now", "warehouse": counts, "cohort": built["cohort"],
         "feature_rows": built["feature_rows"],
         "fit": {k: summary[k] for k in ("landmark_rows", "person_period_rows", "rounds",
                                         "fit_seconds")},
@@ -217,9 +239,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="The quarterly retrain and gate (ADR 0080).")
     parser.add_argument("--target", choices=("local", "neon"), required=True,
                         help="where the decision is written (monitoring.promotions)")  # fmt: skip
+    parser.add_argument("--from-5a", action="store_true",
+                        help="reuse the warehouse of the last parity 5a run instead of reading "
+                             "Neon (a network that blocks port 5432)")  # fmt: skip
     args = parser.parse_args(argv)
     refuse_on_a_runner()  # the retrain reads the dataset (ADR 0040)
-    result = retrain(load_project_config(), _dsn(args.target))
+    result = retrain(load_project_config(), _dsn(args.target), from_5a=args.from_5a)
     print(json.dumps(result, indent=2, default=str))
     return 0
 

@@ -2,6 +2,7 @@
 agreement of two models' risks, and the decision row. The fit runs on the laptop's data."""
 
 import datetime as dt
+from pathlib import Path
 
 import pandas as pd
 import psycopg
@@ -45,3 +46,20 @@ def test_the_decision_row_is_written_to_promotions(scratch: str) -> None:
     with psycopg.connect(dsn) as con:
         rows = con.execute("SELECT promoted, reason FROM serving.monitoring_promotions").fetchall()
     assert rows == [(False, gate.NO_WINDOW)]
+
+
+def test_reusing_parity_5a_needs_a_5a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from trialpulse.cli import RefusedError
+    from trialpulse.live import parity_5a
+
+    monkeypatch.setattr(parity_5a, "OUT_DIR", tmp_path)
+    with pytest.raises(RefusedError, match="no parity 5a run"):
+        retrain.last_5a()
+    (tmp_path / "warehouse.duckdb").write_bytes(b"")
+    record = '{"day": "2026-11-09", "warehouse": {"live_versions": 5112}}'
+    (tmp_path / "parity_5a.json").write_text(record, encoding="utf-8")
+    day, warehouse, glob, counts = retrain.last_5a()
+    assert warehouse == tmp_path / "warehouse.duckdb"
+    assert day == dt.date(2026, 11, 9)
+    assert counts == {"live_versions": 5112}
+    assert glob.endswith("interventions/*.parquet")
