@@ -1112,11 +1112,11 @@ def test_a_full_run_writes_the_drift_summary_after_publication(
     summary = report.counts["details"]["drift"]
     assert report.status == "succeeded"
     assert published == [1]  # publication had committed before the step ran
-    assert summary["columns"] == 55
+    assert summary["columns"] == 54  # 52 features and the two risks (ADR 0076)
     assert summary["features_drifted"] == 1
     assert "drift" in report.counts["details"]["seconds"]
     rows = _drift_rows(dsn)
-    assert len(rows) == 55
+    assert len(rows) == 54
     assert sum(kind == "score" for kind, _ in rows) == 2
 
 

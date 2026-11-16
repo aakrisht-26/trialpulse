@@ -40,8 +40,11 @@ def test_run_turns_a_refusal_into_one_line_and_an_exit_code(
     assert _one_line(capsys, "refused") == "refused: first line second line\n"
     assert run(stops) == 4
     assert _one_line(capsys, "stopped") == "stopped: daily limit\n"
-    with pytest.raises(KeyError):  # a bug keeps its traceback
-        run(breaks)
+    assert run(breaks) == 1  # a bug keeps its traceback, printed with addresses masked
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in err
+    assert "KeyError: 'a bug'" in err
+    assert "in breaks" in err
 
 
 def test_a_test_split_already_scored_is_refused(
