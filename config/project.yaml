@@ -125,3 +125,14 @@ api:
   forwarded_diagnostic: false      # ADR 0065's measurement: logs the headers' shape only
   cache_entries: 20000
   page_size_max: 200
+
+retraining:                       # Section 14's promotion gate (ADR 0080)
+  auc_margin: 0.005               # challenger AUC at 12 months >= champion's minus this
+  slope_low: 0.8                  # challenger calibration slope at 12 months in [low, high]
+  slope_high: 1.2
+  horizon_months: 12              # the gate reads the 12-month horizon only (ADR 0080)
+
+alerts:                           # one GitHub issue per alert kind (ADR 0081)
+  watermark_lag_days: 3           # Section 14: watermark lag at most 3 days
+  quarantine_share: 0.01          # quarantined records over 1% of a run's records
+  drift_feature_share: 0.20       # drift on over 20% of the features of a week

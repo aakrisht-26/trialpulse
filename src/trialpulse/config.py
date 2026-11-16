@@ -236,6 +236,23 @@ class ApiConfig(_Section):
     page_size_max: PositiveInt
 
 
+class RetrainingConfig(_Section):
+    """The promotion gate of Section 14 (ADR 0080)."""
+
+    auc_margin: float = Field(ge=0)  # the challenger's 12-month AUC >= the champion's minus this
+    slope_low: float  # the challenger's 12-month calibration slope lies in [low, high]
+    slope_high: float
+    horizon_months: PositiveInt  # the horizon the gate reads (12, ADR 0080)
+
+
+class AlertsConfig(_Section):
+    """The alert thresholds of ADR 0081."""
+
+    watermark_lag_days: PositiveInt
+    quarantine_share: float = Field(gt=0, le=1)
+    drift_feature_share: float = Field(gt=0, le=1)
+
+
 class ProjectConfig(BaseSettings):
     """Locked definitions and tunable constants (CLAUDE.md Section 6).
 
@@ -262,6 +279,8 @@ class ProjectConfig(BaseSettings):
     seeds: SeedConfig
     live: LiveConfig
     api: ApiConfig
+    retraining: RetrainingConfig
+    alerts: AlertsConfig
 
     @classmethod
     def settings_customise_sources(
