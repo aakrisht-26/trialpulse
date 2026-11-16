@@ -1,10 +1,91 @@
-"""Shared test setup."""
+"""Shared test setup.
 
+No test reaches the network: every socket connection and name lookup to anything but this
+machine (loopback addresses and `localhost`, where the test Postgres runs) is refused with
+`RealNetworkError` and recorded, and a test that tried one fails at teardown even if the code
+under test swallowed the error. Recorded API responses (respx) never open a socket. The
+guard covers the test process, not child processes of worker pools."""
+
+import ipaddress
+import socket
 import ssl
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+
+_REAL_CONNECT = socket.socket.connect
+_REAL_CONNECT_EX = socket.socket.connect_ex
+_REAL_GETADDRINFO = socket.getaddrinfo
+
+
+class RealNetworkError(RuntimeError):
+    """A test tried to reach another machine. A RuntimeError, not an OSError, so no retry
+    loop or connection-error handler treats it as a network failure to wait out."""
+
+
+class NetworkGuard:
+    def __init__(self) -> None:
+        self.attempts: list[str] = []
+
+    def refuse(self, what: str) -> None:
+        self.attempts.append(what)
+        raise RealNetworkError(f"a test tried to reach the network: {what}")
+
+
+GUARD = NetworkGuard()
+
+
+def _local(host: Any) -> bool:
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    if host is None:  # getaddrinfo(None, port): this machine's own addresses
+        return True
+    name = str(host).strip("[]").split("%")[0].lower()
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _guarded(real: Callable[..., Any]) -> Callable[..., Any]:
+    def connect(self: socket.socket, address: Any) -> Any:
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not _local(address[0]):
+            GUARD.refuse(f"connect to {address[0]}:{address[1]}")
+        return real(self, address)
+
+    return connect
+
+
+def _guarded_getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
+    if not _local(host):
+        GUARD.refuse(f"name lookup of {host}")
+    return _REAL_GETADDRINFO(host, *args, **kwargs)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    socket.socket.connect = _guarded(_REAL_CONNECT)  # type: ignore[method-assign]
+    socket.socket.connect_ex = _guarded(_REAL_CONNECT_EX)  # type: ignore[method-assign]
+    socket.getaddrinfo = _guarded_getaddrinfo
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    socket.socket.connect = _REAL_CONNECT  # type: ignore[method-assign]
+    socket.socket.connect_ex = _REAL_CONNECT_EX  # type: ignore[method-assign]
+    socket.getaddrinfo = _REAL_GETADDRINFO
+
+
+@pytest.fixture(autouse=True)
+def no_real_network() -> Iterator[NetworkGuard]:
+    """Fails a test that tried to reach the network, even if the error was swallowed."""
+    start = len(GUARD.attempts)
+    yield GUARD
+    tried = GUARD.attempts[start:]
+    if tried:
+        del GUARD.attempts[start:]
+        pytest.fail(f"the test tried to reach the network ({len(tried)} times): {tried[0]}")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
