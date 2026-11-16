@@ -1,7 +1,7 @@
 # 0082. Step 17's verify commands are the commands that were built
 
 - Date: 2026-11-17
-- Status: **Proposed.** Written during the unattended run of 2026-11-16 and 2026-11-17 after the operations review (finding F6), for Aakrisht's acceptance; until then CLAUDE.md is unchanged.
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-17 (written after the operations review of Step 17, finding F6).
 
 ## Context
 
