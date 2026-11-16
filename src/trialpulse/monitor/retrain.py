@@ -114,6 +114,15 @@ def fit_challenger(cfg: ProjectConfig, day: dt.date, landmarks: Path,
     return model, meta
 
 
+def challenger_artifacts(folder: Path, meta: dict[str, Any]) -> list[Path]:
+    """The files logged with the challenger's run, the four `scoring.champion` logs: the
+    bundle and its meta.json, which `live.registry.fetch` and `load_bundle` read, so a
+    registered challenger fetches as the champion does (review finding F3)."""
+    from trialpulse.scoring.bundle import META
+
+    return [folder / name for name in (*meta["files"], META)]
+
+
 def challenger_record(day: dt.date, origin: dt.date) -> dict[str, str]:
     """What the challenger's meta.json records besides its fit. No "version" key: a
     registered bundle takes its version from the registry when it is fetched, and
@@ -332,7 +341,7 @@ def retrain(
              "rounds": summary["rounds"], "landmark_rows": summary["landmark_rows"],
              "live_versions": counts["live_versions"], "promoted": decision.promoted},
             {**agreement, **{k: v for k, v in window_metrics(found).items() if v is not None}},
-            [out_dir / "challenger" / name for name in meta["files"]], cfg,
+            challenger_artifacts(out_dir / "challenger", meta), cfg,
             tags={"kind": "challenger", "registered": "no", "gate": reason,
                   "failed_review_rule": FAILED_REVIEW_RULE},
             state=state,

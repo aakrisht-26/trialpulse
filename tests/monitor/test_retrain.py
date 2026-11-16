@@ -96,3 +96,12 @@ def test_the_window_starts_after_the_champions_own_training_cutoff() -> None:
     assert retrain.champion_training_cutoff({}, CFG) == CFG.dataset.cutoff  # the first champion
     record = retrain.challenger_record(dt.date(2027, 11, 9), dt.date(2027, 11, 10))
     assert retrain.champion_training_cutoff(record, CFG) == dt.date(2027, 11, 9)
+
+
+def test_the_challengers_run_logs_the_four_files_the_champions_run_logs(tmp_path: Path) -> None:
+    from trialpulse.scoring import bundle
+
+    files = {bundle.BOOSTER: "a", bundle.LEVELS: "b", bundle.PRIORS: "c"}  # save_bundle's
+    logged = retrain.challenger_artifacts(tmp_path, {"files": files})
+    assert [p.name for p in logged] == [bundle.BOOSTER, bundle.LEVELS, bundle.PRIORS, bundle.META]
+    assert all(p.parent == tmp_path for p in logged)
