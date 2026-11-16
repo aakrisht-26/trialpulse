@@ -235,7 +235,9 @@ def predictions() -> pd.DataFrame:
     frame = frame.rename(columns={"as_of_date": "prediction_date"})
     outcomes = pd.read_parquet(OUTCOMES_PATH,
                                columns=["trial_id", "event", "event_date", "reversal"])  # fmt: skip
-    return grading.cohort_outcomes(frame, outcomes)
+    cfg = load_project_config()
+    assert cfg.dataset.cutoff is not None
+    return grading.cohort_outcomes(frame, outcomes, cfg.dataset.cutoff)
 
 
 def grade_replay(cfg: ProjectConfig, dsn: str) -> dict[str, Any]:

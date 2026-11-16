@@ -212,7 +212,7 @@ def window_comparison(
                                columns=["trial_id", "event", "event_date", "reversal"])  # fmt: skip
     data_date = dated.dataset.cutoff
     assert data_date is not None
-    graded = grading.grade(grading.cohort_outcomes(predictions, outcomes), data_date,
+    graded = grading.grade(grading.cohort_outcomes(predictions, outcomes, data_date), data_date,
                            grading.WINDOW, cfg.evaluation.censoring_min_rows,
                            cfg.evaluation.lift_top_fraction)  # fmt: skip
     graded.to_csv(folder / "window_grades.csv", index=False)

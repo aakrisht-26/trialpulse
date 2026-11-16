@@ -17,6 +17,12 @@ case, no control, too few rows) is None.
 A trial with a status reversal (a terminal status later replaced by an open one) is left out
 of every grade, as Section 6 leaves it out of evaluation: on the live path, a `reopened`
 event posted by the data date; on the replay, the final cohort's `reversal` flag.
+
+A trial still open on the data date is known to be free of any event through the end of that
+day, so it is censored half a day after it (`OPEN_THROUGH_THE_DAY`). The harness's weights
+treat a row censored at or before the horizon as unknown, so a trial censored at the data date
+itself would drop out of every grade whose horizon ends on the data date: every partial-horizon
+grade, and a grade made on the horizon's last day (review finding N1, 2026-11-17).
 """
 
 import datetime as dt
@@ -39,6 +45,7 @@ COMPLETE_STATUS = "COMPLETED"
 REOPENED = "reopened"  # trialpulse.live.state.REOPENED: a closed trial shows an open status
 STORED_SOURCES = ("live", "replay")  # what monitoring.graded_predictions holds (ADR 0079)
 WINDOW = "window"  # the retrain's comparison of two models (ADR 0080), never stored
+OPEN_THROUGH_THE_DAY = 0.5  # days after the data date at which a trial still open is censored
 GRADE_COLUMNS = (
     "prediction_date", "horizon_months", "landmark_index", "row_group", "model_version",
     "source", "n_rows", "n_early_stop", "n_completed", "n_censored", "n_open", "mean_risk",
@@ -150,17 +157,27 @@ def live_outcomes(
     for nct, day in zip(kept["nct_id"], kept["prediction_date"], strict=True):
         day = pd.Timestamp(day).date()
         first = next(((d, c) for d, c in by_trial.get(str(nct), []) if d > day), None)
-        end, code = first if first and first[0] <= data_date else (data_date, 0)
-        times.append(_days(day, end))
-        codes.append(code)
+        if first and first[0] <= data_date:
+            times.append(_days(day, first[0]))
+            codes.append(first[1])
+        else:  # open through the end of the data date
+            times.append(_days(day, data_date) + OPEN_THROUGH_THE_DAY)
+            codes.append(0)
     return kept.assign(time_days=times, event=codes)
 
 
-def cohort_outcomes(predictions: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
-    """`predictions` with each one's outcome from a final cohort (the replay, ADR 0078, and
-    the retrain's window, ADR 0080): the trial's event and its date, or its censoring date,
-    as follow-up from the prediction. A prediction whose trial has no outcome row, or whose
-    trial has a status reversal (`reversal`, Section 6), is left out."""
+def cohort_outcomes(
+    predictions: pd.DataFrame, outcomes: pd.DataFrame, data_date: dt.date
+) -> pd.DataFrame:
+    """`predictions` with each one's outcome from a final cohort observed through
+    `data_date` (the replay, ADR 0078, and the retrain's window, ADR 0080): the trial's event
+    and its date, or its censoring date, as follow-up from the prediction; a trial open at the
+    data date is censored at the end of that day (see the module text). Left out: a prediction
+    whose trial has no outcome row, a status reversal (`reversal`, Section 6), and a trial
+    that ended or was censored on or before the prediction date (a lapse the final cohort
+    dates at an earlier status-verified date, ADR 0014), as the landmark rows leave such a
+    trial out (review finding N2, 2026-11-17). The number left out for that last reason is in
+    `attrs["ended_by_the_prediction"]`."""
     kept = outcomes.loc[~outcomes["reversal"].fillna(False).astype(bool),
                         ["trial_id", "event", "event_date"]]  # fmt: skip
     merged = predictions.merge(
@@ -168,8 +185,13 @@ def cohort_outcomes(predictions: pd.DataFrame, outcomes: pd.DataFrame) -> pd.Dat
     )
     start = pd.to_datetime(merged["prediction_date"])
     end = pd.to_datetime(merged["event_date"])
-    return merged.assign(time_days=(end - start).dt.days.astype(float),
-                         event=merged["event"].astype(int))  # fmt: skip
+    after = (end > start).to_numpy()
+    open_at_the_end = ((merged["event"] == 0) & (end >= pd.Timestamp(data_date))).to_numpy()
+    days = (end - start).dt.days.astype(float) + np.where(open_at_the_end,
+                                                         OPEN_THROUGH_THE_DAY, 0.0)  # fmt: skip
+    out = merged.assign(time_days=days, event=merged["event"].astype(int))[after]
+    out.attrs["ended_by_the_prediction"] = int((~after).sum())
+    return out.reset_index(drop=True)
 
 
 def _plain(value: Any) -> Any:

@@ -102,7 +102,7 @@ def test_live_outcomes_take_the_first_stop_completion_or_lapse_after_the_predict
     )
     assert (out.loc["D", "event"], out.loc["D", "time_days"]) == (
         0,
-        (dt.date(2023, 6, 1) - DAY).days,
+        (dt.date(2023, 6, 1) - DAY).days + 0.5,  # open through the end of the data date
     )
     assert out.loc["E", "event"] == 0  # not known yet on the data date
 
@@ -126,9 +126,55 @@ def test_cohort_outcomes_are_follow_up_from_the_prediction_date() -> None:
     outcomes = pd.DataFrame({"trial_id": ["A", "C"], "event": [1, 1],
                              "event_date": [pd.Timestamp("2023-02-05")] * 2,
                              "reversal": [False, True]})  # fmt: skip
-    out = grading.cohort_outcomes(predictions, outcomes)
+    out = grading.cohort_outcomes(predictions, outcomes, dt.date(2026, 9, 25))
     assert list(out["nct_id"]) == ["A"]  # B has no outcome row, C a status reversal
     assert out["time_days"].iloc[0] == 30.0
+
+
+def test_a_trial_ended_by_the_prediction_date_is_left_out_and_counted() -> None:
+    """Review finding N2: a lapse the final cohort dates before a Friday the trial was
+    still scored on carries no outcome after that Friday, as the landmark rows treat it."""
+    predictions = pd.DataFrame({"nct_id": ["A", "B", "C"], "prediction_date": DAY})
+    outcomes = pd.DataFrame({"trial_id": ["A", "B", "C"], "event": [0, 0, 1],
+                             "event_date": [pd.Timestamp("2022-06-30"), pd.Timestamp(DAY),
+                                            pd.Timestamp("2023-02-05")],
+                             "reversal": [False, False, False]})  # fmt: skip
+    out = grading.cohort_outcomes(predictions, outcomes, dt.date(2026, 9, 25))
+    assert list(out["nct_id"]) == ["C"]
+    assert out.attrs["ended_by_the_prediction"] == 2
+
+
+def test_a_trial_open_at_the_data_date_is_a_control_of_every_horizon_ending_there() -> None:
+    """Review finding N1: censored at the data date itself, an open trial got no weight
+    in a partial-horizon grade or on the horizon's last day; open through the end of that
+    day, it is a control in both, as it is a day later."""
+    rng = np.random.default_rng(5)
+    n = 2000
+    stop = rng.random(n) < 0.05
+    ids = [f"NCT{i:08d}" for i in range(n)]
+    events = pd.DataFrame({"nct_id": [i for i, s in zip(ids, stop, strict=True) if s],
+                           "to_status": "TERMINATED", "kind": "status",
+                           "effective_date": DAY + dt.timedelta(days=60)})  # fmt: skip
+    predictions = pd.DataFrame({
+        "nct_id": ids, "prediction_date": DAY, "risk_12m": np.where(stop, 0.6, 0.1),
+        "risk_24m": np.where(stop, 0.7, 0.2), "sponsor_class": "OTHER", "landmark_index": 0,
+        "flagged": False, "model_version": "m/1"})  # fmt: skip
+    anniversary = dt.date(2024, 1, 6)
+    for data_date, matured in ((dt.date(2023, 7, 6), False), (anniversary, True),
+                               (anniversary + dt.timedelta(days=1), True)):  # fmt: skip
+        rows = grading.live_outcomes(predictions, events, data_date)
+        top = _top(grading.grade(rows, data_date, "live", 10, 0.1), 12)
+        assert bool(top["matured"]) is matured
+        assert top["n_open"] == n - int(stop.sum())  # every open trial is a control
+        assert top["auc"] == pytest.approx(1.0)
+
+
+def test_an_event_dated_on_the_prediction_day_is_not_its_outcome() -> None:
+    predictions = pd.DataFrame({"nct_id": ["A"], "prediction_date": DAY})
+    events = pd.DataFrame([("A", "TERMINATED", "status", DAY)],
+                          columns=["nct_id", "to_status", "kind", "effective_date"])  # fmt: skip
+    out = grading.live_outcomes(predictions, events, dt.date(2023, 6, 1))
+    assert out["event"].tolist() == [0]  # known when the prediction was made: not after it
 
 
 def test_the_replay_dates_are_the_fridays() -> None:
