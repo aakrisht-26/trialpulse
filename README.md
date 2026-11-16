@@ -6,6 +6,10 @@
 
 TrialPulse is operational risk analytics for clinical trial portfolios. For every open interventional trial registered on ClinicalTrials.gov, it estimates the probability of an early stop (terminated or withdrawn) within the next 12 and 24 months, names the five features that moved each score, and has updated the estimates every day since 2026-11-08 as sponsors amend their records. It is meant for clinical operations and portfolio teams at sponsors and contract research organizations who want to know which trials to review first. It reads registry metadata only: it holds no patient data, and a high score means elevated early-stop risk for operational planning, not a statement about whether a treatment works.
 
+![A walk through the dashboard: Overview, a sponsor's Portfolio, a trial's risk, drivers and timeline, and Model health](docs/figures/demo.gif)
+
+The dashboard reads only the API. Its public link comes after its deployment; until then it runs locally against the live API (Quickstart).
+
 ## Results
 
 The champion is a discrete-time LightGBM model (M4) of 54 point-in-time features. Its results come from a locked test on the 2018 and 2019 walk-forward origins. No model scored a landmark of those origins before the hypotheses were registered in [docs/preregistration.md](docs/preregistration.md) (tag `prereg-v1`), but outcomes from those years did inform development: the development rows are scored against outcomes through the data cutoff, and the registration lists every such exposure. Intervals are 95% cluster-bootstrap intervals over trials. Full tables, every model and the calibration figures: [docs/results.md](docs/results.md).
