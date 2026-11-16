@@ -137,3 +137,23 @@ def test_an_unexpected_error_prints_no_address_or_host(capsys: pytest.CaptureFix
     for leaked in ("ep-quiet-lake", "neon.tech", "secret", "db.internal", "10.1.2.3",
                    "onrender.com"):  # fmt: skip
         assert leaked not in err
+
+
+@pytest.mark.parametrize(
+    ("message", "leaked"),
+    [
+        ('connection to server at "db.example.org" (3.18.1.2), port 5432 failed',
+         ("db.example.org", "3.18.1.2")),
+        ('connection to server at "10.0.0.5", port 5432 failed', ("10.0.0.5",)),
+        ("host=db.example.org port=5432 user=u password=s3cret", ("db.example.org", "s3cret")),
+        ("hostaddr=10.9.8.7 port=5432", ("10.9.8.7",)),
+        ("u:s3cret@db.example.org:5432/neondb", ("s3cret", "db.example.org")),
+        ("GET https://trialpulse-api.onrender.com/v1 and app.onrender.com", ("onrender.com",)),
+    ],
+)  # fmt: skip
+def test_the_forms_a_client_library_prints_are_masked(
+    message: str, leaked: tuple[str, ...]
+) -> None:
+    masked = cli.without_addresses(message)
+    for value in leaked:
+        assert value not in masked

@@ -81,9 +81,19 @@ def opt_out_of_throttling() -> bool:
 # library, a keyword connection string's host, a cloud database host name.
 ADDRESSES = (
     (re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+", re.IGNORECASE), "<address>"),
-    (re.compile(r"(\bhost\s*(?:=|\s)\s*['\"]?)[^\s'\",)]+", re.IGNORECASE), r"\1<host>"),
+    (re.compile(r"[^\s:@/'\"=]+:[^\s@/'\"]+@[^\s'\"/:,)]+"), "<address>"),  # user:pass@host
     (
-        re.compile(r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:neon\.tech|render\.com)\b", re.IGNORECASE),
+        re.compile(r"(\b(?:host|hostaddr)\s*(?:=|\s)\s*['\"]?)[^\s'\",)]+", re.IGNORECASE),
+        r"\1<host>",
+    ),
+    (re.compile(r"(\bpassword\s*=\s*['\"]?)[^\s'\",)]+", re.IGNORECASE), r"\1<masked>"),
+    (re.compile(r"(\bserver at\s*\")[^\"]+", re.IGNORECASE), r"\1<host>"),  # libpq's message
+    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"), "<ip>"),
+    (
+        re.compile(
+            r"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:neon\.tech|render\.com|onrender\.com)\b",
+            re.IGNORECASE,
+        ),
         "<host>",
     ),
 )
