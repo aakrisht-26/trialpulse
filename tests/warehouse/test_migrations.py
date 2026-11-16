@@ -49,6 +49,7 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
         "serving.trial_score_history",
         "serving.trials_not_scored",
         "serving.amendment_markers",
+        "monitoring.drift",
         "monitoring.pipeline_runs",
         "monitoring.graded_predictions",
         "monitoring.promotions",

@@ -566,7 +566,8 @@ def test_a_database_not_at_the_migration_head_is_refused(dsn: str) -> None:
     with psycopg.connect(dsn) as con:
         con.execute("UPDATE alembic_version SET version_num = '0003'")
         con.commit()
-    with pytest.raises(daily.JobFailedError, match=r"start: SchemaError: .*0003, not 0006"):
+    refused = rf"start: SchemaError: .*0003, not {store.HEAD}"
+    with pytest.raises(daily.JobFailedError, match=refused):
         daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
 
 
@@ -1088,6 +1089,7 @@ def _drift_rows(dsn: str) -> list[tuple[str, bool]]:
         ).fetchall()
 
 
+@respx.mock
 def test_a_full_run_writes_the_drift_summary_after_publication(
     dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1118,6 +1120,7 @@ def test_a_full_run_writes_the_drift_summary_after_publication(
     assert sum(kind == "score" for kind, _ in rows) == 2
 
 
+@respx.mock
 def test_a_failing_drift_step_never_fails_the_run(
     dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
