@@ -668,6 +668,7 @@ Acceptance: a fresh clone follows the README quickstart successfully on Windows;
 
 Accepted ADRs that change or refine this file. Where an amendment and an earlier section differ, the amendment applies.
 
+- **ADR 0001, recording architecture decisions** (docs/adr/0001-record-architecture-decisions.md): every accepted decision is a numbered ADR in docs/adr/ (context, decision, alternatives, consequences), as Section 3 asks; an ADR that changes or refines this file is listed here.
 - **ADR 0002, configuration loading** (docs/adr/0002-configuration-loading.md): config/project.yaml is read through the pydantic-settings YAML source, so PyYAML (through the pydantic-settings[yaml] extra) joins the locked stack in Section 15. Environment variables and .env cannot override project.yaml. Secrets come only from the environment or .env (Section 17).
 - **ADR 0003, pre-commit hooks** (docs/adr/0003-local-pre-commit-hooks.md): ruff and mypy run in pre-commit as local hooks through uv run, so their versions come from uv.lock (Section 15, Step 1).
 - **ADR 0004, test lock** (docs/adr/0004-test-lock.md): the Section 10 test lock needs more than the --unlock-test flag and a committed docs/preregistration.md. It also requires an annotated git tag prereg-v1 on a commit whose docs/preregistration.md has a 'Registered: YYYY-MM-DD' line and no placeholder text, and the tagged commit must be an ancestor of HEAD. The tag and commit hashes are recorded with the results.
