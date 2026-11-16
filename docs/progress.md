@@ -73,9 +73,9 @@ Then fill in `docs/feasibility_manual_check.csv` from `data/spike/part_e_checkli
 uv run python -m trialpulse.feasibility.spike --part h
 ```
 
-Current step: **Step 17, monitoring, retraining and replay** (approved by Aakrisht on 2026-11-10; his decisions of 2026-11-16 added: main is production, a network guard in tests, the drift reference at the seed date, the replay check for the reviewers, Neon writes from his hotspot). Built and run on the laptop; see "Step 17" below.
+Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: the full suite on the final tree, the drift tests in the drift environment, push (c2fae9d onward), CI and Render, then the single report. Neon work of 2026-11-17 is done.
+Next step: the overnight run of 2026-11-17, item 1 (realistic drift magnitudes, ADR 0076); items 1 to 13 in order, a push checkpoint after item 9.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -95,7 +95,7 @@ Next step: the full suite on the final tree, the drift tests in the drift enviro
 | 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
 | 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-08 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
 | 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
-| 17 | Monitoring, retraining and replay | Approved 2026-11-10 (ADRs 0076 to 0081); built and run on the laptop 2026-11-10 to 2026-11-16; the Neon writes wait for a network that reaches port 5432 |
+| 17 | Monitoring, retraining and replay | Approved 2026-11-10 (ADRs 0076 to 0082); built and run 2026-11-10 to 2026-11-17, the Neon writes from the hotspot on 2026-11-17; verified and approved by Aakrisht on 2026-11-17 (main `d9dd603`, CI green, Render live) |
 | 18 | Documentation and polish | README written in the cloud on `readme-cloud` (2026-11-01), waiting for review; the live links, the demo GIF, the CHANGELOG and the fresh-clone check on Windows wait for the deployments |
 
 ## Working notes
