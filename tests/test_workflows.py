@@ -96,6 +96,10 @@ def test_the_daily_job_has_two_crons_and_a_separate_failure_job() -> None:
     assert notify["permissions"] == {"contents": "read", "issues": "write"}
     assert daily["env"] == {"HF_HUB_OFFLINE": "1", "UV_NO_SYNC": "1"}
     assert daily["concurrency"]["cancel-in-progress"] is False
+    steps = {s.get("name"): s for s in jobs["daily"]["steps"]}
+    assert "always()" in steps["Alerts"]["if"]  # a failed run still raises its alerts
+    assert steps["Alerts"]["continue-on-error"] is True  # and they never fail it
+    assert "always()" in jobs["alerts"]["if"]
 
 
 def test_ci_requires_postgres_for_the_database_tests() -> None:

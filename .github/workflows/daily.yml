@@ -63,6 +63,7 @@ jobs:
       - name: Alerts
         id: alerts
         if: always()
+        continue-on-error: true  # an alert that cannot be read never fails the run
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: uv run python -m trialpulse.monitor.alerts --target neon
