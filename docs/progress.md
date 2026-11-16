@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 17, monitoring, retraining and replay** (approved by Aakrisht on 2026-11-10; his decisions of 2026-11-16 added: main is production, a network guard in tests, the drift reference at the seed date, the replay check for the reviewers, Neon writes from his hotspot). Built and run on the laptop; see "Step 17" below.
 
-Next step: the two-reviewer review (running), fixes for what is verified, the full suite, push, CI and Render; then stop for Aakrisht's hotspot and do the waiting Neon writes (replay grades, the retrain decision, a backup).
+Next step: local work done and on main (d6c6bbe, full suite 1,698 passed, CI green, Render live). Waiting for Aakrisht's hotspot, then the Neon writes outside the daily job's run, each checked read-only: the replay grades, the retrain decision, a backup.
 
 | Step | Title | Status |
 | --- | --- | --- |
