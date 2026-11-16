@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 17, monitoring, retraining and replay** (approved by Aakrisht on 2026-11-10; his decisions of 2026-11-16 added: main is production, a network guard in tests, the drift reference at the seed date, the replay check for the reviewers, Neon writes from his hotspot). Built and run on the laptop; see "Step 17" below.
 
-Next step: the drift reference at the seed date 2026-11-03 (ADR 0076 amended), then the full suite, the two-reviewer review after the usage window resets, fixes, push, CI and Render; then stop for Aakrisht's hotspot and do the waiting Neon writes.
+Next step: the two-reviewer review (running), fixes for what is verified, the full suite, push, CI and Render; then stop for Aakrisht's hotspot and do the waiting Neon writes (replay grades, the retrain decision, a backup).
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2506,6 +2506,64 @@ Approved. Aakrisht confirmed the registry on DagsHub himself: `trialpulse-m4` ve
 - **The other decisions of the report approved.**
 - **My memory.** The note that blamed the laptop's memory (`laptop-stalls-on-memory-bound-work.md`) had already been deleted on 2026-10-31 and replaced by `windows-throttles-background-jobs.md`, but my report did not say so. That note now also records the opt-out as adopted.
 - **Guidance items 23 and 24 added** (Steps 15, 16 and 17).
+
+## Step 17: Monitoring, retraining and replay (2026-11-10 to 2026-11-17)
+
+Approved by Aakrisht on 2026-11-10 with nine decisions (docs/step17_plan.md), written as ADRs 0076 to 0081 (Accepted) before each part was built; his decisions of 2026-11-16 added the drift reference at the seed date (ADR 0076 amended), main as production with a network guard in tests, the replay check for the reviewers, and the Neon writes from his hotspot. Read-only on Neon from the laptop since 2026-11-10: port 5432 is blocked on this network.
+
+### Part 0: parity 5a's tolerance (ADR 0038 amended)
+
+Layer 5a compares `risk_12m` and `risk_24m` within 1e-12 (ADR 0034's reproduction tolerance), every other column exactly; the Linux-container reproduction is the evidence (`5d7e27c`, a test that a difference above 1e-12 still fails). Rerun on 2026-11-10: equal, largest risk difference 1.4e-17, 5,112 live versions read from Neon.
+
+### Part 1: grading (ADRs 0077 and 0079)
+
+- `monitor.grading`: for each prediction date and model, each horizon, each landmark index (and all) and each group (all, flagged): counts and the harness's IPCW AUC, Brier score, calibration slope and intercept and lift at 10%, matured or partial-horizon. Trials with a status reversal are left out (Section 6; `d98cb0d`, found during the run).
+- Migration 0007: `source` ('live' or 'replay') in the grades' key, `monitoring.drift`, and read-only views in `serving` for the API role. Applied on Neon at 15:04 UTC on 2026-11-10 with no daily run in progress; Neon 283.5 MB before, 275.3 MB on the next full run's measurement (2026-11-14).
+- `grade.yml`, monthly (the 2nd at 12:00 UTC), reads Neon's score files and outcome events, never the dataset. A dispatch on 2026-11-10 graded 89,011 predictions of 2026-11-13 into 20 rows. **The forced failure:** run 43899383438 with `fail_on_purpose` opened issue #11 ("Monthly grading failed", error class GradingFailed), closed afterwards with a comment.
+
+### Part 2: the replay (ADR 0078)
+
+- The replay model: M4 with the tuned settings fitted as of 2023-01-01 like a walk-forward origin: 239,921 trials, 1,052,557 landmark rows, 3,027,077 intervals, 35,064 feature rows the main build lacked, 1,536 rounds, fit 566 s (689 s in all); MLflow run c70cbb7c, tagged replay, never registered.
+- Scores: all 78 Fridays from 2023-01-06 to 2024-06-28, about 77,000 to 81,000 trials a date, 46 to 162 s a date, resumable quarterly chunks of 20 to 26 minutes.
+- Grades (local Postgres; 1,560 rows; status reversals left out): 12-month AUC mean 0.7521 (0.7371 to 0.7598 over the dates), calibration slope 0.874; 24-month AUC 0.7380 (0.7304 to 0.7425), slope 0.848; flagged trials 0.7452 at 12 months. Monitoring evidence of the champion's method, never a registered result. **Waiting for Neon:** `uv run python -m trialpulse.monitor.replay grade --target neon`.
+
+### Part 3: the Model health page and its endpoints
+
+`/v1/monitoring/performance`, `/v1/monitoring/drift` and `/v1/monitoring/promotions` read the serving views (`b86e668`); the page shows replay and live grades apart (the replay labeled as not a registered result), the latest drift week and the promotion decisions. Live on Render since `d6ac893`. The local page with every section filled: `docs/figures/dashboard_model_health_step17_local.png`.
+
+### Part 4: drift (ADR 0076, amended 2026-11-16)
+
+- The step ends every full run after publication has committed, inside the keep-alive with no transaction open; a failure is recorded, opens or reuses "Drift step failed" and never fails the run. Evidently's PSI test (threshold 0.1) in the `drift` dependency group, installed only in the daily job's environment (Evidently 0.7.23; it pulls in no dataset client, checked by tests/test_workflows.py).
+- **Time added to a full run:** 28.5 s of 579 s in the local full run of 2026-11-16 (run 48, real Evidently); 18.2 s for the step alone on 88,759 trials.
+- **The reference, amended:** against the champion's training rows, 17 of 53 features drifted on day one (32%), structure rather than drift. The reference is now the 88,426 trials served on 2026-11-03 (`aa163cf`). Two method changes flagged below. Result, the daily job's own step on local Postgres, on the trials served on 2026-11-09: **0 of 52 features drifted**, neither risk, largest PSI 0.044. The first live drift summary is due with the next full run, for data date 2026-11-20 (about 2026-11-21 UTC); the new reference must be on main before it.
+
+### Part 5: the retrain and the gate (ADR 0080)
+
+- One full cycle on 2026-11-16 (`--target local --from-5a`, since Neon is out of reach): data date 2026-11-09, 1,460,970 landmark rows, 4,282,845 intervals, 1,626 rounds, fit 831 s, 1,194 s in all, peak 13.2 GB private memory. Spearman agreement with the champion's risks 0.978 at both horizons. Decision: "not promoted: no window after the champion's training data with matured outcomes yet", logged to MLflow (run 89dad3ee) and local `monitoring.promotions`. **Waiting for Neon:** `uv run python -m trialpulse.monitor.retrain --target neon`.
+- The gate's comparison (`efd4415`): once a window exists, a challenger fitted as of the window's first graded date and the champion score the window's latest 3 monthly dates, both graded against the final cohort; tested on synthetic data with known answers (promote at equal AUC and slope 0.990; refuse on AUC 0.486; refuse on slope 0.330). A smoke run on real data with a pretend window took 1,415 s more (about 44 minutes in all).
+- The quarterly task's commands are in docs/deploy.md, Part 5; not registered.
+
+### Part 6: alerts (ADR 0081)
+
+One GitHub issue per kind ("Alert: <kind>", opened or reused) from the daily job: watermark lag over 3 days, quarantine over 1% of a run's records, drift on over 20% of features, the latest matured live 12-month AUC below 0.7122 (the lowest registered lower bound). Thresholds in config/project.yaml (`alerts`).
+
+### Decisions made on my own (flagged)
+
+1. **The window-blind challenger** (ADR 0080, note 1): the gate compares the champion with a challenger fitted as of the window's first graded date, not with the all-data challenger, which has seen the window's outcomes. Alternative: the all-data challenger on the window (biased towards it).
+2. **Three window dates** (`retraining.window_dates`), to keep the retrain under an hour. Alternative: six.
+3. **A promotion moves no alias by itself:** recorded, then moved by hand (`scoring.champion --register-run`, docs/deploy.md Part 5), since the model statement changes with it. Alternative: the retrain moves the alias.
+4. **The challenger's meta.json carries no `version`,** so a registered challenger fetches as the registry's version (the fetch refuses any other).
+5. **`--from-5a`:** the retrain can reuse parity 5a's warehouse when Neon is out of reach. The one cycle ran this way.
+6. **Drift: point masses of continuous columns kept exactly** (the first seed-date reference flagged 7 features between days six days apart). Alternative: PSI computed on the reference's own bins without Evidently.
+7. **Drift: the count of open trials leaves the PSI columns** (one number per date; 52 features compared, not 53). Alternative: an always-drifted column.
+8. **`cli.run` masks unexpected errors:** a bug's traceback is printed with addresses and host names masked and the command exits 1, instead of the error propagating (the backup of 2026-11-15 logged a host name). Alternative: masking in each command.
+9. **Grades leave out status reversals** on both paths (Section 6), found during the run.
+
+### What went wrong
+
+- **CI was red on four pushes** (`19955a6`, `fc1067c`, `b86e668`, `57b7f87`), pushed without waiting for CI; Render deployed none of them. The causes: a head test pinned the old revision, the migrations test lacked the drift table, and two daily-job tests without respx called the live ClinicalTrials.gov API. Fixed in `d6ac893`. Since then: the working notes' rule (main is production) and the network guard (`5e3ef4f`).
+- **A Neon host name was printed to my console** by a connection timeout on 2026-11-16 (not in any file). The scan: no tracked file holds a real host or a connection string; one log did (`data/logs/backup_20261115.log`, from the scheduled backup's failure), now redacted.
+- **The weekly backup of 2026-11-15 failed** on a name lookup of Neon's host (the network). The next one runs on 2026-11-22; a backup is part of the hotspot session.
 
 ## Unattended run of 2026-11-10 (afternoon): doc fixes, nightly runs, backups, parity 5a, screenshots, the Step 17 plan
 
