@@ -42,6 +42,25 @@ def test_an_unmocked_api_request_is_refused_before_it_leaves(no_real_network: ob
     assert "clinicaltrials.gov" in _refused(no_real_network, request)
 
 
+def test_a_database_connection_to_an_address_is_refused(no_real_network: object) -> None:
+    """libpq opens its own sockets: an IP literal never passes through Python's socket."""
+    import psycopg
+
+    def connect() -> None:
+        psycopg.connect("host=203.0.113.7 port=5432 dbname=x connect_timeout=2")
+
+    assert _refused(no_real_network, connect) == "database connection to 203.0.113.7"
+
+
+def test_an_asyncio_connection_to_an_address_is_refused(no_real_network: object) -> None:
+    import asyncio
+
+    def connect() -> None:
+        asyncio.run(asyncio.wait_for(asyncio.open_connection("203.0.113.7", 443), 2))
+
+    assert _refused(no_real_network, connect) == "connect to 203.0.113.7"
+
+
 def test_a_swallowed_attempt_is_still_recorded(no_real_network: object) -> None:
     attempts: list[str] = no_real_network.attempts  # type: ignore[attr-defined]
     before = len(attempts)

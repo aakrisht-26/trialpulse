@@ -3,8 +3,11 @@
 No test reaches the network: every socket connection and name lookup to anything but this
 machine (loopback addresses and `localhost`, where the test Postgres runs) is refused with
 `RealNetworkError` and recorded, and a test that tried one fails at teardown even if the code
-under test swallowed the error. Recorded API responses (respx) never open a socket. The
-guard covers the test process, not child processes of worker pools."""
+under test swallowed the error. Recorded API responses (respx) never open a socket. Python's
+sockets and name lookups are guarded, and so are the two paths that bypass them: psycopg
+(libpq opens its own sockets; every host and hostaddr it is given is checked) and asyncio's
+create_connection (the Windows event loop connects without `socket.connect`). Not covered:
+UDP datagrams, `gethostbyname`, and child processes of worker pools."""
 
 import ipaddress
 import socket
@@ -65,16 +68,68 @@ def _guarded_getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
     return _REAL_GETADDRINFO(host, *args, **kwargs)
 
 
+def _hosts(conninfo: str, kwargs: dict[str, Any]) -> list[str]:
+    from psycopg.conninfo import conninfo_to_dict
+
+    params = conninfo_to_dict(conninfo) if conninfo else {}
+    out = []
+    for key in ("host", "hostaddr"):
+        value = kwargs.get(key, params.get(key))
+        if value:
+            out += [h for h in str(value).split(",") if h and not h.startswith("/")]
+    return out
+
+
+_PATCHED: dict[str, Any] = {}
+
+
 def pytest_configure(config: pytest.Config) -> None:
+    import asyncio.base_events as base_events
+
+    import psycopg
+
     socket.socket.connect = _guarded(_REAL_CONNECT)  # type: ignore[method-assign]
     socket.socket.connect_ex = _guarded(_REAL_CONNECT_EX)  # type: ignore[method-assign]
     socket.getaddrinfo = _guarded_getaddrinfo
 
+    connect = psycopg.Connection.__dict__["connect"]
+    _PATCHED["psycopg"] = connect
+
+    def psycopg_connect(cls: Any, conninfo: str = "", **kwargs: Any) -> Any:
+        for host in _hosts(conninfo, kwargs):
+            if not _local(host):
+                GUARD.refuse(f"database connection to {host}")
+        return connect.__func__(cls, conninfo, **kwargs)
+
+    psycopg.Connection.connect = classmethod(psycopg_connect)  # type: ignore[method-assign,assignment]
+    _PATCHED["psycopg.connect"] = psycopg.connect  # bound at import: patched apart
+    psycopg.connect = psycopg.Connection.connect
+
+    create = base_events.BaseEventLoop.create_connection
+    _PATCHED["asyncio"] = create
+
+    async def create_connection(self: Any, factory: Any, host: Any = None, *args: Any,
+                                **kwargs: Any) -> Any:  # fmt: skip
+        if host is not None and not _local(host):
+            GUARD.refuse(f"connect to {host}")
+        return await create(self, factory, host, *args, **kwargs)
+
+    base_events.BaseEventLoop.create_connection = create_connection  # type: ignore[method-assign]
+
 
 def pytest_unconfigure(config: pytest.Config) -> None:
+    import asyncio.base_events as base_events
+
+    import psycopg
+
     socket.socket.connect = _REAL_CONNECT  # type: ignore[method-assign]
     socket.socket.connect_ex = _REAL_CONNECT_EX  # type: ignore[method-assign]
     socket.getaddrinfo = _REAL_GETADDRINFO
+    if "psycopg" in _PATCHED:
+        psycopg.Connection.connect = _PATCHED.pop("psycopg")  # type: ignore[method-assign]
+        psycopg.connect = _PATCHED.pop("psycopg.connect")
+    if "asyncio" in _PATCHED:
+        base_events.BaseEventLoop.create_connection = _PATCHED.pop("asyncio")  # type: ignore[method-assign]
 
 
 @pytest.fixture(autouse=True)
