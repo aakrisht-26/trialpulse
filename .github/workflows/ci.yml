@@ -67,6 +67,13 @@ jobs:
           TRIALPULSE_REQUIRE_POSTGRES: "1"
         run: uv run pytest -q -m "slow or not slow" --cov --cov-report=term-missing
 
+      # Evidently lives in the drift group, which conflicts with the dashboard's (ADR 0076):
+      # its tests run again in the daily job's environment, where they do not skip.
+      - name: Drift tests in the daily job's environment
+        run: |
+          uv sync --locked --no-group dataset --no-group dashboard --group drift
+          uv run --no-sync pytest -q tests/monitor/test_drift.py
+
       - name: Migrations (upgrade, downgrade, upgrade)
         env:
           DATABASE_URL: postgresql+psycopg://trialpulse:trialpulse@127.0.0.1:5432/trialpulse
