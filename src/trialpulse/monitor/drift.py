@@ -5,9 +5,11 @@
 **The reference** is an aggregate made on the laptop (ADR 0040): for each feature M4 reads as
 the live path computes it (53 of its 54; the 54th, `sponsor_stop_rate`, is computed after from
 three that are checked), over the served champion's training rows (the final cohort's
-landmark rows), the shares of its decile bins (numbers) or of each category, and the share
-missing; the same for the served risks at the data cutoff (Step 13's file). No row leaves the
-laptop: only edges and shares are committed.
+landmark rows), the share missing and the shares of each category, of each value (a numeric
+column with at most 100 values), or of 100 percentile bins (a continuous column; fewer bins
+made the sample's tails differ enough to read as drift on unchanged data); the same for the
+served risks at the data cutoff (Step 13's file). No row leaves the laptop: only values,
+edges and shares are committed.
 
 **The step** (`drift_step`, called by the daily job after a full run's publication has
 committed): Evidently's data drift preset with the PSI method and its default threshold
@@ -36,7 +38,8 @@ from trialpulse.config import REPO_ROOT
 
 REFERENCE_PATH = REPO_ROOT / "config" / "drift_reference.json"
 SAMPLE = 5000
-BINS = 10
+BINS = 100  # percentile bins of a continuous column
+DISCRETE = 100  # a numeric column with at most this many values keeps each value's share
 METHOD = "psi"
 SCORES = ("risk_12m", "risk_24m")
 DERIVED = ("sponsor_stop_rate",)  # computed after the features, from three that are checked
@@ -66,10 +69,12 @@ def summarize(values: pd.Series) -> dict[str, Any]:
     numbers = present.astype(float).to_numpy()
     if not len(numbers):
         return {"kind": "numeric", "missing": missing, "edges": [0.0, 0.0], "shares": [0.0]}
-    edges: np.ndarray = np.unique(np.quantile(numbers, np.linspace(0, 1, BINS + 1)))
-    if len(edges) == 1:  # one value only: one bin holding it
+    distinct, tally = np.unique(numbers, return_counts=True)
+    if len(distinct) <= DISCRETE:  # counts, flags, months: each value's share, exactly
         return {"kind": "numeric", "missing": missing,
-                "edges": [float(edges[0]), float(edges[0])], "shares": [1.0]}  # fmt: skip
+                "values": [float(v) for v in distinct],
+                "shares": [float(c / len(numbers)) for c in tally]}  # fmt: skip
+    edges: np.ndarray = np.unique(np.quantile(numbers, np.linspace(0, 1, BINS + 1)))
     counts = np.histogram(numbers, bins=edges)[0]
     total = counts.sum()
     return {"kind": "numeric", "missing": missing, "edges": [float(e) for e in edges],
@@ -95,6 +100,11 @@ def sample(column: Mapping[str, Any], n: int = SAMPLE) -> pd.Series:
                                strict=True):  # fmt: skip
             values += [name] * count
         return pd.Series(values + [None] * missing, dtype=object)
+    if "values" in column:  # a discrete column: its own values, repeated by share
+        counts = _counts(column["shares"], present)
+        repeated = [np.full(n, v) for v, n in zip(column["values"], counts, strict=True)]
+        numbers = np.concatenate(repeated) if repeated else np.array([])
+        return pd.Series(np.concatenate([numbers, np.full(missing, np.nan)]), dtype=float)
     edges = column["edges"]
     parts = []
     for i, count in enumerate(_counts(column["shares"], present)):
@@ -117,7 +127,7 @@ def current_frame(features: pd.DataFrame, scores: pd.DataFrame,
         source = scores if name in SCORES else features
         values = source[name] if name in source.columns else pd.Series([None] * len(source))
         if col["kind"] == "categorical":
-            out[name] = values.map(lambda v: None if v is None or v != v else str(v))
+            out[name] = values.map(lambda v: None if pd.isna(v) else str(v))
         else:
             out[name] = pd.to_numeric(values, errors="coerce").astype(float)
     n = max(len(features), len(scores))
