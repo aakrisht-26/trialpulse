@@ -243,6 +243,7 @@ class RetrainingConfig(_Section):
     slope_low: float  # the challenger's 12-month calibration slope lies in [low, high]
     slope_high: float
     horizon_months: PositiveInt  # the horizon the gate reads (12, ADR 0080)
+    window_dates: PositiveInt  # the window's latest monthly prediction dates that are graded
 
 
 class AlertsConfig(_Section):

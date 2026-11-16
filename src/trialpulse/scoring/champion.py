@@ -153,9 +153,16 @@ def register(run_id: str, alias: str, cfg: ProjectConfig) -> dict[str, str]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fit and register the served champion.")
     parser.add_argument("--folder", type=Path, default=CHAMPION_DIR)
+    parser.add_argument("--register-run", metavar="RUN_ID",
+                        help="fit nothing: register the bundle a logged run holds (a "
+                             "challenger the gate promoted, ADR 0080) as a version with the "
+                             "alias champion")  # fmt: skip
     tracking.add_arguments(parser)
     args = parser.parse_args(argv)
     cfg = load_project_config()
+    if args.register_run:  # the by-hand promotion of docs/deploy.md, Part 5
+        print(f"registered: {register(args.register_run, CHAMPION_ALIAS, cfg)}")
+        return 0
     started = tracking.git_state()
     model, priors, origin = fit_served(cfg)
     summary = dict(model.summary)

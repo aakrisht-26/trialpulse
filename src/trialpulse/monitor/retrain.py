@@ -16,8 +16,16 @@ Laptop only: it reads the dataset's rows. In order:
 3. **Scores:** the challenger and the champion each score every open trial on D with Step 13's
    `score()` (no drivers); their agreement is logged as a description, not a result.
 4. **The gate** (`monitor.gate`): a fair window needs matured 12-month outcomes of predictions
-   made after the champion's training cutoff; before one exists the decision is "not
-   promoted" with its reason. The challenger is never registered or served by this command.
+   made after the champion's training cutoff (read from the champion's bundle); before one
+   exists the decision is "not promoted" with its reason. Once one exists, M4 with the tuned
+   settings is fitted as of the window's first graded date, as a walk-forward origin is
+   (ADR 0016, the replay's code), so it has seen no outcome the window grades; it and the
+   champion score the window's dates, both are graded against the final cohort's outcomes
+   (status reversals left out), and the gate reads the means. The challenger that would be
+   promoted is the one fitted on all the data: the window judges its method on data neither
+   model saw. This command never registers or serves a model: on a promotion the champion
+   alias is moved by hand (docs/deploy.md, Part 5), because the served model's statement
+   (ADR 0048) changes with it.
 5. **Logs:** one MLflow run (the bundle, the decision, the data) and one row in
    `monitoring.promotions` on the target.
 
@@ -49,6 +57,7 @@ from trialpulse.monitor import gate
 
 RETRAIN_DIR = REPO_ROOT / "data" / "retrain"
 FAILED_REVIEW_RULE = "ADR 0073's rule for versions that failed review, kept (ADR 0080)"
+BY_HAND = " (the served model changes when the champion alias is moved: docs/deploy.md, Part 5)"
 
 
 def as_of(cfg: ProjectConfig, day: dt.date) -> ProjectConfig:
@@ -59,7 +68,7 @@ def as_of(cfg: ProjectConfig, day: dt.date) -> ProjectConfig:
 def build_cohort_and_features(cfg: ProjectConfig, warehouse: Path, interventions: str,
                               out_dir: Path) -> dict[str, Any]:  # fmt: skip
     """The final cohort of `warehouse` and its features, in `out_dir` (never the main ones)."""
-    from trialpulse.cohort.build import attach_warehouse, build_cohort, write_outputs
+    from trialpulse.cohort.build import OUTCOMES_PATH, attach_warehouse, build_cohort, write_outputs
     from trialpulse.features import build as features
     from trialpulse.features.registry import KEY_COLUMNS, built_columns
     from trialpulse.parquet import write_table
@@ -80,7 +89,8 @@ def build_cohort_and_features(cfg: ProjectConfig, warehouse: Path, interventions
         written = write_table(con, features.FEATURE_TABLE, features_dir / features.FEATURES_NAME,
                               [*KEY_COLUMNS, *built_columns()], features.ORDER)  # fmt: skip
     return {"cohort": {name: rows for name, rows, _ in outputs}, "feature_rows": written[0],
-            "landmarks": landmarks, "features_dir": features_dir}  # fmt: skip
+            "landmarks": landmarks, "outcomes": cohort_dir / OUTCOMES_PATH.name,
+            "features_dir": features_dir}  # fmt: skip
 
 
 def fit_challenger(cfg: ProjectConfig, day: dt.date, landmarks: Path,
@@ -97,15 +107,109 @@ def fit_challenger(cfg: ProjectConfig, day: dt.date, landmarks: Path,
     assert isinstance(model, DiscreteTimeBoosting)
     model.fit_rows(rows, time, event, origin)
     model._scored = None
-    version = f"trialpulse-m4-challenger-{day.isoformat()}"
     meta = save_bundle(model, priors, {
-        "version": version, "kind": "challenger (ADR 0080): not registered, not served",
-        "origin": origin.isoformat(), "data_date": day.isoformat(),
-        "data": "pinned + gap + exported live rows (ADR 0080)",
-        "failed_review_rule": FAILED_REVIEW_RULE, "settings": model.settings,
+        **challenger_record(day, origin), "settings": model.settings,
         "summary": dict(model.summary), "config_sha256": sha256_of(PROJECT_CONFIG_PATH),
     }, folder)  # fmt: skip
     return model, meta
+
+
+def challenger_record(day: dt.date, origin: dt.date) -> dict[str, str]:
+    """What the challenger's meta.json records besides its fit. No "version" key: a
+    registered bundle takes its version from the registry when it is fetched, and
+    `live.registry.fetch` refuses a meta.json that names another (ADR 0045)."""
+    return {"name": f"trialpulse-m4-challenger-{day.isoformat()}",
+            "kind": "challenger (ADR 0080)", "origin": origin.isoformat(),
+            "data_cutoff": day.isoformat(), "data": "pinned + gap + exported live rows (ADR 0080)",
+            "failed_review_rule": FAILED_REVIEW_RULE}  # fmt: skip
+
+
+def fit_window_challenger(cfg: ProjectConfig, origin: dt.date, warehouse: Path,
+                          interventions: str, built: dict[str, Any],
+                          folder: Path) -> dict[str, Any]:  # fmt: skip
+    """M4 with the tuned settings fitted as of `origin` (the window's first graded date) as a
+    walk-forward origin is: the cohort as of the origin (ADR 0016), features for rows the
+    retrain's feature build does not hold, the sponsor priors on those rows, early stopping
+    as ADR 0025. Saved to `folder`/model; graded on the window only, never registered."""
+    from trialpulse.models import discrete_time
+    from trialpulse.models.discrete_time import DiscreteTimeBoosting
+    from trialpulse.monitor import replay
+    from trialpulse.scoring.champion import save_bundle, training_matrix
+
+    training_dir = folder / "training"
+    summary: dict[str, Any] = {"training_cohort": replay.build_training(
+        cfg, origin, warehouse=warehouse, training_dir=training_dir,
+        final_landmarks=built["landmarks"])}  # fmt: skip
+    landmarks = replay.landmarks_path(origin, training_dir)
+    extra = folder / "features_extra.parquet"
+    summary["extra_feature_rows"] = replay.extra_features(
+        cfg, landmarks=landmarks, features_dir=built["features_dir"], warehouse=warehouse,
+        interventions=interventions, out=extra)  # fmt: skip
+    rows, time, event, priors = training_matrix(
+        cfg, origin, features_dir=built["features_dir"], landmarks=landmarks,
+        extra_features=(extra,) if extra.is_file() else ())  # fmt: skip
+    model = discrete_time.build("m4", cfg)
+    assert isinstance(model, DiscreteTimeBoosting)
+    model.fit_rows(rows, time, event, origin)
+    model._scored = None
+    save_bundle(model, priors, {
+        "name": f"trialpulse-m4-window-{origin.isoformat()}",
+        "kind": "window challenger (ADR 0080): graded on the window only, never registered",
+        "origin": origin.isoformat(), "settings": model.settings, "summary": dict(model.summary),
+    }, folder / "model")  # fmt: skip
+    summary["model"] = {k: model.summary[k] for k in ("landmark_rows", "rounds", "fit_seconds")}
+    return summary
+
+
+def score_on_dates(cfg: ProjectConfig, days: Sequence[dt.date], bundles: dict[str, Any],
+                   warehouse: Path, interventions: str) -> pd.DataFrame:  # fmt: skip
+    """Every open trial's scores on each date by each bundle, as predictions for
+    `monitor.grading` with the bundle's role (`gate.CHAMPION` or `gate.CHALLENGER`) as its
+    model_version, and the sponsor class in effect on the date."""
+    from trialpulse.monitor import replay
+    from trialpulse.scoring.score import score, served_decisions
+
+    decisions = served_decisions()
+    frames = []
+    for day in days:
+        classes = replay.sponsor_classes(day, warehouse)
+        for role, bundle in bundles.items():
+            scored = score(cfg, day, bundle, decisions, warehouse=warehouse,
+                           interventions=interventions, with_drivers=False).scores  # fmt: skip
+            frames.append(pd.DataFrame({
+                "nct_id": scored["nct_id"].astype(str), "prediction_date": day,
+                "risk_12m": scored["risk_12m"], "risk_24m": scored["risk_24m"],
+                "sponsor_class": scored["nct_id"].map(classes).fillna("MISSING"),
+                "landmark_index": scored["landmark_index"], "flagged": scored["flagged"],
+                "model_version": role,
+            }))  # fmt: skip
+    return pd.concat(frames, ignore_index=True)
+
+
+def window_comparison(
+    cfg: ProjectConfig, dated: ProjectConfig, window: gate.Window, warehouse: Path,
+    interventions: str, built: dict[str, Any], champion: Any, out_dir: Path,
+) -> tuple[gate.Comparison, dict[str, Any]]:  # fmt: skip
+    """The gate's numbers on `window` (see the module text), and what was graded."""
+    from trialpulse.monitor import grading
+    from trialpulse.scoring.bundle import load_bundle
+
+    days = gate.window_dates(window, cfg.retraining.window_dates)
+    folder = out_dir / "window"
+    fitted = fit_window_challenger(dated, days[0], warehouse, interventions, built, folder)
+    bundles = {gate.CHAMPION: champion, gate.CHALLENGER: load_bundle(dated, folder / "model")}
+    predictions = score_on_dates(dated, days, bundles, warehouse, interventions)
+    outcomes = pd.read_parquet(built["outcomes"],
+                               columns=["trial_id", "event", "event_date", "reversal"])  # fmt: skip
+    data_date = dated.dataset.cutoff
+    assert data_date is not None
+    graded = grading.grade(grading.cohort_outcomes(predictions, outcomes), data_date,
+                           grading.WINDOW, cfg.evaluation.censoring_min_rows,
+                           cfg.evaluation.lift_top_fraction)  # fmt: skip
+    graded.to_csv(folder / "window_grades.csv", index=False)
+    found = gate.compare(graded, cfg.retraining.horizon_months)
+    return found, {"dates": [d.isoformat() for d in days], "window_challenger": fitted,
+                   "predictions": len(predictions), "dates_compared": found.dates}  # fmt: skip
 
 
 def compare_scores(champion: pd.DataFrame, challenger: pd.DataFrame) -> dict[str, float]:
@@ -119,6 +223,24 @@ def compare_scores(champion: pd.DataFrame, challenger: pd.DataFrame) -> dict[str
         out[f"mean_risk_{h}_champion"] = float(a.mean())
         out[f"mean_risk_{h}_challenger"] = float(b.mean())
     return out
+
+
+def champion_training_cutoff(meta: dict[str, Any], cfg: ProjectConfig) -> dt.date:
+    """The last day of the champion's training data, as its bundle records it (the pinned
+    cutoff for the first champion, the data date for a promoted challenger)."""
+    recorded = meta.get("data_cutoff")
+    if recorded:
+        return dt.date.fromisoformat(str(recorded))
+    if cfg.dataset.cutoff is None:
+        raise RefusedError("the champion records no training cutoff, nor does the config")
+    return cfg.dataset.cutoff
+
+
+def window_metrics(found: gate.Comparison) -> dict[str, float | None]:
+    return {"window_champion_auc_12m": found.champion_auc,
+            "window_challenger_auc_12m": found.challenger_auc,
+            "window_challenger_calibration_slope_12m": found.challenger_slope,
+            "window_dates_compared": float(found.dates)}  # fmt: skip
 
 
 def last_5a() -> tuple[dt.date, Path, str, dict[str, Any]]:
@@ -191,8 +313,16 @@ def retrain(
               for name, bundle in (("champion", champion), ("challenger", challenger))}  # fmt: skip
     agreement = compare_scores(scored["champion"], scored["challenger"])
     seconds["score"] = clock.perf_counter() - started - sum(seconds.values())
-    window = gate.fair_window(cfg.dataset.cutoff, day, cfg.retraining.horizon_months)
-    decision = gate.decide(cfg.retraining, window, None, None, None)
+    champion_cutoff = champion_training_cutoff(champion.meta, cfg)
+    window = gate.fair_window(champion_cutoff, day, cfg.retraining.horizon_months)
+    found, graded = gate.Comparison(None, None, None, 0), dict[str, Any]()
+    if window is not None:
+        found, graded = window_comparison(cfg, dated, window, warehouse, interventions, built,
+                                          champion, out_dir)  # fmt: skip
+        seconds["window"] = clock.perf_counter() - started - sum(seconds.values())
+    decision = gate.decide(cfg.retraining, window, found.champion_auc, found.challenger_auc,
+                           found.challenger_slope)  # fmt: skip
+    reason = decision.reason + (BY_HAND if decision.promoted else "")
     summary = dict(model.summary)
     logged: Any
     try:
@@ -201,21 +331,21 @@ def retrain(
             {"model": "m4", "data_date": day.isoformat(), "origin": meta["origin"],
              "rounds": summary["rounds"], "landmark_rows": summary["landmark_rows"],
              "live_versions": counts["live_versions"], "promoted": decision.promoted},
-            agreement,
+            {**agreement, **{k: v for k, v in window_metrics(found).items() if v is not None}},
             [out_dir / "challenger" / name for name in meta["files"]], cfg,
-            tags={"kind": "challenger", "registered": "no", "gate": decision.reason,
+            tags={"kind": "challenger", "registered": "no", "gate": reason,
                   "failed_review_rule": FAILED_REVIEW_RULE},
             state=state,
         )  # fmt: skip
         run_id = logged.get("run_id")
     except tracking.TrackingError as exc:
         logged, run_id = f"not logged: {exc}", None
-    row = {"champion_version": champion.version, "challenger_version": challenger.version,
+    row = {"champion_version": champion.version, "challenger_version": meta["name"],
            "window_start": window.start if window else None,
            "window_end": window.end if window else None,
-           "champion_auc_12m": None, "challenger_auc_12m": None,
-           "challenger_calibration_slope": None, "promoted": decision.promoted,
-           "reason": decision.reason, "mlflow_run_id": run_id}  # fmt: skip
+           "champion_auc_12m": found.champion_auc, "challenger_auc_12m": found.challenger_auc,
+           "challenger_calibration_slope": found.challenger_slope,
+           "promoted": decision.promoted, "reason": reason, "mlflow_run_id": run_id}  # fmt: skip
     write_promotion(dsn, row)
     result = {
         "data_date": day.isoformat(), "data_source": "parity 5a's warehouse" if from_5a
@@ -223,7 +353,8 @@ def retrain(
         "feature_rows": built["feature_rows"],
         "fit": {k: summary[k] for k in ("landmark_rows", "person_period_rows", "rounds",
                                         "fit_seconds")},
-        "agreement_with_the_champion": agreement, "decision": decision.reason,
+        "agreement_with_the_champion": agreement, "champion_training_cutoff": champion_cutoff,
+        "window": graded or None, "comparison": window_metrics(found), "decision": reason,
         "promoted": decision.promoted, "failed_review_rule": FAILED_REVIEW_RULE,
         "tracking": logged, "seconds": {k: round(v, 1) for k, v in seconds.items()},
         "total_seconds": round(clock.perf_counter() - started, 1),

@@ -63,3 +63,36 @@ def test_reusing_parity_5a_needs_a_5a_run(tmp_path: Path, monkeypatch: pytest.Mo
     assert day == dt.date(2026, 11, 9)
     assert counts == {"live_versions": 5112}
     assert glob.endswith("interventions/*.parquet")
+
+
+def test_a_registered_challenger_fetches_as_the_registrys_version(tmp_path: Path) -> None:
+    """The challenger's meta.json names no version, so once registered (a promotion by hand,
+    docs/deploy.md Part 5) the daily job's fetch accepts it as the registry's version."""
+    import json
+    from types import SimpleNamespace
+
+    from trialpulse.live import registry
+
+    record = retrain.challenger_record(dt.date(2026, 11, 9), dt.date(2026, 11, 10))
+    assert "version" not in record
+    assert record["name"] == "trialpulse-m4-challenger-2026-11-09"
+
+    class Client:  # the registry, with the challenger registered as version 2
+        def get_model_version_by_alias(self, name: str, alias: str) -> SimpleNamespace:
+            return SimpleNamespace(version="2", run_id="run-of-the-challenger")
+
+    def download(uri: str, dst_path: str) -> str:
+        (Path(dst_path) / registry.META).write_text(json.dumps({**record, "files": {}}), "utf-8")
+        return dst_path
+
+    registry.fetch("champion", tmp_path, Client(), download)
+    meta = json.loads((tmp_path / registry.META).read_text(encoding="utf-8"))
+    assert meta["version"] == f"{registry.MODEL_NAME}/2"
+
+
+def test_the_window_starts_after_the_champions_own_training_cutoff() -> None:
+    assert retrain.champion_training_cutoff({"data_cutoff": "2027-11-09"}, CFG) == dt.date(
+        2027, 11, 9)  # fmt: skip
+    assert retrain.champion_training_cutoff({}, CFG) == CFG.dataset.cutoff  # the first champion
+    record = retrain.challenger_record(dt.date(2027, 11, 9), dt.date(2027, 11, 10))
+    assert retrain.champion_training_cutoff(record, CFG) == dt.date(2027, 11, 9)

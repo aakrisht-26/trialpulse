@@ -62,3 +62,19 @@ def test_a_missing_bundle_says_how_to_make_it(cfg: ProjectConfig, tmp_path) -> N
 def test_the_served_fit_ends_the_day_after_the_data_cutoff(cfg: ProjectConfig) -> None:
     assert cfg.dataset.cutoff is not None
     assert champion.served_origin(cfg) == cfg.dataset.cutoff + dt.timedelta(days=1)
+
+
+def test_registering_a_promoted_run_fits_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def register(run_id: str, alias: str, cfg: ProjectConfig) -> dict[str, str]:
+        calls.append((run_id, alias))
+        return {"model": champion.MODEL_NAME, "version": "2", "alias": alias}
+
+    def no_fit(cfg: ProjectConfig) -> None:
+        raise AssertionError("a registration fits nothing")
+
+    monkeypatch.setattr(champion, "register", register)
+    monkeypatch.setattr(champion, "fit_served", no_fit)
+    assert champion.main(["--register-run", "abc123"]) == 0
+    assert calls == [("abc123", champion.CHAMPION_ALIAS)]

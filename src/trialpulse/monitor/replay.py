@@ -68,51 +68,69 @@ def dates(quarter: str | None = None) -> list[dt.date]:
     return [d for d in days if d.year == year and (d.month - 1) // 3 + 1 == q]
 
 
-def landmarks_path() -> Path:
+def landmarks_path(origin: dt.date = ORIGIN, training_dir: Path = TRAINING_DIR) -> Path:
     from trialpulse.features.build import origin_source
 
-    return TRAINING_DIR / origin_source(ORIGIN) / "landmarks.parquet"
+    return training_dir / origin_source(origin) / "landmarks.parquet"
 
 
-def build_training(cfg: ProjectConfig) -> dict[str, Any]:
-    """The cohort as of the origin (ADR 0016), beside the main cohort, never in its place."""
+def build_training(
+    cfg: ProjectConfig,
+    origin: dt.date = ORIGIN,
+    warehouse: Path | None = None,
+    training_dir: Path = TRAINING_DIR,
+    final_landmarks: Path = LANDMARKS_PATH,
+) -> dict[str, Any]:
+    """The cohort as of `origin` (ADR 0016), beside the main cohort, never in its place. The
+    retrain's window challenger (ADR 0080) builds its own from the retrain's warehouse."""
     from trialpulse.cohort.build import attach_warehouse
     from trialpulse.warehouse.build import WAREHOUSE_PATH
 
     rules = CohortRules.from_config(cfg)
     with duckdb.connect() as con:
-        attach_warehouse(con, WAREHOUSE_PATH)
-        summaries = build_training_cohorts(con, rules, [ORIGIN], TRAINING_DIR, LANDMARKS_PATH)
+        attach_warehouse(con, warehouse or WAREHOUSE_PATH)
+        summaries = build_training_cohorts(con, rules, [origin], training_dir, final_landmarks)
     return {k: v for k, v in summaries[0].items() if k != "files"}
 
 
-def extra_features(cfg: ProjectConfig) -> int:
-    """Features of the origin's landmark rows the main build does not hold, by the feature
-    build's own code without text (ADR 0026); the number of such rows."""
+def extra_features(
+    cfg: ProjectConfig,
+    landmarks: Path | None = None,
+    features_dir: Path | None = None,
+    warehouse: Path | None = None,
+    interventions: str | None = None,
+    out: Path = EXTRA_FEATURES,
+) -> int:
+    """Features of the landmark rows of `landmarks` (by default the replay origin's) that the
+    feature build in `features_dir` (by default the main one) does not hold, by the feature
+    build's own code without text (ADR 0026), written to `out`; the number of such rows."""
     from trialpulse.features import build as features
     from trialpulse.features.registry import KEY_COLUMNS, built_columns
     from trialpulse.parquet import write_table
     from trialpulse.warehouse.build import TEMP_DIR, WAREHOUSE_PATH, interventions_glob
 
-    main = (features.FEATURES_DIR / features.FEATURES_NAME).as_posix()
-    keys = REPLAY_DIR / "missing_keys.parquet"
+    main = ((features_dir or features.FEATURES_DIR) / features.FEATURES_NAME).as_posix()
+    rows = (landmarks or landmarks_path()).as_posix()
+    keys = out.with_name("missing_keys.parquet")
+    keys.parent.mkdir(parents=True, exist_ok=True)
     with duckdb.connect() as con:
         con.execute(
             f"""COPY (SELECT l.trial_id, l.landmark_index, l.landmark_date
-                FROM read_parquet('{landmarks_path().as_posix()}') l
+                FROM read_parquet('{rows}') l
                 ANTI JOIN read_parquet('{main}') f USING (trial_id, landmark_index)
                 ORDER BY 1, 2) TO '{keys.as_posix()}' (FORMAT parquet)"""
         )
         missing = con.execute(f"SELECT count(*) FROM read_parquet('{keys.as_posix()}')").fetchone()
     count = int(missing[0]) if missing else 0
-    EXTRA_FEATURES.unlink(missing_ok=True)
+    out.unlink(missing_ok=True)
     if count == 0:
         return 0
     rules = CohortRules.from_config(cfg)
     with features.connect(TEMP_DIR) as con:
-        features.prepare(con, WAREHOUSE_PATH, interventions_glob(cfg), {"replay": keys}, rules)
+        features.prepare(con, warehouse or WAREHOUSE_PATH, interventions or interventions_glob(cfg),
+                         {"replay": keys}, rules)  # fmt: skip
         features.compute_features(con, rules, cfg, text=False)
-        write_table(con, features.FEATURE_TABLE, EXTRA_FEATURES,
+        write_table(con, features.FEATURE_TABLE, out,
                     [*KEY_COLUMNS, *built_columns()], features.ORDER)  # fmt: skip
     return count
 
@@ -160,13 +178,13 @@ def fit_model(cfg: ProjectConfig) -> dict[str, Any]:
     return summary
 
 
-def sponsor_classes(day: dt.date) -> dict[str, str]:
+def sponsor_classes(day: dt.date, warehouse: Path | None = None) -> dict[str, str]:
     """Each trial's lead sponsor class in the version in effect on `day` (on a tie of post
     dates, the higher version), as Step 13's population reads it; 'MISSING' when empty."""
     from trialpulse.warehouse.build import WAREHOUSE_PATH
 
     with duckdb.connect() as con:
-        con.execute(f"ATTACH '{WAREHOUSE_PATH.as_posix()}' AS wh (READ_ONLY)")
+        con.execute(f"ATTACH '{(warehouse or WAREHOUSE_PATH).as_posix()}' AS wh (READ_ONLY)")
         rows = con.execute(
             f"""SELECT nct_id, coalesce(lead_sponsor_class, 'MISSING') FROM wh.versions
             WHERE effective_date <= DATE '{day.isoformat()}'
