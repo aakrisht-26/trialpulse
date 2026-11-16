@@ -138,6 +138,7 @@ def score(
     with_drivers: bool = True,
     only: set[str] | None = None,
     interventions: str | None = None,
+    keep_features: bool = False,
 ) -> Scored:
     """The served scores of every open trial on `day` (see the module text). With `only`,
     the scores of those trials alone (the population and its reasons are still decided on
@@ -178,7 +179,7 @@ def score(
     ).sort_values("nct_id").reset_index(drop=True)  # fmt: skip
     unscored.insert(1, "as_of_date", np.datetime64(day, "D"))
     seconds["total"] = clock.perf_counter() - started
-    return Scored(out, unscored, seconds)
+    return Scored(out, unscored, seconds, features if keep_features else None)
 
 
 def write(scored: Scored, day: dt.date, folder: Path = SCORES_DIR) -> dict[str, str]:

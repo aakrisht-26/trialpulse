@@ -47,6 +47,7 @@ class Scored:
     scores: pd.DataFrame
     unscored: pd.DataFrame
     seconds: dict[str, float]
+    features: pd.DataFrame | None = None  # the scored rows' features, when asked (ADR 0076)
 
 
 def classify(people: pd.DataFrame, day: dt.date, rules: CohortRules,
