@@ -165,7 +165,7 @@ Expected: `"equal": true` and exit code 0.
 
 ## Part 5: the quarterly retrain
 
-ADR 0080: the retrain and its promotion gate run on the laptop (the dataset stays there, ADR 0040). The command is `uv run python -m trialpulse.monitor.retrain --target neon`: a challenger fitted on the pinned, gap and exported live rows through the latest data date, both models scored on that date, the gate's decision logged to MLflow and to `monitoring.promotions`. Until a window of matured 12-month outcomes exists after the champion's training cutoff (about November 2027), every decision is "not promoted" with that reason. It takes about half an hour and about 8 GB of memory, so the task does not start on battery. The task runs it through `scripts/retrain_quarterly.ps1`, which logs to `data/logs/retrain_<date>.log` and, if the task starts late inside the daily job's span (21:30 to 08:00 UTC), waits until 08:00 UTC.
+ADR 0080: the retrain and its promotion gate run on the laptop (the dataset stays there, ADR 0040). The command is `uv run python -m trialpulse.monitor.retrain --target neon`: a challenger fitted on the pinned, gap and exported live rows through the latest data date, both models scored on that date, the gate's decision logged to MLflow and to `monitoring.promotions`. Until a window of matured 12-month outcomes exists after the champion's training cutoff (about November 2027), every decision is "not promoted" with that reason. Measured on 2026-11-16 (no window yet): 1,194 s, with a peak of 13.2 GB of private memory (7.5 GB working set), so the task does not start on battery and is best run with other large programs closed. Once a window exists, the retrain also fits a challenger as of the window's first graded date and scores both models on the window's dates: measured on 2026-11-16 with a pretend window of three dates, 1,415 s more, so about 44 minutes in all, peak memory as above. The task runs it through `scripts/retrain_quarterly.ps1`, which logs to `data/logs/retrain_<date>.log` and, if the task starts late inside the daily job's span (21:30 to 08:00 UTC), waits until 08:00 UTC.
 
 **When:** the first Saturday of January, April, July and October at 19:00 India time (13:30 UTC), outside the daily job's span and a day before the Sunday backup. `StartWhenAvailable` runs a missed retrain when the laptop is next on and plugged in.
 
@@ -189,3 +189,13 @@ Unregister-ScheduledTask -TaskName "TrialPulse quarterly retrain" -Confirm:$fals
 ```
 
 `LastTaskResult` 0 is a retrain whose decision was logged. The laptop must reach Neon on port 5432: on a network that blocks it, the retrain fails at its first read and logs a connection timeout; run it again from another network.
+
+**When a run records "promoted".** The gate's decision is recorded (MLflow and `monitoring.promotions`), but the served model changes only when the champion alias moves, by hand, after review: the model statement of `/v1/model` (ADR 0048) and the laptop's copy of the champion change with it. In PowerShell, from the repository's folder, with the run id of the decision row:
+
+```
+uv run python -m trialpulse.scoring.champion --register-run <mlflow_run_id>
+uv run python -m trialpulse.live.registry --attach-decisions
+uv run python -m trialpulse.live.registry --alias champion --to data\scoring\champion_new
+```
+
+The first registers the challenger's logged bundle as a new version of `trialpulse-m4` with the alias `champion`; the daily job serves it from its next run, and every trial is rescored as a new model. The second attaches Step 13's decisions, which the daily job requires in the bundle. The third fetches it to the laptop: replace `data\scoring\champion` with that folder, so the next retrain compares against the served model, and update `docs/model_statement.json` (the served model and its training cutoff) before loading it. To undo, give the alias `champion` back to the previous version in the registry.

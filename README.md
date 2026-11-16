@@ -77,7 +77,7 @@ Stack: Python, uv, DuckDB, LightGBM, scikit-learn, lifelines, Optuna, MLflow, Po
 | Daily job, API and dashboard (Steps 14 to 16) | Built and tested in CI against Postgres, recorded API responses and a seeded database |
 | Live database on Neon, daily job and API (Steps 14 and 15) | Live since 2026-11-08: the daily job runs on GitHub Actions, and the read-only API is at https://trialpulse-api.onrender.com (its documentation at https://trialpulse-api.onrender.com/docs). The free instance sleeps when idle and takes about a minute to wake ([ADR 0065](docs/adr/0065-the-api-runs-on-renders-free-web-service.md)) |
 | Dashboard on Streamlit Community Cloud (Step 16) | Not deployed yet; there is no public dashboard link yet |
-| Monitoring, drift reports, grading of matured predictions, retraining (Step 17) | Not started |
+| Monitoring, drift reports, grading of matured predictions, retraining (Step 17) | Built on 2026-11-16: a monthly grading workflow, a replay of 2023 and 2024 (monitoring evidence, never a registered result), a weekly drift summary in the daily job's full run, the quarterly retrain on the laptop with its promotion gate (no promotion before matured outcomes exist after the champion's training data, about November 2027) and alerts as GitHub issues |
 
 Progress, step by step, with evidence and the open items: [docs/progress.md](docs/progress.md).
 
