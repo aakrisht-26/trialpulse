@@ -131,7 +131,9 @@ uv run python scripts/check_dashboard.py --url https://<APP>.streamlit.app
 
 ADR 0045 (decision 11): a weekly scheduled task on the laptop backs up the live system to `data/backups/` (gitignored, never published). The command is `uv run python -m trialpulse.live.backup backup --target neon`: one read-only snapshot of every `live`, `serving` and `monitoring` table, each file checked by row count and SHA-256 after it is written, the last 8 backups kept (`live.backup_keep`). The task runs it through `scripts/backup_weekly.ps1`, which logs to `data/logs/backup_<date>.log` and, if the task starts late inside the daily job's window (21:30 to 00:30 UTC), waits until 00:30 UTC.
 
-**When:** Sundays at 19:00 India time (13:30 UTC). That is outside the daily job's cron window (21:30 to 00:30 UTC, 03:00 to 06:00 India time) and outside the span in which GitHub has really started the job so far (about 01:00 to 08:00 UTC, 06:30 to 13:30 India time), at an hour the laptop is likely on. `StartWhenAvailable` runs a missed backup when the laptop wakes. One backup takes about a minute (51 s on 2026-11-10, 68 MB), so it may run on battery.
+**A network that reaches Neon.** The backup, and the monthly retention of ADR 0069 (`uv run python -m trialpulse.live.retention --target neon`, by hand at the start of every month), connect to Neon on port 5432, which some networks block (the laptop's usual Wi-Fi did from 2026-11-15). Run them on a network that reaches it, the phone's hotspot if need be. The scheduled backup copes on its own: since 2026-11-17 the task runs daily, and the script first checks `data/backups` (`uv run python -m trialpulse.live.backup recent`, which never connects): if a finished backup under 7 days old exists it exits 0 without touching Neon. Otherwise it backs up; a failure (exit code not 0) opens the GitHub issue "Weekly backup failed", or comments on the open one, with the date and the exit code only (the log can name the database's host, so it stays on the laptop), and the task retries the next day. The next successful backup closes the issue with a comment (`uv run python -m trialpulse.live.backup report --exit-code <code>`, which the script runs after every backup it attempts).
+
+**When:** registered on 2026-11-10 for Sundays at 19:00 India time (13:30 UTC); from 2026-11-17 the trigger is daily at the same hour (the commands below), so a missed or failed backup is retried the next day, while the 7-day check keeps it to one backup a week. That is outside the daily job's cron window (21:30 to 00:30 UTC, 03:00 to 06:00 India time) and outside the span in which GitHub has really started the job so far (about 01:00 to 08:00 UTC, 06:30 to 13:30 India time), at an hour the laptop is likely on. `StartWhenAvailable` runs a missed backup when the laptop wakes. One backup takes about a minute (51 s on 2026-11-10, 68 MB), so it may run on battery.
 
 Register the task (PowerShell, once, as Aakrisht; no administrator rights needed):
 
@@ -153,7 +155,18 @@ Get-Content (Get-ChildItem E:\trialpulse\data\logs\backup_*.log | Sort-Object La
 Unregister-ScheduledTask -TaskName "TrialPulse weekly backup" -Confirm:$false
 ```
 
-`LastTaskResult` 0 is a backup written; 2 is a refusal (for example, a backup for that date already exists, which is never overwritten). `uv` must be on the PATH of Aakrisht's account, as it is in his terminal.
+`LastTaskResult` 0 is a backup written or a day skipped because a recent one exists; 1 is a failure (the issue "Weekly backup failed" says so); 2 is a refusal (for example, a backup for that date already exists, which is never overwritten).
+
+Change the trigger of a task registered weekly to daily at 19:00, keeping its action and settings (`StartWhenAvailable`, the batteries and the time limit):
+
+```
+$trigger = New-ScheduledTaskTrigger -Daily -At "19:00"
+Set-ScheduledTask -TaskName "TrialPulse weekly backup" -Trigger $trigger
+Get-ScheduledTask -TaskName "TrialPulse weekly backup" | Select-Object -ExpandProperty Triggers
+(Get-ScheduledTask -TaskName "TrialPulse weekly backup").Settings.StartWhenAvailable
+```
+
+The third line shows a `DaysInterval` of 1 at 19:00; the fourth prints `True`. A task registered from now on can use the daily trigger in the registration above in place of the weekly one. `uv` must be on the PATH of Aakrisht's account, as it is in his terminal.
 
 **Restore,** only into the laptop's Postgres, never Neon (it refuses any host but localhost and 127.0.0.1): it creates a fresh database `trialpulse_restore` (dropped first if it exists), migrates it to the backup's Alembic revision, loads every table and checks each table's rows and digest against the backup:
 

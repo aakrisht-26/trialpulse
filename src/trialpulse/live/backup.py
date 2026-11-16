@@ -59,6 +59,9 @@ SCHEMAS = ("live", "serving", "monitoring")
 LOCAL_HOSTS = ("localhost", "127.0.0.1")
 RESTORE_PREFIX = "trialpulse_restore"
 FOLDER = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+RECENT_DAYS = 7  # a finished backup younger than this makes the scheduled run skip Neon
+ISSUE_TITLE = "Weekly backup failed"
+NOT_RECENT = 3  # the exit code of `recent` when no backup is recent: the task backs up
 # Every setting the COPY text form depends on, the same on both sides of a backup.
 SESSION = (
     "SET TIME ZONE 'UTC'",
@@ -244,6 +247,47 @@ def complete_backups(out_dir: Path) -> list[Path]:
     )
 
 
+def recent_backup(out_dir: Path, today: dt.date, days: int = RECENT_DAYS) -> Path | None:
+    """The newest finished backup dated less than `days` days before `today` (UTC dates, as
+    the folders are named), or None: the scheduled task runs daily and backs up only when
+    this is None, so a day the laptop cannot reach Neon is retried the next day."""
+    for folder in reversed(complete_backups(out_dir)):
+        if 0 <= (today - dt.date.fromisoformat(folder.name)).days < days:
+            return folder
+    return None
+
+
+def _gh(args: Sequence[str]) -> str:
+    import subprocess
+
+    done = subprocess.run(["gh", *args], cwd=REPO_ROOT, capture_output=True, text=True,
+                          check=True, timeout=120)  # fmt: skip
+    return done.stdout
+
+
+def report(code: int, day: dt.date, gh: Callable[[Sequence[str]], str] = _gh) -> str:
+    """After a scheduled backup: a failure opens the issue ISSUE_TITLE, or comments on the
+    open one; a success closes an open one with a comment. The issue holds the date and the
+    exit code only, never the log, since a client's error can name the database's host."""
+    found = json.loads(gh(["issue", "list", "--state", "open", "--limit", "100",
+                           "--json", "number,title"]) or "[]")  # fmt: skip
+    numbers = [str(i["number"]) for i in found if i["title"] == ISSUE_TITLE]
+    if code != 0:
+        body = (f"The scheduled backup of {day.isoformat()} (UTC) failed with exit code {code}. "
+                "Its log is in data/logs on the laptop; the task retries the next day "
+                "(docs/deploy.md, Part 4).")  # fmt: skip
+        if numbers:
+            gh(["issue", "comment", numbers[0], "--body", body])
+            return f"commented on issue {numbers[0]}"
+        gh(["issue", "create", "--title", ISSUE_TITLE, "--body", body])
+        return "opened the issue"
+    if numbers:
+        gh(["issue", "close", numbers[0], "--comment",
+            f"The scheduled backup of {day.isoformat()} (UTC) succeeded."])  # fmt: skip
+        return f"closed issue {numbers[0]}"
+    return "nothing to report"
+
+
 def prune(out_dir: Path, keep: int) -> list[str]:
     """Delete all but the newest `keep` finished backups; the names deleted."""
     if keep < 1:
@@ -365,7 +409,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     down = steps.add_parser("restore", help="load a backup into a fresh local database")
     down.add_argument("--from", dest="folder", type=Path, required=True)
     down.add_argument("--database", default=RESTORE_PREFIX)
+    recent = steps.add_parser("recent", help=f"exit 0 if a backup is under {RECENT_DAYS} days old, "
+                              f"else {NOT_RECENT}; never connects")  # fmt: skip
+    recent.add_argument("--out-dir", type=Path, default=BACKUP_DIR)
+    told = steps.add_parser("report", help=f"open, reuse or close the issue '{ISSUE_TITLE}'")
+    told.add_argument("--exit-code", type=int, required=True)
     args = parser.parse_args(argv)
+    today = dt.datetime.now(dt.UTC).date()
+    if args.step == "recent":
+        found = recent_backup(args.out_dir, today)
+        print(f"recent backup: {found.name}" if found else "no backup in the last 7 days")
+        return 0 if found else NOT_RECENT
+    if args.step == "report":
+        print(report(args.exit_code, today))
+        return 0
     if args.step == "backup":
         keep = load_project_config().live.backup_keep
         result = backup(_dsn(args.target), args.out_dir, keep)

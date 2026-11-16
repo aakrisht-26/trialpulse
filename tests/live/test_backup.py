@@ -205,3 +205,71 @@ def test_the_command_prints_no_connection_string(
     assert seeded not in out
     assert not password or str(password) not in out
     assert json.loads(out)["tables"] >= 10
+
+
+def _finished(out: Path, name: str, manifest: bool = True) -> None:
+    folder = out / name
+    folder.mkdir(parents=True)
+    if manifest:
+        (folder / "manifest.json").write_text("{}", encoding="utf-8")
+
+
+def test_a_backup_under_seven_days_old_makes_the_scheduled_run_skip(tmp_path: Path) -> None:
+    today = dt.date(2026, 11, 17)
+    assert backup.recent_backup(tmp_path, today) is None  # no backup at all
+    _finished(tmp_path, "2026-11-10")  # 7 days old: due again
+    _finished(tmp_path, "2026-11-15", manifest=False)  # never finished: not a backup
+    assert backup.recent_backup(tmp_path, today) is None
+    _finished(tmp_path, "2026-11-11")  # 6 days old
+    found = backup.recent_backup(tmp_path, today)
+    assert found is not None
+    assert found.name == "2026-11-11"
+
+
+def test_the_recent_step_exits_0_to_skip_and_3_to_back_up(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert backup.main(["recent", "--out-dir", str(tmp_path)]) == backup.NOT_RECENT
+    _finished(tmp_path, dt.datetime.now(dt.UTC).date().isoformat())
+    assert backup.main(["recent", "--out-dir", str(tmp_path)]) == 0
+    assert "recent backup:" in capsys.readouterr().out
+
+
+class FakeGh:
+    def __init__(self, open_issues: list[dict[str, Any]]) -> None:
+        self.open_issues = open_issues
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: Any) -> str:
+        self.calls.append(list(args))
+        return json.dumps(self.open_issues) if args[:2] == ["issue", "list"] else ""
+
+
+DAY = dt.date(2026, 11, 17)
+
+
+def test_a_failed_backup_opens_the_issue_with_the_date_and_exit_code_only() -> None:
+    gh = FakeGh([{"number": 4, "title": "Daily live run failed"}])
+    assert backup.report(1, DAY, gh) == "opened the issue"
+    create = gh.calls[-1]
+    assert create[:4] == ["issue", "create", "--title", backup.ISSUE_TITLE]
+    body = create[create.index("--body") + 1]
+    assert "2026-11-17" in body
+    assert "exit code 1" in body
+    assert "data/logs on the laptop" in body  # the log itself stays there
+    assert "host" not in body.lower()
+
+
+def test_a_second_failure_comments_on_the_open_issue() -> None:
+    gh = FakeGh([{"number": 12, "title": backup.ISSUE_TITLE}])
+    assert backup.report(1, DAY, gh) == "commented on issue 12"
+    assert gh.calls[-1][:3] == ["issue", "comment", "12"]
+
+
+def test_a_successful_backup_closes_the_open_issue_and_otherwise_does_nothing() -> None:
+    gh = FakeGh([{"number": 12, "title": backup.ISSUE_TITLE}])
+    assert backup.report(0, DAY, gh) == "closed issue 12"
+    assert gh.calls[-1][:4] == ["issue", "close", "12", "--comment"]
+    quiet = FakeGh([])
+    assert backup.report(0, DAY, quiet) == "nothing to report"
+    assert [c[:2] for c in quiet.calls] == [["issue", "list"]]
