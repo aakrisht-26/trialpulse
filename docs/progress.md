@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 17, monitoring, retraining and replay** (approved by Aakrisht on 2026-11-10; his decisions of 2026-11-16 added: main is production, a network guard in tests, the drift reference at the seed date, the replay check for the reviewers, Neon writes from his hotspot). Built and run on the laptop; see "Step 17" below.
 
-Next step: STOPPED at the drift sensitivity check (2026-11-17): Evidently's PSI does not see a half-standard-deviation shift in 8 long-tailed features (ADR 0076, "Sensitivity"); Aakrisht decides the remedy. Neon work of this run done (backup and restore equal, replay grades, the retrain decision, the live regrade; Neon 263.2 MB). Local commits after d6c6bbe are not pushed: the full suite, push, CI and Render wait for the decision.
+Next step: the full suite on the final tree, the drift tests in the drift environment, push (c2fae9d onward), CI and Render, then the single report. Neon work of 2026-11-17 is done.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -2567,6 +2567,23 @@ Two independent reviewers with distinct lenses (numbers and point-in-time; opera
 | Drift atom threshold mutant not caught in the main environment | The Evidently test (drift environment, CI) covers the method | None |
 
 **The replay check (Aakrisht's item 4), by the numbers reviewer:** no label or feature after any prediction date (`score()` reads versions posted by the date, the sponsor class as of the date, outcomes only after it), and a training cutoff of 2023-01-01 (the as-of-origin cohort, early stopping inside it, the walk-forward guard refusing anything later). Pooled 12-month AUC over the 78 dates with a 95% cluster bootstrap by trial (200 resamples, censoring weights held at the full data's), trials ended by the prediction date left out: all 0.7507 (0.7441 to 0.7561), flagged 0.7439 (0.7322 to 0.7548), unflagged 0.7532 (0.7457 to 0.7597). By landmark index (unflagged): 0.7116 at index 0, rising to 0.7571 at 5, 0.7395 at 6. Why it sits above the registered 0.72 to 0.73: index 0 alone (0.712) is close to them; pooling trial ages raises the AUC, since the early-stop rate climbs with age (IPCW rate 0.019 at index 0 against about 0.05 at indexes 4 to 6); features are computed on the scoring date, not frozen at the landmark (ADR 0034); the period is 2023 to 2024; index 6 holds 30% of the rows. It stays monitoring evidence.
+
+### The hotspot session (2026-11-17)
+
+Aakrisht's decisions of 2026-11-17: ADR 0082 accepted; drift option C; a resilient backup. Every Neon step ran from his phone's hotspot (the Wi-Fi blocks port 5432), with no daily run in progress (`gh run list --workflow daily.yml --limit 1`: the last run completed 2026-11-16 07:06 UTC), and each was checked read-only afterwards.
+
+| Neon step | Result | Checked read-only |
+| --- | --- | --- |
+| 1. Backup, then restore | `data/backups/2026-11-16` (UTC date): 19 tables, 759,092 rows, 69.2 MB, 133 s | Restored into local `trialpulse_restore`: equal on all 19 tables and 759,092 rows (11.4 s) |
+| 2. The task script by hand | `scripts/backup_weekly.ps1` exited 0 without touching Neon: "recent backup: 2026-11-16 ... a backup under 7 days old exists: nothing to do" | |
+| 3. The replay grades | 1,560 rows, 78 dates | Neon and local Postgres: 1,560 replay rows, 78 dates, 12-month mean AUC 0.7506 on both |
+| 3b. The live grades again | `grade.yml` dispatched (run 43955921437, success), so the 20 live rows carry the N1 fix | 89,011 predictions of 2026-11-13, all open trials counted as controls (`n_open` 89,011; before the fix 0 would have counted) |
+| 4. The retrain, `--target neon` | Data date 2026-11-13, Neon's live rows read (9,644 live versions), 1,462,545 landmark rows, 4,287,993 intervals, 1,323 rounds, fit 735 s, 1,114 s in all; Spearman 0.980 with the champion at both horizons; "not promoted: no window after the champion's training data with matured outcomes yet"; MLflow run 6483da96 | The row in `monitoring.promotions` and in the API's view `serving.monitoring_promotions` |
+| 5. Neon's size | 263.2 MB, 436.8 MB under the 700 MB line | |
+
+**The backup, made resilient** (`4de1ec9`): the task script exits 0 without touching Neon when a finished backup under 7 days old exists (`backup recent`, which never connects); otherwise it backs up and runs `backup report`, which opens or comments on the issue "Weekly backup failed" (date and exit code only) and closes it on the next success. With a daily trigger (Aakrisht changes it; the commands are in docs/deploy.md, Part 4), a day without Neon is retried the next day. docs/deploy.md says the backup and the monthly retention need a network that reaches Neon. Six tests cover the skip and the issue logic.
+
+**Drift, option C** (`99dd021`, ADR 0076 amended): a sensitivity check before relying on "0 of 52" found that Evidently's PSI bins a numeric column with more than 20 values by width over the joint range, so a long tail hid a half-standard-deviation shift in 8 of 22 numeric features. Such a column is now compared by its position in the 2026-11-03 reference distribution. On the step's own comparison: synthetic unchanged 0 of 4, shifted 4 of 4; real 2026-11-03 against 2026-11-09 0 of 52 (largest PSI 0.031); each of the 22 numeric features shifted, 22 of 22 (smallest 2.007); both risks shifted, 2 of 2. The per-column PSI is in the ADR.
 
 ### Decisions made on my own (flagged)
 
