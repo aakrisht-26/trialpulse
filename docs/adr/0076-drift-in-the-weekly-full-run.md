@@ -123,3 +123,17 @@ The daily growth of the sponsor counts, which exact matching had read as drift, 
 | `kind` | 0.0003 | **0.1085** |
 
 Rejected alternatives: PSI on the reference's own bins outside Evidently (flagged all 22 shifted features, but also 2 sponsor counts on unchanged data, since exact matching caught their daily growth); keeping the blind spot with a documented note.
+
+**Realistic magnitudes (2026-11-17, asked by Aakrisht; a measurement, no pass bar).** The step's own comparison on the 88,759 trials served on 2026-11-09 against the 2026-11-03 reference, with one change at a time and then all at once:
+
+| Case | PSI of the changed column | Flagged | Columns flagged in all |
+| --- | --- | --- | --- |
+| Unchanged | at most 0.0005 for these five | no | none |
+| `enrollment_count` times 1.2 | 0.1683 | yes | 1 |
+| `n_versions` plus 1 | 2.5207 | yes | 1 |
+| `planned_duration_months` plus 3 | 0.2526 | yes | 1 |
+| `risk_12m` times 1.2 | 0.0219 | no | none |
+| `risk_24m` times 1.2 | 0.0247 | no | none |
+| All four at once | 0.1683, 2.5207, 0.2526; risks 0.0219 and 0.0247 | the three features | 3 of 52 features |
+
+Two readings. A rise of a fifth in every risk is a shift of calibration that keeps the ranking; PSI at 0.1 does not see it, and the grading of matured predictions (ADR 0077) and the gate's calibration slope (ADR 0080) are what watch it. And even the combined case flags 3 of 52 features (5.8%), under the alert's 20% share (ADR 0081): the alert is meant for broad shifts, while the drift table on the Model health page shows a single column's.
