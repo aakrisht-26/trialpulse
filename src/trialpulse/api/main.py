@@ -523,8 +523,8 @@ PERFORMANCE_NOTE = (
     "champion's method, not a registered result (ADRs 0032 and 0078)."
 )
 DRIFT_NOTE = (
-    "Population stability (PSI) of each feature and of the served risks against the "
-    "champion's training rows, from the weekly full run; drifted at or above the threshold "
+    "Population stability (PSI) of each feature and of the served risks against the trials "
+    "served on 2026-11-03, from the weekly full run; drifted at or above the threshold "
     "(ADR 0076). Drift describes the registry's trials changing, not an error."
 )
 PROMOTIONS_NOTE = (

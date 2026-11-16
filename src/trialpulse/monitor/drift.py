@@ -1,15 +1,19 @@
 """The weekly drift report of the full run (ADR 0076).
 
     uv run python -m trialpulse.monitor.drift reference      (laptop: config/drift_reference.json)
+    uv run python -m trialpulse.monitor.drift training-rows  (laptop: the one-off measurement)
 
 **The reference** is an aggregate made on the laptop (ADR 0040): for each feature M4 reads as
 the live path computes it (53 of its 54; the 54th, `sponsor_stop_rate`, is computed after from
-three that are checked), over the served champion's training rows (the final cohort's
-landmark rows), the share missing and the shares of each category, of each value (a numeric
-column with at most 100 values), or of 100 percentile bins (a continuous column; fewer bins
-made the sample's tails differ enough to read as drift on unchanged data); the same for the
-served risks at the data cutoff (Step 13's file). No row leaves the laptop: only values,
-edges and shares are committed.
+three that are checked), over the trials served at the seed date 2026-11-03 (ADR 0076 as
+amended on 2026-11-16: Step 13's `score()` on the rebootstrap's combined warehouse), the share
+missing and the shares of each category, of each value (a numeric column with at most 100
+values), or of 100 percentile bins (a continuous column; fewer bins made the sample's tails
+differ enough to read as drift on unchanged data); the same for the risks served that day. No
+row leaves the laptop: only values, edges and shares are committed. The first reference, the
+champion's training rows (2008 to 2026), differed from any day's open trials by construction;
+`training-rows` writes it to data/drift/ for the measurement ADR 0076 records, never as the
+alert's reference.
 
 **The step** (`drift_step`, called by the daily job after a full run's publication has
 committed): Evidently's data drift preset with the PSI method and its default threshold
@@ -34,6 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from trialpulse.cli import RefusedError
 from trialpulse.config import REPO_ROOT
 
 REFERENCE_PATH = REPO_ROOT / "config" / "drift_reference.json"
@@ -43,13 +48,18 @@ DISCRETE = 100  # a numeric column with at most this many values keeps each valu
 METHOD = "psi"
 SCORES = ("risk_12m", "risk_24m")
 DERIVED = ("sponsor_stop_rate",)  # computed after the features, from three that are checked
+# One count shared by every trial on a date (open trials, ADR 0007): a number that moves every
+# day, not a distribution, so a population stability index of it is drift by construction.
+PER_DATE = ("open_interventional_trials",)
+ATOM = 0.005  # a value holding at least this share of a continuous column is kept exactly
+SEED = dt.date(2026, 11, 3)  # the rebootstrap's seed date (ADR 0074): the reference's date
 
 
 def drift_columns() -> list[str]:
     from trialpulse.models import discrete_time
 
     names = discrete_time.feature_names(discrete_time.FAMILY_SETS["m4"])
-    return [n for n in names if n not in DERIVED]
+    return [n for n in names if n not in DERIVED and n not in PER_DATE]
 
 
 def _categorical(values: pd.Series) -> bool:
@@ -74,11 +84,20 @@ def summarize(values: pd.Series) -> dict[str, Any]:
         return {"kind": "numeric", "missing": missing,
                 "values": [float(v) for v in distinct],
                 "shares": [float(c / len(numbers)) for c in tally]}  # fmt: skip
-    edges: np.ndarray = np.unique(np.quantile(numbers, np.linspace(0, 1, BINS + 1)))
-    counts = np.histogram(numbers, bins=edges)[0]
-    total = counts.sum()
-    return {"kind": "numeric", "missing": missing, "edges": [float(e) for e in edges],
-            "shares": [float(c / total) if total else 0.0 for c in counts]}  # fmt: skip
+    # Point masses (an age limit of 65, an enrollment of 0) are kept exactly: spread inside a
+    # bin, the sample would differ from the data it summarizes and read as drift.
+    heavy = tally / len(numbers) >= ATOM
+    atoms, rest = distinct[heavy], numbers[~np.isin(numbers, distinct[heavy])]
+    out: dict[str, Any] = {"kind": "numeric", "missing": missing}
+    if len(atoms):
+        out["atoms"] = [float(v) for v in atoms]
+        out["atom_shares"] = [float(c / len(numbers)) for c in tally[heavy]]
+    if not len(rest):
+        return {**out, "edges": [0.0, 0.0], "shares": [0.0]}
+    edges: np.ndarray = np.unique(np.quantile(rest, np.linspace(0, 1, BINS + 1)))
+    counts = np.histogram(rest, bins=edges)[0]
+    return {**out, "edges": [float(e) for e in edges],
+            "shares": [float(c / len(numbers)) for c in counts]}  # fmt: skip
 
 
 def _counts(shares: Sequence[float], n: int) -> list[int]:
@@ -105,9 +124,10 @@ def sample(column: Mapping[str, Any], n: int = SAMPLE) -> pd.Series:
         repeated = [np.full(n, v) for v, n in zip(column["values"], counts, strict=True)]
         numbers = np.concatenate(repeated) if repeated else np.array([])
         return pd.Series(np.concatenate([numbers, np.full(missing, np.nan)]), dtype=float)
-    edges = column["edges"]
-    parts = []
-    for i, count in enumerate(_counts(column["shares"], present)):
+    edges, atoms = column["edges"], column.get("atoms", [])
+    counts = _counts([*column.get("atom_shares", []), *column["shares"]], present)
+    parts = [np.full(c, v) for v, c in zip(atoms, counts[: len(atoms)], strict=True)]
+    for i, count in enumerate(counts[len(atoms) :]):
         lo, hi = edges[i], edges[i + 1]
         last = i == len(column["shares"]) - 1
         parts.append(np.linspace(lo, hi, count, endpoint=last) if count else np.array([]))
@@ -213,8 +233,53 @@ def drift_step(
         return {"failed": type(exc).__name__, "seconds": round(clock.perf_counter() - started, 1)}
 
 
-def make_reference(cfg: Any) -> dict[str, Any]:
-    """The reference of the served champion's training rows (laptop only, ADR 0040)."""
+def reference_from(features: pd.DataFrame, scores: pd.DataFrame, source: str) -> dict[str, Any]:
+    """The aggregate of ADR 0076: per column, shares only (no row, no trial id)."""
+    out = {name: summarize(features[name]) for name in drift_columns()}
+    out.update({name: summarize(scores[name]) for name in SCORES})
+    return {"made_on": dt.date.today().isoformat(), "method": METHOD, "sample": SAMPLE,
+            "features_rows": len(features), "scores_rows": len(scores), "source": source,
+            "columns": out}  # fmt: skip
+
+
+def make_reference(cfg: Any, seed: dt.date = SEED) -> dict[str, Any]:
+    """The reference of ADR 0076 as amended on 2026-11-16 (laptop only, ADR 0040): the
+    features and risks of the trials served at the seed date, by Step 13's `score()` on the
+    rebootstrap's combined warehouse, the inputs its reference check used (ADR 0074). The
+    risks are checked against the reference file the rebootstrap wrote for that date."""
+    from trialpulse.gap import rebootstrap
+    from trialpulse.scoring import score as offline
+    from trialpulse.scoring.bundle import load_bundle
+
+    found = rebootstrap.inputs()
+    scored = offline.score(
+        rebootstrap.seeded_cfg(cfg, seed), seed, load_bundle(cfg, found.bundle),
+        offline.served_decisions(found.decisions), warehouse=rebootstrap.COMBINED_WAREHOUSE,
+        interventions=found.interventions, with_drivers=False, keep_features=True,
+    )  # fmt: skip
+    assert scored.features is not None
+    served = pd.read_parquet(rebootstrap.REFERENCE_DIR / f"scores_{seed.isoformat()}.parquet",
+                             columns=["nct_id", *SCORES])  # fmt: skip
+    both = scored.scores[["nct_id", *SCORES]].merge(served, on="nct_id", suffixes=("", "_ref"))
+    if len(both) != len(served) or len(scored.scores) != len(served):
+        raise RefusedError(f"{len(scored.scores)} trials scored on {seed}, {len(served)} served")
+    for name in SCORES:
+        if float((both[name] - both[f"{name}_ref"]).abs().max()) > 1e-12:
+            raise RefusedError(f"{name} on {seed} differs from the rebootstrap's reference file")
+    return reference_from(
+        scored.features,
+        served,
+        (
+            f"the features and risks of the {len(served):,} trials served at the seed date "
+            f"{seed.isoformat()} (Step 13's score() on the rebootstrap's combined warehouse); "
+            "shares only (ADR 0040)"
+        ),
+    )
+
+
+def training_rows_reference(cfg: Any) -> dict[str, Any]:
+    """The first reference (the champion's training rows), kept for the one-off measurement
+    recorded in ADR 0076: against it, today's open trials differ by construction."""
     import duckdb
 
     from trialpulse.eval.rows import LANDMARKS_PATH
@@ -231,13 +296,8 @@ def make_reference(cfg: Any) -> dict[str, Any]:
         ).df()
     scores = pd.read_parquet(SCORES_DIR / f"scores_{cfg.dataset.cutoff}.parquet",
                              columns=list(SCORES))  # fmt: skip
-    out = {name: summarize(frame[name]) for name in columns}
-    out.update({name: summarize(scores[name]) for name in SCORES})
-    return {"made_on": dt.date.today().isoformat(), "method": METHOD, "sample": SAMPLE,
-            "features_rows": len(frame), "scores_rows": len(scores),
-            "source": "the served champion's training rows (the final cohort's landmark "
-                      "rows) and its risks at the data cutoff; shares only (ADR 0040)",
-            "columns": out}  # fmt: skip
+    return reference_from(frame, scores, "the served champion's training rows (the final "
+                          "cohort's landmark rows) and its risks at the data cutoff")  # fmt: skip
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -246,13 +306,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     from trialpulse.ingest.history import refuse_on_a_runner
 
     parser = argparse.ArgumentParser(description="The drift reference (ADR 0076).")
-    parser.add_argument("step", choices=("reference",))
-    parser.parse_args(argv)
+    parser.add_argument("step", choices=("reference", "training-rows"))
+    args = parser.parse_args(argv)
     refuse_on_a_runner()  # the reference is made from the dataset's rows (ADR 0040)
-    reference = make_reference(load_project_config())
-    REFERENCE_PATH.write_text(json.dumps(reference, indent=1) + "\n", encoding="utf-8")
+    cfg = load_project_config()
+    if args.step == "reference":
+        reference, path = make_reference(cfg), REFERENCE_PATH
+    else:
+        reference = training_rows_reference(cfg)
+        path = REPO_ROOT / "data" / "drift" / "training_rows_reference.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(reference, indent=1) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in reference.items() if k != "columns"}, indent=2))
-    print(f"{len(reference['columns'])} columns written to {REFERENCE_PATH.name}")
+    print(f"{len(reference['columns'])} columns written to {path.name}")
     return 0
 
 
