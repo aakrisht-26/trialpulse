@@ -2525,7 +2525,7 @@ Layer 5a compares `risk_12m` and `risk_24m` within 1e-12 (ADR 0034's reproductio
 
 - The replay model: M4 with the tuned settings fitted as of 2023-01-01 like a walk-forward origin: 239,921 trials, 1,052,557 landmark rows, 3,027,077 intervals, 35,064 feature rows the main build lacked, 1,536 rounds, fit 566 s (689 s in all); MLflow run c70cbb7c, tagged replay, never registered.
 - Scores: all 78 Fridays from 2023-01-06 to 2024-06-28, about 77,000 to 81,000 trials a date, 46 to 162 s a date, resumable quarterly chunks of 20 to 26 minutes.
-- Grades (local Postgres; 1,560 rows; status reversals left out): 12-month AUC mean 0.7521 (0.7371 to 0.7598 over the dates), calibration slope 0.874; 24-month AUC 0.7380 (0.7304 to 0.7425), slope 0.848; flagged trials 0.7452 at 12 months. Monitoring evidence of the champion's method, never a registered result. **Waiting for Neon:** `uv run python -m trialpulse.monitor.replay grade --target neon`.
+- Grades (local Postgres; 1,560 rows; status reversals and trials ended by the prediction date left out, after the review): 12-month AUC mean 0.7506 (0.7356 to 0.7583 over the dates), calibration slope 0.869; 24-month AUC 0.7363 (0.7290 to 0.7405), slope 0.842; flagged trials 0.7441 at 12 months; about 60,900 rows a date. Monitoring evidence of the champion's method, never a registered result. The local screenshot was taken before the review's fixes (12-month mean 0.7521 then). **Waiting for Neon:** `uv run python -m trialpulse.monitor.replay grade --target neon`.
 
 ### Part 3: the Model health page and its endpoints
 
@@ -2546,6 +2546,27 @@ Layer 5a compares `risk_12m` and `risk_24m` within 1e-12 (ADR 0034's reproductio
 ### Part 6: alerts (ADR 0081)
 
 One GitHub issue per kind ("Alert: <kind>", opened or reused) from the daily job: watermark lag over 3 days, quarantine over 1% of a run's records, drift on over 20% of features, the latest matured live 12-month AUC below 0.7122 (the lowest registered lower bound). Thresholds in config/project.yaml (`alerts`).
+
+### The review (two reviewers, 2026-11-17)
+
+Two independent reviewers with distinct lenses (numbers and point-in-time; operations, contracts and documents), each with mutation tests in a worktree; every finding verified by me before acting.
+
+| Finding | Verdict | Done |
+| --- | --- | --- |
+| N1 (high): an open trial censored at the data date itself got no weight in partial-horizon grades and on the horizon's last day (the gate's window end): AUC of stops against completions only | Confirmed (synthetic: 0.9652 against the true 0.9978) | Open trials censored at the end of the data date; a test through `live_outcomes` that fails on the old code (`3bd5b9a`) |
+| N2 (medium): the replay and the window kept rows whose trial the final cohort had ended or censored by the prediction date (1,431,639 of 6,181,236 replay rows) | Confirmed (the landmark rows leave them out) | Left out and counted; replay regraded locally: 12-month AUC 0.7521 to 0.7506 (`3bd5b9a`) |
+| N3 (low): a live lapse is final in grading, unlike ADR 0014's cohort rule | A difference ADR 0077 states | None |
+| N4 and F1 (low): "53 features" in the drift module's text | Confirmed (CLAUDE.md was already current) | `6485d33` |
+| F3 (high): the challenger's run did not log meta.json, so a by-hand promotion would break the daily fetch | Confirmed (`retrain.py` logged `meta["files"]` only) | Logged with the bundle; tested (`a231310`) |
+| F4 (medium): an error in the Alerts step failed a successful daily run | Confirmed | `continue-on-error`; `always()` on the step and the job tested (mutant M6 survived before) (`fe4f84c`) |
+| F6 (medium): CLAUDE.md's Step 17 verify commands name modules and a workflow that do not exist | Confirmed | ADR 0082, proposed for Aakrisht (`6485d33`) |
+| F2 (medium): the masking of unexpected errors missed IP literals, libpq's server names, keyword passwords, user:password@host, onrender.com | Confirmed | Masked, each form tested (`718bd82`) |
+| F5 (low): the network guard missed psycopg's C sockets and asyncio's Windows loop for IP literals | Confirmed (the reviewer's probe) | Both guarded and tested; UDP and gethostbyname stated as outside (`d80e041`) |
+| M3 (low): migration 0007's grant to the API role is untested | Confirmed; the role's default privileges cover the views too | None |
+| Alert issues get about two comments a day while open (two crons) | Confirmed | None; noted for Aakrisht |
+| Drift atom threshold mutant not caught in the main environment | The Evidently test (drift environment, CI) covers the method | None |
+
+**The replay check (Aakrisht's item 4), by the numbers reviewer:** no label or feature after any prediction date (`score()` reads versions posted by the date, the sponsor class as of the date, outcomes only after it), and a training cutoff of 2023-01-01 (the as-of-origin cohort, early stopping inside it, the walk-forward guard refusing anything later). Pooled 12-month AUC over the 78 dates with a 95% cluster bootstrap by trial (200 resamples, censoring weights held at the full data's), trials ended by the prediction date left out: all 0.7507 (0.7441 to 0.7561), flagged 0.7439 (0.7322 to 0.7548), unflagged 0.7532 (0.7457 to 0.7597). By landmark index (unflagged): 0.7116 at index 0, rising to 0.7571 at 5, 0.7395 at 6. Why it sits above the registered 0.72 to 0.73: index 0 alone (0.712) is close to them; pooling trial ages raises the AUC, since the early-stop rate climbs with age (IPCW rate 0.019 at index 0 against about 0.05 at indexes 4 to 6); features are computed on the scoring date, not frozen at the landmark (ADR 0034); the period is 2023 to 2024; index 6 holds 30% of the rows. It stays monitoring evidence.
 
 ### Decisions made on my own (flagged)
 
