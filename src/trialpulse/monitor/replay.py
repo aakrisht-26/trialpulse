@@ -215,7 +215,8 @@ def predictions() -> pd.DataFrame:
         raise RefusedError("no replay scores yet; run the score step")
     frame = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
     frame = frame.rename(columns={"as_of_date": "prediction_date"})
-    outcomes = pd.read_parquet(OUTCOMES_PATH, columns=["trial_id", "event", "event_date"])
+    outcomes = pd.read_parquet(OUTCOMES_PATH,
+                               columns=["trial_id", "event", "event_date", "reversal"])  # fmt: skip
     return grading.cohort_outcomes(frame, outcomes)
 
 

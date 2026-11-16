@@ -69,13 +69,17 @@ def test_a_metric_without_cases_is_none() -> None:
     rows = _predictions().assign(event=2)
     grades = grading.grade(rows, dt.date(2026, 9, 25), "live", 10, 0.1)
     assert _top(grades, 12)["auc"] is None
-    assert grading.as_records(grades)[0][12] is None or True  # NaN never reaches the database
-    assert all(v is None or v == v for r in grading.as_records(grades) for v in r)
+    auc = grading.GRADE_COLUMNS.index("auc")
+    assert grading.as_records(grades)[0][auc] is None  # the 12-month row for every index
+    assert all(v is None or v == v for r in grading.as_records(grades) for v in r)  # no NaN
 
 
-def test_the_source_is_live_or_replay() -> None:
+def test_the_source_is_live_replay_or_the_window_and_only_live_and_replay_are_stored() -> None:
     with pytest.raises(ValueError, match="source"):
         grading.grade(_predictions(), DAY, "test", 10, 0.1)
+    window = grading.grade(_predictions(), dt.date(2026, 9, 25), "window", 10, 0.1)
+    with pytest.raises(ValueError, match="only live and replay"):
+        grading.upsert(object(), window)  # refused before any database call
 
 
 def test_live_outcomes_take_the_first_stop_completion_or_lapse_after_the_prediction() -> None:
@@ -103,12 +107,27 @@ def test_live_outcomes_take_the_first_stop_completion_or_lapse_after_the_predict
     assert out.loc["E", "event"] == 0  # not known yet on the data date
 
 
+def test_live_outcomes_leave_out_a_trial_reopened_by_the_data_date() -> None:
+    predictions = pd.DataFrame({"nct_id": ["F", "G", "H"], "prediction_date": DAY})
+    events = pd.DataFrame([
+        ("F", "TERMINATED", "status", dt.date(2023, 2, 1)),
+        ("F", "RECRUITING", "reopened", dt.date(2023, 4, 1)),  # a reversal: left out
+        ("G", "COMPLETED", "status", dt.date(2023, 3, 1)),
+        ("G", "RECRUITING", "reopened", dt.date(2023, 7, 1)),  # posted after the data date
+        ("H", "WITHDRAWN", "status", dt.date(2023, 2, 1)),
+    ], columns=["nct_id", "to_status", "kind", "effective_date"])  # fmt: skip
+    out = grading.live_outcomes(predictions, events, dt.date(2023, 6, 1)).set_index("nct_id")
+    assert list(out.index) == ["G", "H"]
+    assert (out.loc["G", "event"], out.loc["H", "event"]) == (2, 1)
+
+
 def test_cohort_outcomes_are_follow_up_from_the_prediction_date() -> None:
-    predictions = pd.DataFrame({"nct_id": ["A", "B"], "prediction_date": DAY})
-    outcomes = pd.DataFrame({"trial_id": ["A"], "event": [1],
-                             "event_date": [pd.Timestamp("2023-02-05")]})  # fmt: skip
+    predictions = pd.DataFrame({"nct_id": ["A", "B", "C"], "prediction_date": DAY})
+    outcomes = pd.DataFrame({"trial_id": ["A", "C"], "event": [1, 1],
+                             "event_date": [pd.Timestamp("2023-02-05")] * 2,
+                             "reversal": [False, True]})  # fmt: skip
     out = grading.cohort_outcomes(predictions, outcomes)
-    assert list(out["nct_id"]) == ["A"]  # no outcome row: left out
+    assert list(out["nct_id"]) == ["A"]  # B has no outcome row, C a status reversal
     assert out["time_days"].iloc[0] == 30.0
 
 

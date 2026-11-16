@@ -13,6 +13,10 @@ date), IPCW Brier score, calibration slope and intercept, lift at 10%. A predict
 matured when the data date is at least its horizon after it; before that, the metrics are
 partial-horizon, at the follow-up so far (Section 14). A metric that cannot be computed (no
 case, no control, too few rows) is None.
+
+A trial with a status reversal (a terminal status later replaced by an open one) is left out
+of every grade, as Section 6 leaves it out of evaluation: on the live path, a `reopened`
+event posted by the data date; on the replay, the final cohort's `reversal` flag.
 """
 
 import datetime as dt
@@ -32,6 +36,9 @@ HORIZONS = (12, 24)
 GROUPS = ("all", "flagged")
 STOP_STATUSES = ("TERMINATED", "WITHDRAWN")
 COMPLETE_STATUS = "COMPLETED"
+REOPENED = "reopened"  # trialpulse.live.state.REOPENED: a closed trial shows an open status
+STORED_SOURCES = ("live", "replay")  # what monitoring.graded_predictions holds (ADR 0079)
+WINDOW = "window"  # the retrain's comparison of two models (ADR 0080), never stored
 GRADE_COLUMNS = (
     "prediction_date", "horizon_months", "landmark_index", "row_group", "model_version",
     "source", "n_rows", "n_early_stop", "n_completed", "n_censored", "n_open", "mean_risk",
@@ -61,8 +68,8 @@ def grade(
     top_fraction: float,
 ) -> pd.DataFrame:
     """The aggregate rows of `predictions` (see the module text)."""
-    if source not in ("live", "replay"):
-        raise ValueError("a grade's source is 'live' or 'replay'")
+    if source not in (*STORED_SOURCES, WINDOW):
+        raise ValueError("a grade's source is 'live', 'replay' or 'window'")
     out: list[dict[str, Any]] = []
     for (day, model), rows in predictions.groupby(["prediction_date", "model_version"], sort=True):
         day = pd.Timestamp(day).date()
@@ -120,9 +127,13 @@ def live_outcomes(
 ) -> pd.DataFrame:
     """`predictions` with each one's outcome from `live.outcome_events` (ADR 0077): the first
     status change after the prediction date to TERMINATED or WITHDRAWN (1) or COMPLETED (2),
-    or a lapse exit (censored at its date); else censored at `data_date`."""
+    or a lapse exit (censored at its date); else censored at `data_date`. A trial with a
+    `reopened` event (a status reversal) posted by `data_date` is left out (Section 6)."""
     by_trial: dict[str, list[tuple[dt.date, int]]] = {}
+    reversed_trials: set[str] = set()
     for e in events.sort_values("effective_date").itertuples(index=False):
+        if e.kind == REOPENED and pd.Timestamp(e.effective_date).date() <= data_date:
+            reversed_trials.add(str(e.nct_id))
         code = None
         if e.kind == "status" and e.to_status in STOP_STATUSES:
             code = EVENT_STOP
@@ -134,24 +145,27 @@ def live_outcomes(
             by_trial.setdefault(str(e.nct_id), []).append(
                 (pd.Timestamp(e.effective_date).date(), code)
             )
+    kept = predictions[~predictions["nct_id"].astype(str).isin(reversed_trials)]
     times, codes = [], []
-    for nct, day in zip(predictions["nct_id"], predictions["prediction_date"], strict=True):
+    for nct, day in zip(kept["nct_id"], kept["prediction_date"], strict=True):
         day = pd.Timestamp(day).date()
         first = next(((d, c) for d, c in by_trial.get(str(nct), []) if d > day), None)
         end, code = first if first and first[0] <= data_date else (data_date, 0)
         times.append(_days(day, end))
         codes.append(code)
-    return predictions.assign(time_days=times, event=codes)
+    return kept.assign(time_days=times, event=codes)
 
 
 def cohort_outcomes(predictions: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
-    """`predictions` with each one's outcome from the final cohort (the replay, ADR 0078):
-    the trial's event and its date, or its censoring date, as follow-up from the prediction.
-    A prediction whose trial has no outcome row is left out."""
+    """`predictions` with each one's outcome from a final cohort (the replay, ADR 0078, and
+    the retrain's window, ADR 0080): the trial's event and its date, or its censoring date,
+    as follow-up from the prediction. A prediction whose trial has no outcome row, or whose
+    trial has a status reversal (`reversal`, Section 6), is left out."""
+    kept = outcomes.loc[~outcomes["reversal"].fillna(False).astype(bool),
+                        ["trial_id", "event", "event_date"]]  # fmt: skip
     merged = predictions.merge(
-        outcomes[["trial_id", "event", "event_date"]].rename(columns={"trial_id": "nct_id"}),
-        on="nct_id", how="inner",
-    )  # fmt: skip
+        kept.rename(columns={"trial_id": "nct_id"}), on="nct_id", how="inner"
+    )
     start = pd.to_datetime(merged["prediction_date"])
     end = pd.to_datetime(merged["event_date"])
     return merged.assign(time_days=(end - start).dt.days.astype(float),
@@ -178,6 +192,8 @@ def upsert(cur: Any, grades: pd.DataFrame) -> int:
     """Write grades to `monitoring.graded_predictions`, replacing rows with the same key."""
     if grades.empty:
         return 0
+    if not set(grades["source"]) <= set(STORED_SOURCES):
+        raise ValueError("only live and replay grades are stored (ADR 0079)")
     columns = ", ".join(GRADE_COLUMNS)
     marks = ", ".join(["%s"] * len(GRADE_COLUMNS))
     key = "prediction_date, horizon_months, landmark_index, row_group, model_version, source"
