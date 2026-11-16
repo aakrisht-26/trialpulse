@@ -173,3 +173,63 @@ def test_nullable_live_columns_become_the_references_kinds() -> None:
     assert frame["healthy_volunteers"].tolist() == ["True", None]
     assert frame["n_versions"].iloc[0] == 1.0
     assert np.isnan(frame["n_versions"].iloc[1])
+
+
+def test_a_position_is_the_reference_quantile_of_a_value() -> None:
+    column = drift.summarize(pd.Series(np.arange(1000, dtype=float)))  # binned, uniform
+    found = drift.position(column, pd.Series([250.0, 500.0, 749.0]))
+    assert found.tolist() == pytest.approx([0.25, 0.5, 0.749], abs=0.002)
+
+
+def test_a_value_on_a_point_mass_sits_at_the_middle_of_its_mass() -> None:
+    exact = drift.summarize(pd.Series(np.repeat(np.arange(30.0), 10)))  # 30 values, 1/30 each
+    assert "values" in exact
+    found = drift.position(exact, pd.Series([0.0, 5.0, 29.0, 5.5]))
+    assert found.tolist() == pytest.approx([1 / 60, 5 / 30 + 1 / 60, 1 - 1 / 60, 6 / 30])
+    atoms = drift.summarize(pd.Series(np.r_[np.full(400, 65.0), np.linspace(0, 100, 601)]))
+    assert 65.0 in atoms["atoms"]
+    below = 0.6 * 0.65  # the spread rows under 65 (about 390 of 1001)
+    assert drift.position(atoms, pd.Series([65.0])).iloc[0] == pytest.approx(
+        below + 0.4 / 2, abs=0.01)  # fmt: skip
+
+
+def test_values_outside_the_reference_range_are_0_or_1_and_missing_stays_missing() -> None:
+    column = drift.summarize(pd.Series(np.arange(1000, dtype=float)))
+    found = drift.position(column, pd.Series([-5.0, 10_000.0, np.nan]))
+    assert found.iloc[:2].tolist() == [0.0, 1.0]
+    assert np.isnan(found.iloc[2])
+
+
+def test_only_numeric_columns_with_more_than_20_values_go_by_position() -> None:
+    few = drift.summarize(pd.Series(np.repeat(np.arange(20.0), 5)))
+    more = drift.summarize(pd.Series(np.repeat(np.arange(21.0), 5)))
+    cats = drift.summarize(pd.Series(["A", "B"] * 30, dtype=object))
+    assert [drift.by_position(c) for c in (few, more, cats)] == [False, True, False]
+    reference = {"columns": {"more": more, "few": few}}
+    current, sampled = drift.compared_frames(
+        pd.DataFrame({"more": [3.0, 20.0], "few": [3.0, 19.0]}), pd.DataFrame(), reference
+    )
+    assert current["few"].tolist() == [3.0, 19.0]  # exact values, as Evidently handles them
+    assert current["more"].between(0, 1).all()
+    assert sampled["more"].mean() == pytest.approx(0.5, abs=0.01)  # the reference: uniform
+
+
+def test_evidently_sees_a_shift_of_a_long_tailed_column_by_position() -> None:
+    """Evidently bins a column with more than 20 values by width over the joint range, so a
+    long tail hides a shift of the bulk (2026-11-17: `enrollment_count` shifted by half its
+    standard deviation read PSI 0.044); by position it does not (ADR 0076, option C)."""
+    pytest.importorskip("evidently")
+    rng = np.random.default_rng(8)
+    base = pd.Series(np.r_[rng.lognormal(4, 1, 5000).round(), [5e5, 1e6]])
+    reference = {"columns": {"count": drift.summarize(base)}}
+    moved = pd.DataFrame({"count": base + 0.5 * base.std()})
+    kinds = {"count": "numeric"}
+    raw = drift.evidently_drift(drift.current_frame(moved, pd.DataFrame(), reference),
+                                drift.reference_frame(reference), kinds, None)  # fmt: skip
+    current, sampled = drift.compared_frames(moved, pd.DataFrame(), reference)
+    by_position = drift.evidently_drift(current, sampled, kinds, None)
+    assert raw[0]["drifted"] is False  # the blind spot, as found
+    assert by_position[0]["drifted"] is True
+    unchanged, sampled = drift.compared_frames(pd.DataFrame({"count": base}), pd.DataFrame(),
+                                               reference)  # fmt: skip
+    assert drift.evidently_drift(unchanged, sampled, kinds, None)[0]["drifted"] is False

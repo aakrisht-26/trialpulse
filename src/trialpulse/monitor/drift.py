@@ -19,9 +19,12 @@ measurement ADR 0076 records, never as the alert's reference.
 committed): Evidently's data drift preset with the PSI method and its default threshold
 (0.1) on the run's features and risks, against a fixed sample of 5,000 rows drawn without
 randomness from the reference's bins (Evidently compares two tables; the reference exists
-only as shares). One row per column goes to `monitoring.drift`, the HTML report to a file the
-workflow keeps as an artifact. A failure is recorded and returned, never raised: it never
-fails the run, never undoes publication and never blocks the next day.
+only as shares). A numeric column with more than 20 values is compared by position: each value
+becomes its place in the reference distribution (its CDF, `position`), in both tables, since
+Evidently bins such a column by width over the joint range and a long tail hides a shift of
+its bulk (ADR 0076, amended 2026-11-17). One row per column goes to `monitoring.drift`, the
+HTML report to a file the workflow keeps as an artifact. A failure is recorded and returned,
+never raised: it never fails the run, never undoes publication and never blocks the next day.
 
 Evidently lives in the `drift` dependency group (it needs plotly below 6, the dashboard 7);
 it is imported only inside the step.
@@ -53,6 +56,10 @@ DERIVED = ("sponsor_stop_rate",)  # computed after the features, from three that
 PER_DATE = ("open_interventional_trials",)
 ATOM = 0.005  # a value holding at least this share of a continuous column is kept exactly
 SEED = dt.date(2026, 11, 3)  # the rebootstrap's seed date (ADR 0074): the reference's date
+# Evidently cuts a numeric column with more than this many values into equal-width bins over
+# the joint range (its get_binned_data), blind to a shift of a long-tailed column's bulk;
+# such a column is compared as positions in the reference distribution (ADR 0076, option C).
+EXACT_VALUES = 20
 
 
 def drift_columns() -> list[str]:
@@ -135,6 +142,58 @@ def sample(column: Mapping[str, Any], n: int = SAMPLE) -> pd.Series:
     return pd.Series(np.concatenate([numbers, np.full(missing, np.nan)]), dtype=float)
 
 
+def by_position(column: Mapping[str, Any]) -> bool:
+    """Whether a column is compared by position: numeric with more than EXACT_VALUES values
+    (a binned column always has more; it was binned for having more than DISCRETE)."""
+    if column["kind"] != "numeric":
+        return False
+    return "edges" in column or len(column.get("values", [])) > EXACT_VALUES
+
+
+def position(column: Mapping[str, Any], values: pd.Series) -> pd.Series:
+    """Each value's position in the reference distribution, its CDF in [0, 1]: the share of
+    the reference's present values below it, plus half the share of a point mass it sits on
+    (an exact value or an atom); inside a percentile bin the bin's share is spread evenly.
+    A value below the reference's range is 0, above it 1; a missing value stays missing."""
+    x = pd.to_numeric(values, errors="coerce").to_numpy(dtype=np.float64)
+    masses = np.asarray(column.get("values", column.get("atoms", [])), dtype=np.float64)
+    weights = np.asarray(column["shares"] if "values" in column
+                         else column.get("atom_shares", []), dtype=np.float64)  # fmt: skip
+    out = np.zeros(len(x))
+    if len(masses):  # the masses below, and half the mass the value sits on
+        cum = np.r_[0.0, np.cumsum(weights)]
+        left = np.searchsorted(masses, x, side="left")
+        right = np.searchsorted(masses, x, side="right")
+        out += cum[left] + (cum[right] - cum[left]) / 2
+    if "edges" in column and len(column["shares"]):
+        edges = np.asarray(column["edges"], dtype=np.float64)
+        shares = np.asarray(column["shares"], dtype=np.float64)
+        full = np.r_[0.0, np.cumsum(shares)]
+        k = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, len(shares) - 1)
+        width = edges[k + 1] - edges[k]
+        part = np.where(width > 0, (x - edges[k]) / np.where(width > 0, width, 1.0), 1.0)
+        inside = full[k] + shares[k] * np.clip(part, 0.0, 1.0)
+        out = out + np.where(x < edges[0], 0.0, np.where(x >= edges[-1], full[-1], inside))
+    result = np.clip(out, 0.0, 1.0)
+    return pd.Series(np.where(np.isnan(x), np.nan, result), index=values.index, dtype=float)
+
+
+def positions(frame: pd.DataFrame, reference: Mapping[str, Any]) -> pd.DataFrame:
+    """`frame` with every column `by_position` replaced by its positions (option C)."""
+    out = frame.copy()
+    for name, column in reference["columns"].items():
+        if name in out.columns and by_position(column):
+            out[name] = position(column, out[name])
+    return out
+
+
+def compared_frames(features: pd.DataFrame, scores: pd.DataFrame,
+                    reference: Mapping[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:  # fmt: skip
+    """The current table and the reference's sample, as Evidently compares them."""
+    return (positions(current_frame(features, scores, reference), reference),
+            positions(reference_frame(reference), reference))  # fmt: skip
+
+
 def reference_frame(reference: Mapping[str, Any]) -> pd.DataFrame:
     return pd.DataFrame({name: sample(col) for name, col in reference["columns"].items()})
 
@@ -204,8 +263,8 @@ def drift_step(
 
         reference = json.loads(reference_path.read_text(encoding="utf-8"))
         kinds = {name: col["kind"] for name, col in reference["columns"].items()}
-        rows = evidently_drift(current_frame(features, scores, reference),
-                               reference_frame(reference), kinds, html)  # fmt: skip
+        current, sampled = compared_frames(features, scores, reference)
+        rows = evidently_drift(current, sampled, kinds, html)
         n_current = len(features)
         with (
             psycopg.connect(dsn, autocommit=True, connect_timeout=30) as con,

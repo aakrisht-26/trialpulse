@@ -40,4 +40,86 @@ Section 14 asks for a weekly Evidently report on feature and score drift against
 
 **Result.** Against the new reference, the trials served on 2026-11-09: **0 of 52 features drifted** (largest PSI 0.044), neither risk.
 
-**Sensitivity (2026-11-17, asked by Aakrisht before relying on the result): a blind spot, open for his decision.** The same comparison on shifted copies, against the same references: synthetic columns (a normal one, an age-like one with point masses, a categorical one) flag 0 of 3 on another draw and 3 of 3 under a shift of half a standard deviation. The features of the trials served on 2026-11-09 flag 0 of 52 as they are, and 14 of 52 with each of the 22 numeric features shifted by half its standard deviation (whole steps for counts); shifting the two risks by half theirs flags both (PSI 0.149 and 0.476). The 8 numeric features that do not flag even so are long-tailed: `enrollment_count` (shifted by 20,724, PSI 0.044), `n_versions` (by 13, 0.005), `n_versions_recent`, `planned_duration_months` (by 29 months, 0.091), `completion_slip_months`, `primary_completion_slip_months`, `enrollment_target_ratio` and `enrolled_to_first_target_ratio`. The cause is Evidently's PSI itself (0.7.23, `legacy/calculations/stattests/utils.py`, `get_binned_data`): a numeric column with more than 20 values is cut into equal-width bins (`np.histogram_bin_edges(..., bins="sturges")`) over the joint range, so a few extreme values put almost every row in one bin and a shift of the bulk is not seen. A prototype computing PSI on the reference's own bins flags all 22 shifted features, but also 2 sponsor counts on unchanged data (exact atoms catch the daily growth of large sponsors' counts). Not changed: the decision is Aakrisht's.
+## Amendment of 2026-11-17: long-tailed columns compared by position (decided by Aakrisht, option C)
+
+**The cause.** Asked before relying on "0 of 52", a sensitivity check found a blind spot. Under a shift of half a standard deviation, 8 of the 22 numeric features did not flag, among them `enrollment_count` (shifted by 20,724, PSI 0.044), `n_versions` (by 13 versions, 0.005) and `planned_duration_months` (by 29 months, 0.091). Evidently's PSI (0.7.23, `legacy/calculations/stattests/utils.py`, `get_binned_data`) cuts a numeric column with more than 20 distinct values into equal-width bins over the joint range of both tables (`np.histogram_bin_edges(..., bins="sturges")`), though its docstring speaks of quantiles. On a long-tailed column a few extreme values stretch that range, almost every row falls in one bin, and a shift of the bulk is not seen. A column with at most 20 values is compared value by value, which sees shifts.
+
+**Decision.** Before Evidently's PSI, each value of a numeric column with more than 20 distinct values in the reference is replaced by its position in the 2026-11-03 reference distribution: the reference's CDF, the share of its present values below the value, plus half the share of a point mass the value sits on (an exact value or an atom); inside a percentile bin the bin's share is spread evenly; below the reference's range 0, above it 1 (`drift.position`). Both tables are transformed (`compared_frames`): the reference's sample becomes nearly uniform on [0, 1], so Evidently's equal-width bins act as the reference's quantile bins. Columns with at most 20 values keep the exact-value handling; categorical columns are unchanged. The test stays Evidently's PSI at 0.1; the reference file is unchanged (positions come from the shares it already holds). The HTML report shows positions for those columns.
+
+**The bar, on the step's own comparison** (`compared_frames`, then `evidently_drift`, as `drift_step` calls them; real rows: the 88,759 trials served on 2026-11-09, by Step 13's `score()` on parity 5a's warehouse, against the 2026-11-03 reference). Met in full:
+
+| Case | Features flagged | Risks flagged | PSI |
+| --- | --- | --- | --- |
+| Synthetic (normal, age-like with point masses, long-tailed, categorical), another draw | 0 of 4 | | at most 0.0068 |
+| Synthetic, shifted by half a standard deviation (the categorical one's shares moved) | 4 of 4 | | at least 0.1085 |
+| Real, 2026-11-03 reference against 2026-11-09, unchanged | 0 of 52 | 0 of 2 | at most 0.0307 |
+| Real, each of the 22 numeric features shifted by half its standard deviation | 22 of 22 numeric | 0 of 2 | at least 2.007 |
+| Real, both risks shifted by half their standard deviation | 0 of 52 | 2 of 2 | at least 4.497 |
+
+The daily growth of the sponsor counts, which exact matching had read as drift, stays below 0.002. PSI per column (flagged in bold):
+
+| Column | Compared | Unchanged | Numeric features shifted | Risks shifted |
+| --- | --- | --- | --- | --- |
+| `allocation` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_model` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `primary_purpose` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `masking` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `healthy_volunteers` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `sex` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `minimum_age_years` | by position | 0.0003 | **8.6105** | 0.0003 |
+| `maximum_age_years` | by position | 0.0007 | **4.0866** | 0.0007 |
+| `enrollment_count` | by position | 0.0005 | **8.6980** | 0.0005 |
+| `planned_duration_months` | by position | 0.0001 | **2.0070** | 0.0001 |
+| `start_anticipated` | categories | 0.0004 | 0.0004 | 0.0004 |
+| `registered_after_start` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `registration_lag_months` | by position | 0.0006 | **5.4352** | 0.0006 |
+| `registration_year` | exact values | 0.0001 | **14.7255** | 0.0001 |
+| `title_phase` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `n_interventions` | by position | 0.0020 | **31.7278** | 0.0020 |
+| `n_intervention_types` | exact values | 0.0001 | **32.2379** | 0.0001 |
+| `intervention_drug` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_procedure` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_other` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_biological` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_device` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_behavioral` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_radiation` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_dietary_supplement` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_diagnostic_test` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_genetic` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `intervention_combination_product` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `status` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `n_versions` | by position | 0.0002 | **8.9061** | 0.0002 |
+| `n_versions_recent` | by position | 0.0001 | **12.9282** | 0.0001 |
+| `months_since_last_update` | by position | 0.0307 | **2.7993** | 0.0307 |
+| `primary_completion_slip_months` | by position | 0.0008 | **6.8729** | 0.0008 |
+| `completion_slip_months` | by position | 0.0006 | **7.0576** | 0.0006 |
+| `start_slip_months` | by position | 0.0002 | **6.7854** | 0.0002 |
+| `enrollment_closed` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `enrollment_target_ratio` | by position | 0.0000 | **11.1835** | 0.0000 |
+| `enrolled_to_first_target_ratio` | by position | 0.0032 | **4.5012** | 0.0032 |
+| `ever_suspended` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `currently_suspended` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `start_overdue` | categories | 0.0002 | 0.0002 | 0.0002 |
+| `primary_completion_overdue` | categories | 0.0002 | 0.0002 | 0.0002 |
+| `primary_completion_reached` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `months_since_status_verified` | by position | 0.0060 | **2.4318** | 0.0060 |
+| `sponsor_class` | categories | 0.0002 | 0.0002 | 0.0002 |
+| `organization_class` | categories | 0.0001 | 0.0001 | 0.0001 |
+| `sponsor_has_identity` | categories | 0.0000 | 0.0000 | 0.0000 |
+| `sponsor_prior_registrations` | by position | 0.0014 | **4.7617** | 0.0014 |
+| `sponsor_prior_ended` | by position | 0.0011 | **5.6346** | 0.0011 |
+| `sponsor_prior_stopped` | by position | 0.0004 | **6.5413** | 0.0004 |
+| `landmark_index` | exact values | 0.0003 | **14.7223** | 0.0003 |
+| `months_since_t0` | exact values | 0.0003 | **14.7223** | 0.0003 |
+| `risk_12m` | by position | 0.0001 | 0.0001 | **4.4967** |
+| `risk_24m` | by position | 0.0000 | 0.0000 | **11.2200** |
+
+| Synthetic column | Another draw | Shifted by half a standard deviation |
+| --- | --- | --- |
+| `normal` | 0.0068 | **0.2573** |
+| `age` | 0.0067 | **1.8830** |
+| `long_tail` | 0.0061 | **8.5892** |
+| `kind` | 0.0003 | **0.1085** |
+
+Rejected alternatives: PSI on the reference's own bins outside Evidently (flagged all 22 shifted features, but also 2 sponsor counts on unchanged data, since exact matching caught their daily growth); keeping the blind spot with a documented note.
