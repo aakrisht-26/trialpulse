@@ -162,3 +162,30 @@ uv run python -m trialpulse.live.backup restore --from data/backups/2026-11-10
 ```
 
 Expected: `"equal": true` and exit code 0.
+
+## Part 5: the quarterly retrain
+
+ADR 0080: the retrain and its promotion gate run on the laptop (the dataset stays there, ADR 0040). The command is `uv run python -m trialpulse.monitor.retrain --target neon`: a challenger fitted on the pinned, gap and exported live rows through the latest data date, both models scored on that date, the gate's decision logged to MLflow and to `monitoring.promotions`. Until a window of matured 12-month outcomes exists after the champion's training cutoff (about November 2027), every decision is "not promoted" with that reason. It takes about half an hour and about 8 GB of memory, so the task does not start on battery. The task runs it through `scripts/retrain_quarterly.ps1`, which logs to `data/logs/retrain_<date>.log` and, if the task starts late inside the daily job's span (21:30 to 08:00 UTC), waits until 08:00 UTC.
+
+**When:** the first Saturday of January, April, July and October at 19:00 India time (13:30 UTC), outside the daily job's span and a day before the Sunday backup. `StartWhenAvailable` runs a missed retrain when the laptop is next on and plugged in.
+
+Register the task (PowerShell, once, as Aakrisht; no administrator rights needed):
+
+```
+schtasks /Create /TN "TrialPulse quarterly retrain" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\trialpulse\scripts\retrain_quarterly.ps1" /SC MONTHLY /MO FIRST /D SAT /M JAN,APR,JUL,OCT /ST 19:00
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 12)
+Set-ScheduledTask -TaskName "TrialPulse quarterly retrain" -Settings $settings
+```
+
+The settings keep Windows' default of not starting on battery. The 12-hour time limit covers the longest wait of a late start (from 21:30 to 08:00 UTC, 10.5 hours) plus the retrain itself.
+
+See it, run it now, see its last log, and remove it:
+
+```
+Get-ScheduledTask -TaskName "TrialPulse quarterly retrain" | Get-ScheduledTaskInfo
+Start-ScheduledTask -TaskName "TrialPulse quarterly retrain"
+Get-Content (Get-ChildItem E:\trialpulse\data\logs\retrain_*.log | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+Unregister-ScheduledTask -TaskName "TrialPulse quarterly retrain" -Confirm:$false
+```
+
+`LastTaskResult` 0 is a retrain whose decision was logged. The laptop must reach Neon on port 5432: on a network that blocks it, the retrain fails at its first read and logs a connection timeout; run it again from another network.
