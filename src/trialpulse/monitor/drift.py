@@ -4,16 +4,16 @@
     uv run python -m trialpulse.monitor.drift training-rows  (laptop: the one-off measurement)
 
 **The reference** is an aggregate made on the laptop (ADR 0040): for each feature M4 reads as
-the live path computes it (53 of its 54; the 54th, `sponsor_stop_rate`, is computed after from
-three that are checked), over the trials served at the seed date 2026-11-03 (ADR 0076 as
-amended on 2026-11-16: Step 13's `score()` on the rebootstrap's combined warehouse), the share
-missing and the shares of each category, of each value (a numeric column with at most 100
-values), or of 100 percentile bins (a continuous column; fewer bins made the sample's tails
-differ enough to read as drift on unchanged data); the same for the risks served that day. No
-row leaves the laptop: only values, edges and shares are committed. The first reference, the
-champion's training rows (2008 to 2026), differed from any day's open trials by construction;
-`training-rows` writes it to data/drift/ for the measurement ADR 0076 records, never as the
-alert's reference.
+the live path computes it (52 of its 54: `sponsor_stop_rate` is computed after from three that
+are checked, and `open_interventional_trials` is one count per date), over the trials served at
+the seed date 2026-11-03 (ADR 0076 as amended on 2026-11-16: Step 13's `score()` on the
+rebootstrap's combined warehouse), the share missing and the shares of each category, of each
+value (a numeric column with at most 100 values), or of 100 percentile bins (a continuous
+column; fewer bins made the sample's tails differ enough to read as drift on unchanged data);
+the same for the risks served that day. No row leaves the laptop: only values, edges and shares
+are committed. The first reference, the champion's training rows (2008 to 2026), differed from
+any day's open trials by construction; `training-rows` writes it to data/drift/ for the
+measurement ADR 0076 records, never as the alert's reference.
 
 **The step** (`drift_step`, called by the daily job after a full run's publication has
 committed): Evidently's data drift preset with the PSI method and its default threshold
