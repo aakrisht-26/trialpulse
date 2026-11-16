@@ -32,7 +32,7 @@ FORBIDDEN_MODULES = (
     "huggingface_hub",
 )
 FORBIDDEN_TEXT = ("hf://", "huggingface.co", "data/raw", "HF_TOKEN")
-ACTIONS = ("actions/checkout", "astral-sh/setup-uv")
+ACTIONS = ("actions/checkout", "astral-sh/setup-uv", "actions/upload-artifact")
 
 
 def _load(path: Path) -> dict[str, Any]:

@@ -314,8 +314,8 @@ def run_daily(
             store.renew(cur, report.run_id)
             if sponsors.through_day < day - dt.timedelta(days=1):
                 raise RefusedError(f"the sponsor pass is behind: through {sponsors.through_day}")
-            rescored, file = publish_day(cur, cfg, rules, day, sponsors, model, full, dsn,
-                                         report.run_id)  # fmt: skip
+            rescored, file, published = publish_day(cur, cfg, rules, day, sponsors, model, full,
+                                               dsn, report.run_id)  # fmt: skip
             with con.transaction():
                 store.renew(cur, report.run_id)
                 if file is not None:
@@ -327,6 +327,19 @@ def run_daily(
             report.counts["trials_rescored"] = rescored
             unnamed = display.unnamed(cur)
             report.counts["details"].update(display_pruned=pruned, served_without_display=unnamed)
+
+            # 3b. Drift, after publication has committed (ADR 0076): a full run only, and a
+            # failure is recorded and flagged for its issue, never raised
+            if full and published.features is not None and len(published.scores):
+                with keep_alive(con, live.keepalive_seconds):  # Evidently computes
+                    drift = drift_step(dsn, day, report.run_id, published.features,
+                                       published.scores,
+                                       lease=lambda c: store.renew(c, report.run_id),
+                                       html=drift_report_path(day))  # fmt: skip
+                report.counts["details"]["drift"] = drift
+                timings["drift"] = drift["seconds"]
+                if "failed" in drift:
+                    _job_output("drift_failed", drift["failed"])
 
             # 4. After a full run, the tables it rewrote are compacted (ADR 0068) -------------
             if full:
@@ -398,6 +411,7 @@ class DayScores:
     scores: pd.DataFrame
     unscored: pd.DataFrame
     rescored: int  # the scored trials of the scope
+    features: pd.DataFrame | None = None  # the scored trials' features (the drift step reads them)
 
 
 @dataclass
@@ -465,7 +479,7 @@ def score_day(
         columns={"trial_id": "nct_id"}
     )
     unscored.insert(1, "as_of_date", np.datetime64(day, "D"))
-    return DayScores(people, chosen, scores, unscored.reset_index(drop=True), len(scored))
+    return DayScores(people, chosen, scores, unscored.reset_index(drop=True), len(scored), features)
 
 
 def publish_day(
@@ -478,10 +492,10 @@ def publish_day(
     full: bool,
     dsn: str,
     run_id: int,
-) -> tuple[int, tuple[bytes, int] | None]:
+) -> tuple[int, tuple[bytes, int] | None, DayScores]:
     """Score the run's scope on `day` (`score_day`) and publish it; returns the trials
-    rescored and, on a full run, the month's score file and its row count for the caller to
-    store."""
+    rescored, on a full run the month's score file and its row count for the caller to
+    store, and what was scored (the drift step reads a full run's features and risks)."""
     done = score_day(cur, cfg, rules, day, sponsors, model, full)
     scores, people = done.scores, done.people
     # Publication writes on its own connection, and the month's file is compressed here:
@@ -495,7 +509,27 @@ def publish_day(
             classes = dict(zip(people["trial_id"], people["sponsor_class"], strict=True))
             with_class = scores.assign(sponsor_class=scores["nct_id"].map(classes))
             file = (score_file(with_class), len(scores))
-    return done.rescored, file
+    return done.rescored, file, done
+
+
+def drift_step(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """The drift step of ADR 0076 (`monitor.drift.drift_step`); a failure to import it is a
+    failure of the step, never of the run."""
+    try:
+        from trialpulse.monitor.drift import drift_step as step
+    except Exception as exc:
+        return {"failed": type(exc).__name__, "seconds": 0.0}
+    return step(*args, **kwargs)
+
+
+def drift_report_path(day: dt.date) -> Path:
+    """Where the HTML report goes: the runner's temporary folder (the workflow keeps it as an
+    artifact), else data/drift/ on the laptop."""
+    import os
+
+    base = os.environ.get("RUNNER_TEMP")
+    folder = Path(base) / "drift" if base else Path("data") / "drift"
+    return folder / f"drift_{day.isoformat()}.html"
 
 
 def _empty_scores() -> pd.DataFrame:

@@ -1076,3 +1076,68 @@ def test_a_full_run_survives_neons_cut_of_a_quiet_connection(
         assert con.execute("SELECT data_as_of FROM serving.data_status").fetchone() == (DAY,)
         assert con.execute("SELECT status FROM monitoring.pipeline_runs WHERE job = 'daily'"
                            ).fetchall() == [("succeeded",)]  # fmt: skip
+
+
+# ADR 0076: the drift step of a full run --------------------------------------------------------
+
+
+def _drift_rows(dsn: str) -> list[tuple[str, bool]]:
+    with psycopg.connect(dsn) as con:
+        return con.execute(
+            "SELECT kind, drifted FROM monitoring.drift ORDER BY column_name"
+        ).fetchall()
+
+
+def test_a_full_run_writes_the_drift_summary_after_publication(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from trialpulse.monitor import drift
+
+    _bootstrap(dsn)
+    published: list[int] = []
+
+    def evidently_stand_in(current: Any, reference: Any, kinds: Any, html: Any) -> list[Any]:
+        with psycopg.connect(dsn) as other:  # what another session sees while it runs
+            published.append(other.execute(
+                "SELECT count(*) FROM serving.data_status").fetchone()[0])  # fmt: skip
+        assert len(current) > 0
+        return [{"column": c, "statistic": 0.3 if c == "n_versions" else 0.01,
+                 "threshold": 0.1, "drifted": c == "n_versions"} for c in kinds]  # fmt: skip
+
+    monkeypatch.setattr(drift, "evidently_drift", evidently_stand_in)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    summary = report.counts["details"]["drift"]
+    assert report.status == "succeeded"
+    assert published == [1]  # publication had committed before the step ran
+    assert summary["columns"] == 55
+    assert summary["features_drifted"] == 1
+    assert "drift" in report.counts["details"]["seconds"]
+    rows = _drift_rows(dsn)
+    assert len(rows) == 55
+    assert sum(kind == "score" for kind, _ in rows) == 2
+
+
+def test_a_failing_drift_step_never_fails_the_run(
+    dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from trialpulse.monitor import drift
+
+    _bootstrap(dsn)
+
+    def broken(*args: Any) -> list[Any]:
+        raise RuntimeError("Evidently could not run")
+
+    monkeypatch.setattr(drift, "evidently_drift", broken)
+    outputs = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+    report = daily.run_daily(CFG, dsn, SECRET, _api(), MODEL)
+    assert report.status == "succeeded"
+    assert report.exit_code == 0
+    assert report.counts["details"]["drift"]["failed"] == "RuntimeError"
+    assert "drift_failed=RuntimeError" in outputs.read_text(encoding="utf-8")
+    assert _drift_rows(dsn) == []
+    with psycopg.connect(dsn) as con:
+        assert con.execute("SELECT count(*) FROM serving.data_status").fetchone() == (1,)
+    # the next day is not blocked: a second run of the same day is the usual no-op
+    assert daily.run_daily(CFG, dsn, SECRET, _api(), MODEL).status == "noop"
