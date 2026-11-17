@@ -45,7 +45,8 @@ def test_a_public_memo_is_shown_beside_the_score_it_was_checked_against(
     assert memo["paragraphs"] == PARAGRAPHS
     assert memo["as_of_date"] == seeding.DAY.isoformat()
     assert (memo["model"], memo["prompt_version"]) == ("openai/gpt-oss-120b", "memo_v1")
-    assert "checked against them" in memo["note"]
+    assert "checked against the stored values" in memo["note"]
+    assert "fixed template" in memo["note"]
     assert "not why a trial stops" in memo["note"]
 
 

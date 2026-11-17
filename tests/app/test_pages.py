@@ -483,12 +483,12 @@ def test_model_health_without_a_statement_or_a_data_date(stub_api: StubApi) -> N
 
 MEMO = {
     "label": "AI-written summary of the stored drivers and record changes",
-    "note": "Written by a language model from this trial's stored values; every number and "
-    "date was checked against them.",
+    "note": "The second paragraph is written by a language model; every number and date was "
+    "checked against the stored values.",
     "as_of_date": "2026-09-25",
     "generated_date": "2026-09-26",
     "model": "openai/gpt-oss-120b",
-    "prompt_version": "memo_v1",
+    "prompt_version": "memo_v2",
     "paragraphs": ["First paragraph.", "Second paragraph.", "Third paragraph."],
 }
 
@@ -508,6 +508,6 @@ def test_a_served_memo_is_a_collapsed_labeled_section_with_the_notice(stub_api: 
     texts = [m.value for m in section.markdown]
     assert texts == MEMO["paragraphs"]
     captions = " ".join(c.value for c in section.caption)
-    assert "checked against them" in captions
-    assert "openai/gpt-oss-120b (memo_v1) for the score of 2026-09-25" in captions
+    assert "checked against the stored values" in captions
+    assert "openai/gpt-oss-120b (memo_v2) for the score of 2026-09-25" in captions
     assert "Research demo. Not medical advice. Not for patient decision-making." in captions

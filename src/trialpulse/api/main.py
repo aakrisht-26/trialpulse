@@ -103,8 +103,10 @@ def _envelope(api: Api | None, status: int, detail: str,
 
 MEMO_LABEL = "AI-written summary of the stored drivers and record changes"
 MEMO_NOTE = (
-    "Written by a language model from this trial's stored values; every number and date was "
-    "checked against them, and a memo that failed the check is never shown. A driver says what "
+    "The first and third paragraphs are built from this trial's stored values by a fixed "
+    "template; the second, one sentence per driver, is written by a language model and checked "
+    "sentence by sentence against the stored drivers. Every number and date was checked against "
+    "the stored values, and a memo that failed the check is never shown. A driver says what "
     "moved the model's score, not why a trial stops (ADR 0033)."
 )
 
