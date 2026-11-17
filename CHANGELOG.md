@@ -5,7 +5,9 @@ One entry per roadmap step (CLAUDE.md, Section 18), newest first. Dates are the 
 ## Step 18: Documentation and polish (approved 2026-11-17, in progress)
 
 - README brought up to date with the live system, Step 17's monitoring and the current limitations; this changelog.
-- The dashboard's public link waits for its deployment on Streamlit Community Cloud.
+- The dashboard's public link in the README (https://trialpulse-demo.streamlit.app).
+- The drift alert also fires when one of the 5 most important features drifts (ADR 0081, amended 2026-11-17).
+- The 7 packages pip-audit flagged upgraded (streamlit to 1.67.0 with pillow 13); no known vulnerability left.
 
 ## Step 17: Monitoring, retraining and replay (approved 2026-11-10, verified 2026-11-17)
 
@@ -16,7 +18,9 @@ One entry per roadmap step (CLAUDE.md, Section 18), newest first. Dates are the 
 - Alerts as GitHub issues, one per kind (ADR 0081); three read-only monitoring endpoints and the Model health page's new sections.
 - A guard that fails any test making a real network call; error output with addresses masked; a backup task that retries daily and opens an issue on failure.
 
-## Step 16: Dashboard (approved 2026-11-01)
+## Step 16: Dashboard (approved 2026-11-01, live 2026-11-17)
+
+- Deployed on Streamlit Community Cloud on 2026-11-17 at https://trialpulse-demo.streamlit.app; every page checked against the deployed API by `scripts/check_dashboard.py` (7 of 7 pages passed).
 
 - Five Streamlit pages that read only the API: Portfolio, Trial detail, Landscape, Why trials stop and Model health (ADRs 0052 to 0057).
 - One client that waits out a sleeping API and says why, accepts only the API's own answers, and caches them for 15 minutes (ADRs 0054 and 0063).
