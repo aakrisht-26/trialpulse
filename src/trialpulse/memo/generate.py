@@ -10,11 +10,14 @@ One run, in order:
    it needs, their state, display row, amendment markers and versions held since go-live;
 3. chooses the trials (`payload.choose`) and builds their payloads; a stored memo whose payload
    hash and prompt are unchanged is current, and only its `valid_as_of` moves to the score
-   date; a stored memo whose trial is no longer chosen and whose payload changed, or whose
-   trial is no longer scored, is deleted;
+   date; a stored memo whose trial is no longer chosen and whose payload changed, whose trial
+   is no longer scored, or that another prompt version wrote, is deleted;
 4. asks the model for each chosen trial without a current memo, the top 100 first, at most
-   `memo.cap_per_run` calls; each answer goes through the fabrication check (`check.check`),
-   and only a memo that passes is stored, each in its own short transaction (ADR 0058);
+   `memo.cap_per_run` calls; the model writes only the driver sentences (memo_v2), sent only
+   the 12-month drivers (`template.model_request`), and the template adds the first and third
+   paragraphs; each memo goes through the fabrication check (`check.check`), and only a memo
+   that passes is stored, as the normalized text that was checked, each in its own short
+   transaction (ADR 0058);
 5. ends the run row with its counts, rejections by reason, tokens and up to
    `memo.rejected_samples` rejected memos with their reasons (for the review; never served).
 
@@ -23,6 +26,9 @@ rest waits for the next run. Rejections over `memo.rejection_alert_share` of the
 write `memo_alert=rejections` to the step output, and memo.yml opens or reuses an issue. Any
 other failure ends the run row as failed and exits non-zero, and memo.yml opens its failure
 issue. No connection is held while the model answers. GROQ_API_KEY is never printed.
+
+`--dry-run N` reads the same snapshot, asks the model for the first N trials it would ask for,
+checks the memos and prints their tokens and check results; it writes nothing to the database.
 """
 
 import argparse
@@ -39,15 +45,16 @@ from trialpulse.config import MemoConfig, load_project_config
 from trialpulse.features.registry import model_columns
 from trialpulse.memo import check as checks
 from trialpulse.memo import payload as pl
+from trialpulse.memo import template
 
 PROMPTS = Path(__file__).resolve().parent / "prompts"
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {"paragraphs": {"type": "array", "items": {"type": "string"}}},
-    "required": ["paragraphs"],
+    "properties": {"sentences": {"type": "array", "items": {"type": "string"}}},
+    "required": ["sentences"],
     "additionalProperties": False,
 }
-ESTIMATE_TOKENS = 2000  # one memo call, for the per-minute budget
+ESTIMATE_TOKENS = 1500  # one memo call, for the per-minute budget
 
 
 @dataclass
@@ -103,11 +110,12 @@ def load_prompt(cfg: MemoConfig) -> str:
 
 
 def request_body(cfg: MemoConfig, system: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """One chat request: the prompt, and the payload's canonical JSON as the user message."""
+    """One chat request: the prompt, and the payload's 12-month drivers as the user message."""
+    request = template.model_request(payload)
     return {
         "model": cfg.model,
         "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": pl.canonical(payload).decode("utf-8")}],
+                     {"role": "user", "content": pl.canonical(request).decode("utf-8")}],
         "temperature": 0.0,
         "reasoning_effort": cfg.reasoning_effort,
         "include_reasoning": False,
@@ -119,17 +127,18 @@ def request_body(cfg: MemoConfig, system: str, payload: Mapping[str, Any]) -> di
     }  # fmt: skip
 
 
-def paragraphs_of(answer: Mapping[str, Any]) -> list[str] | None:
-    """The memo's paragraphs from a chat completion, or None if it is not the expected JSON."""
+def sentences_of(answer: Mapping[str, Any]) -> list[str] | None:
+    """The model's driver sentences from a chat completion, or None if it is not the expected
+    JSON."""
     try:
         content = answer["choices"][0]["message"]["content"]
         data = json.loads(content)
-        paragraphs = data["paragraphs"]
+        found = data["sentences"]
     except (KeyError, IndexError, TypeError, ValueError):
         return None
-    if not isinstance(paragraphs, list) or not all(isinstance(p, str) for p in paragraphs):
+    if not isinstance(found, list) or not all(isinstance(s, str) for s in found):
         return None
-    return list(paragraphs)
+    return list(found)
 
 
 # Reading ----------------------------------------------------------------------------------
@@ -196,7 +205,8 @@ def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, version: str,
         payloads[nct] = pl.build(scores[nct], inputs.states.get(nct, {}),
                                  inputs.displays.get(nct), inputs.markers.get(nct),
                                  inputs.versions.get(nct, []), reasons, move, features,
-                                 cfg.top_n, cfg.max_record_changes)  # fmt: skip
+                                 cfg.top_n, cfg.max_record_changes,
+                                 cfg.values_held_from)  # fmt: skip
     current: dict[str, dt.date] = {}
     delete: list[str] = []
     for nct, memo in inputs.memos.items():
@@ -204,7 +214,7 @@ def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, version: str,
                 and bytes(memo["payload_hash"]) == pl.payload_hash(payloads[nct]))  # fmt: skip
         if same:
             current[nct] = scores[nct]["as_of_date"]
-        elif nct not in payloads:
+        elif nct not in payloads or memo["prompt_version"] != version:
             delete.append(nct)
     ask = [n for n in payloads if n not in current]
     ask.sort(key=lambda n: (pl.TOP not in payloads[n]["chosen_as"],
@@ -252,6 +262,10 @@ def run_memos(
         tally.n_over_cap = max(0, len(ask) - cfg.cap_per_run)
         for nct in ask[: cfg.cap_per_run]:
             payload = payloads[nct]
+            if not template.drivers_12(payload):  # nothing for the model to write
+                _store(open_db, dsn, payload, checks.check(template.memo(payload, None), payload,
+                       inputs.names), version, cfg, run_id, tally)  # fmt: skip
+                continue
             try:
                 answer = complete(request_body(cfg, system, payload))
             except DailyLimitError as exc:
@@ -268,41 +282,76 @@ def run_memos(
             tally.prompt_tokens += int(usage.get("prompt_tokens") or 0)
             tally.completion_tokens += int(usage.get("completion_tokens") or 0)
             tally.total_tokens += int(usage.get("total_tokens") or 0)
-            paragraphs = paragraphs_of(answer)
-            if paragraphs is None:
+            found = sentences_of(answer)
+            if found is None:
                 tally.reject(["invalid_json"], {"nct_id": nct, "paragraphs": None,
                              "reasons": ["invalid_json"], "details": [], "payload": payload},
                              cfg.rejected_samples)  # fmt: skip
                 continue
-            result = checks.check(paragraphs, payload, inputs.names)
-            if not result.passed:
-                tally.reject(result.reasons, {"nct_id": nct, "paragraphs": result.paragraphs,
-                             "reasons": result.reasons, "details": result.details,
-                             "payload": payload}, cfg.rejected_samples)  # fmt: skip
-                continue
-            with open_db(dsn) as con, con.transaction():
-                con.execute(
-                    """INSERT INTO serving.trial_memos (nct_id, payload_hash, payload_version,
-                         payload, prompt_version, model, chosen_as, paragraphs, valid_as_of,
-                         generated_at, run_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s)
-                       ON CONFLICT (nct_id) DO UPDATE SET payload_hash = EXCLUDED.payload_hash,
-                         payload_version = EXCLUDED.payload_version, payload = EXCLUDED.payload,
-                         prompt_version = EXCLUDED.prompt_version, model = EXCLUDED.model,
-                         chosen_as = EXCLUDED.chosen_as, paragraphs = EXCLUDED.paragraphs,
-                         valid_as_of = EXCLUDED.valid_as_of, generated_at = now(),
-                         run_id = EXCLUDED.run_id""",
-                    (nct, pl.payload_hash(payload), pl.PAYLOAD_VERSION,
-                     json.dumps(payload), version, cfg.model, payload["chosen_as"],
-                     result.paragraphs, dt.date.fromisoformat(payload["score_date"]), run_id),
-                )  # fmt: skip
-            tally.n_stored += 1
+            result = checks.check(template.memo(payload, found), payload, inputs.names)
+            _store(open_db, dsn, payload, result, version, cfg, run_id, tally)
     except Exception as exc:
         tally.status, tally.stopped_reason = "failed", type(exc).__name__
         _finish(open_db, dsn, run_id, tally, today)
         raise
     _finish(open_db, dsn, run_id, tally, today)
     return run_id, tally
+
+
+def _store(open_db: Callable[[str], Any], dsn: str, payload: Mapping[str, Any],
+           result: checks.CheckResult, version: str, cfg: MemoConfig, run_id: int,
+           tally: Tally) -> None:  # fmt: skip
+    """Store a memo that passed the check, as the normalized text checked; count one that
+    did not."""
+    nct = payload["nct_id"]
+    if not result.passed:
+        tally.reject(result.reasons, {"nct_id": nct, "paragraphs": result.paragraphs,
+                     "reasons": result.reasons, "details": result.details,
+                     "payload": payload}, cfg.rejected_samples)  # fmt: skip
+        return
+    with open_db(dsn) as con, con.transaction():
+        con.execute(
+            """INSERT INTO serving.trial_memos (nct_id, payload_hash, payload_version,
+                 payload, prompt_version, model, chosen_as, paragraphs, valid_as_of,
+                 generated_at, run_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), %s)
+               ON CONFLICT (nct_id) DO UPDATE SET payload_hash = EXCLUDED.payload_hash,
+                 payload_version = EXCLUDED.payload_version, payload = EXCLUDED.payload,
+                 prompt_version = EXCLUDED.prompt_version, model = EXCLUDED.model,
+                 chosen_as = EXCLUDED.chosen_as, paragraphs = EXCLUDED.paragraphs,
+                 valid_as_of = EXCLUDED.valid_as_of, generated_at = now(),
+                 run_id = EXCLUDED.run_id""",
+            (nct, pl.payload_hash(payload), pl.PAYLOAD_VERSION,
+             json.dumps(payload), version, cfg.model, payload["chosen_as"],
+             result.paragraphs, dt.date.fromisoformat(payload["score_date"]), run_id),
+        )  # fmt: skip
+    tally.n_stored += 1
+
+
+def dry_run(dsn: str, cfg: MemoConfig, complete: Complete, today: dt.date, n: int,
+            connect: Callable[[str], Any] | None = None) -> list[dict[str, Any]]:  # fmt: skip
+    """Ask the model for the first `n` trials a run would ask for, check the memos and return
+    their tokens and results. Reads one snapshot and writes nothing."""
+    import psycopg
+
+    open_db = connect or (lambda d: psycopg.connect(d, autocommit=True, connect_timeout=30))
+    system = load_prompt(cfg)
+    with open_db(dsn) as con:
+        inputs = read_inputs(con, cfg, today)
+    payloads, ask, _, _ = plan(inputs, cfg, today, prompt_version(cfg), model_columns())
+    out: list[dict[str, Any]] = []
+    for nct in [a for a in ask if template.drivers_12(payloads[a])][:n]:
+        answer = complete(request_body(cfg, system, payloads[nct]))
+        usage = answer.get("usage") or {}
+        found = sentences_of(answer)
+        result = (checks.check(template.memo(payloads[nct], found), payloads[nct], inputs.names)
+                  if found is not None else None)  # fmt: skip
+        out.append({"nct_id": nct, "total_tokens": int(usage.get("total_tokens") or 0),
+                    "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                    "completion_tokens": int(usage.get("completion_tokens") or 0),
+                    "passed": bool(result and result.passed),
+                    "reasons": result.reasons if result else ["invalid_json"]})  # fmt: skip
+    return out
 
 
 def _finish(open_db: Callable[[str], Any], dsn: str, run_id: int, tally: Tally,
@@ -344,9 +393,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="The memo run of ADR 0084.")
     parser.add_argument("--target", choices=("local", "neon"), required=True)
     parser.add_argument("--trigger", default="manual")
+    parser.add_argument(
+        "--dry-run",
+        type=int,
+        default=0,
+        metavar="N",
+        help="ask for N memos, check them, print tokens; write nothing",
+    )
     args = parser.parse_args(argv)
     cfg = load_project_config().memo
     complete, close = groq_complete(cfg)
+    if args.dry_run:
+        try:
+            found = dry_run(_dsn(args.target), cfg, complete, dt.datetime.now(dt.UTC).date(),
+                            args.dry_run)  # fmt: skip
+        finally:
+            close()
+        print(json.dumps(found, indent=1))
+        return 0
     try:
         run_id, tally = run_memos(_dsn(args.target), cfg, complete,
                                   dt.datetime.now(dt.UTC).date(), args.trigger)  # fmt: skip

@@ -249,6 +249,7 @@ class MemoConfig(_Section):
     move_window_days: PositiveInt
     cap_per_run: PositiveInt
     max_record_changes: PositiveInt
+    values_held_from: dt.date  # go-live: before and after values are held from here (memo_v2)
     rejection_alert_share: float = Field(gt=0, le=1)
     rejected_samples: NonNegativeInt
 

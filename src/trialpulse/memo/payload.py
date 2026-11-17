@@ -2,9 +2,12 @@
 
 A payload holds what the memo may say and nothing else: the trial's registry id, its served
 risks as whole percents and their date, the five drivers per horizon (feature, value as shown,
-direction), its record changes (the amendment markers' dates and the groups of fields they
-changed, and, for versions held since go-live, each changed field's value before and after),
-its sponsor class, status and the phase stated in its title, and why it was chosen. It never
+direction, and since payload version 2 a plain-English label and display value from
+`memo.labels`), its record changes (the amendment markers' dates and the groups of fields they
+changed, with their total, and, for versions held since go-live, each changed field's label
+and its displayed value before and after), the date from which before and after values are
+held, its sponsor class, status and the phase stated in its title, and why it was chosen. It
+never
 holds a title, a sponsor name, a sponsor id or any free text: the builder takes only the
 columns listed here, and a test checks that what it is given beyond them never reaches the
 payload. The SHA-256 of its canonical JSON is the payload hash; a memo is regenerated only
@@ -21,7 +24,9 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-PAYLOAD_VERSION = 1
+from trialpulse.memo import labels
+
+PAYLOAD_VERSION = 2
 HORIZONS = (12, 24)
 DRIVERS_PER_HORIZON = 5
 TOP = "top_100"
@@ -74,14 +79,17 @@ def _number(x: float) -> str:
 
 
 def drivers(row: Mapping[str, Any], names: Sequence[str]) -> dict[str, list[dict[str, str]]]:
-    """The stored drivers of a score row (serving.trial_scores_latest), per horizon."""
+    """The stored drivers of a score row (serving.trial_scores_latest), per horizon, each with
+    its label and display value (`memo.labels`) beside the feature and value as stored."""
     out: dict[str, list[dict[str, str]]] = {str(h): [] for h in HORIZONS}
     for months, feature, value, contribution in zip(
         row["driver_months"], row["driver_features"], row["driver_values"],
         row["driver_contributions"], strict=True,
     ):  # fmt: skip
+        name = names[int(feature)]
         out.setdefault(str(months), []).append(
-            {"feature": names[int(feature)], "value": as_shown(value),
+            {"feature": name, "label": labels.feature_label(name), "value": as_shown(value),
+             "display": labels.feature_display(name, str(value)),
              "direction": "raises" if float(contribution) > 0 else "lowers"}
         )  # fmt: skip
     return out
@@ -99,8 +107,9 @@ def record_changes(markers: Mapping[str, Any] | None, limit: int) -> list[dict[s
 
 def field_changes(versions: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, str]]:
     """The changed values between consecutive versions held since go-live (live.study_versions,
-    oldest first), newest first, at most `limit`. The first held version has nothing before
-    it, so it shows no change."""
+    oldest first), newest first, at most `limit`, each with its field's label and the values
+    displayed (`memo.labels`). The first held version has nothing before it, so it shows no
+    change."""
     ordered = sorted(versions, key=lambda v: v["effective_date"])
     found: list[dict[str, str]] = []
     for before, after in itertools.pairwise(ordered):
@@ -108,7 +117,9 @@ def field_changes(versions: Sequence[Mapping[str, Any]], limit: int) -> list[dic
             old, new = as_shown(before.get(name)), as_shown(after.get(name))
             if old != new:
                 found.append({"post_date": as_shown(after["effective_date"]), "field": name,
-                              "before": old, "after": new})  # fmt: skip
+                              "label": labels.field_label(name),
+                              "before": labels.field_display(name, old),
+                              "after": labels.field_display(name, new)})  # fmt: skip
     found.sort(key=lambda c: c["post_date"], reverse=True)
     return found[:limit]
 
@@ -124,6 +135,7 @@ def build(
     names: Sequence[str],
     top_n: int,
     max_changes: int,
+    values_held_from: dt.date,
 ) -> dict[str, Any]:
     """The payload of one trial. `score` is its serving.trial_scores_latest row, `state` its
     live.trial_state row, `display` its serving.trial_display row (only the sponsor class is
@@ -143,7 +155,9 @@ def build(
         "drivers_per_horizon": DRIVERS_PER_HORIZON,
         "drivers": drivers(score, names),
         "record_changes": record_changes(markers, max_changes),
+        "record_changes_total": len((markers or {}).get("post_dates") or []),
         "field_changes": field_changes(versions, max_changes),
+        "values_held_from": as_shown(values_held_from),
     }
     if TOP in reasons:
         payload["top_n"] = int(top_n)

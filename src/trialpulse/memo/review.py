@@ -3,9 +3,10 @@
 
     uv run python -m trialpulse.memo.review --target neon
 
-Writes data/memo_review/<date>.md (gitignored): the first 20 stored memos (oldest first), each
-with its payload and the result of the fabrication check run again on it, and up to 5 rejected
-memos of the latest runs with their reasons and payloads. It reads Neon only and writes
+Writes data/memo_review/<date>.md (gitignored): the first 20 stored memos of the current prompt
+version (oldest first), each with its payload and the result of the fabrication check run
+again on it, and up to 5 rejected memos of the latest runs of that version with their reasons
+and payloads. It reads Neon only and writes
 nothing there. The file holds no names: payloads hold none, and rejected memos are quoted as
 the model wrote them, so the reasons say what each broke.
 """
@@ -18,8 +19,9 @@ from pathlib import Path
 from typing import Any
 
 from trialpulse.cli import run
-from trialpulse.config import REPO_ROOT
+from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.memo import check as checks
+from trialpulse.memo.generate import prompt_version
 
 OUT_DIR = REPO_ROOT / "data" / "memo_review"
 FIRST = 20
@@ -29,21 +31,26 @@ REJECTED = 5
 Rows = list[dict[str, Any]]
 
 
-def read(con: Any, first: int = FIRST, rejected: int = REJECTED) -> tuple[Rows, Rows, list[str]]:
-    """The first stored memos, the latest rejected samples and the sponsor display names."""
+def read(con: Any, version: str, first: int = FIRST,
+         rejected: int = REJECTED) -> tuple[Rows, Rows, list[str]]:  # fmt: skip
+    """The first stored memos of a prompt version, the latest rejected samples of its runs and
+    the sponsor display names."""
     from psycopg.rows import dict_row
 
     cur = con.cursor(row_factory=dict_row)
     memos = cur.execute(
         """SELECT nct_id, paragraphs, payload, chosen_as, valid_as_of, generated_at, model,
                   prompt_version, run_id
-           FROM serving.trial_memos ORDER BY generated_at, nct_id LIMIT %s""",
-        (first,),
+           FROM serving.trial_memos WHERE prompt_version = %s
+           ORDER BY generated_at, nct_id LIMIT %s""",
+        (version, first),
     ).fetchall()
     samples: list[dict[str, Any]] = []
     for row in cur.execute(
         """SELECT run_id, rejected_samples FROM monitoring.memo_runs
-           WHERE jsonb_array_length(rejected_samples) > 0 ORDER BY run_id DESC"""
+           WHERE jsonb_array_length(rejected_samples) > 0 AND prompt_version = %s
+           ORDER BY run_id DESC""",
+        (version,),
     ):
         for sample in row["rejected_samples"]:
             if len(samples) < rejected:
@@ -107,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     day = dt.datetime.now(dt.UTC).date()
     with psycopg.connect(_dsn(args.target), connect_timeout=30) as con:
-        memos, samples, names = read(con)
+        memos, samples, names = read(con, prompt_version(load_project_config().memo))
     args.out_dir.mkdir(parents=True, exist_ok=True)
     path = args.out_dir / f"{day.isoformat()}.md"
     path.write_text(render(memos, samples, names, day), encoding="utf-8")

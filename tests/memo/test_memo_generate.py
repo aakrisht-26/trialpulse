@@ -14,6 +14,7 @@ import pytest
 import respx
 
 from trialpulse.config import REPO_ROOT, load_project_config
+from trialpulse.memo import check as checks
 from trialpulse.memo import generate as g
 
 URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -33,23 +34,15 @@ def cfg(**over: Any) -> Any:
     return load_project_config().memo.model_copy(update={"top_n": 3, "cap_per_run": 10, **over})
 
 
-def faithful(payload: dict[str, Any]) -> list[str]:
-    """A memo that keeps to the payload, as the prompt asks."""
-    r12, r24 = payload["risk_percent"]["12"], payload["risk_percent"]["24"]
-    first = (f"{payload['nct_id']} has elevated early-stop risk: {r12}% within 12 months and "
-             f"{r24}% within 24 months, scored on {payload['score_date']}. It is among the "
-             f"{payload['top_n']} unflagged trials with the highest 12-month risk.")  # fmt: skip
-    d = payload["drivers"]["12"][0]
-    second = (f"The strongest driver at 12 months is `{d['feature']}` ({d['value']}), which "
-              f"{d['direction']} the risk. A driver describes what moved the model's score, "
-              "not why a trial stops.")  # fmt: skip
-    third = "No record change is held since the trial's first live version."
-    return [first, second, third]
+def faithful(request: dict[str, Any]) -> list[str]:
+    """The driver sentences the prompt asks for, from what the model is sent (memo_v2)."""
+    return [f"The {d['label']} is {d['value']}, which {d['effect']}."
+            for d in request["drivers"]]  # fmt: skip
 
 
-def envelope(paragraphs: list[str] | None, content: str | None = None) -> dict[str, Any]:
+def envelope(sentences: list[str] | None, content: str | None = None) -> dict[str, Any]:
     """A chat completion in Groq's response format."""
-    text = content if content is not None else json.dumps({"paragraphs": paragraphs})
+    text = content if content is not None else json.dumps({"sentences": sentences})
     return {
         "id": "chatcmpl-test", "object": "chat.completion", "created": 1794900000,
         "model": "openai/gpt-oss-120b",
@@ -67,18 +60,27 @@ HEADERS = {"x-ratelimit-remaining-tokens": "7000", "x-ratelimit-reset-tokens": "
 
 
 def answering(write: Any) -> Any:
-    """A respx side effect: the memo `write` makes of the payload the request carries."""
+    """A respx side effect: the sentences `write` makes of the drivers the request carries."""
 
     def reply(request: httpx.Request) -> httpx.Response:
-        payload = json.loads(json.loads(request.content)["messages"][1]["content"])
-        return httpx.Response(200, json=envelope(write(payload)), headers=HEADERS)
+        sent = json.loads(json.loads(request.content)["messages"][1]["content"])
+        return httpx.Response(200, json=envelope(write(sent)), headers=HEADERS)
 
     return reply
+
+
+# Five distinct served features per horizon, as the champion's drivers always are (the shared
+# seed draws random indexes, text features and repeats among them, for the API's tests):
+# enrollment_count, status, sponsor_class, open_interventional_trials, planned_duration_months.
+SERVED_DRIVERS = [8, 28, 44, 51, 9] * 2
 
 
 @pytest.fixture
 def seeded(scratch: str, monkeypatch: pytest.MonkeyPatch) -> str:
     seeding.seed(_plain(scratch))
+    with psycopg.connect(_plain(scratch)) as con:
+        con.execute("UPDATE serving.trial_scores_latest SET driver_features = %s",
+                    (SERVED_DRIVERS,))  # fmt: skip
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test_key_not_real")
     return _plain(scratch)
 
@@ -112,6 +114,10 @@ def test_a_run_stores_checked_memos_and_a_second_run_asks_nothing(seeded: str) -
     assert body["temperature"] == 0.0
     assert body["response_format"]["json_schema"]["schema"] == g.RESPONSE_SCHEMA
     assert body["messages"][0]["content"] == g.load_prompt(cfg())
+    sent = json.loads(body["messages"][1]["content"])
+    assert set(sent) == {"drivers"}  # the 12-month drivers only, no id, date or risk
+    assert "NCT" not in body["messages"][1]["content"]
+    assert all(set(d) == {"label", "value", "effect"} for d in sent["drivers"])
     with psycopg.connect(seeded) as con:
         row = con.execute(
             """SELECT status, n_called, n_stored, total_tokens, trigger
@@ -127,16 +133,18 @@ def test_a_run_stores_checked_memos_and_a_second_run_asks_nothing(seeded: str) -
 
 @respx.mock
 def test_fabricated_memos_are_never_stored_and_counted_by_reason(seeded: str) -> None:
-    def invented(payload: dict[str, Any]) -> list[str]:
-        good = faithful(payload)
-        return [good[0].replace("% within 12", "7% within 12", 1), good[1],
-                "The trial will fail; its risk doubled over twelve months."]  # fmt: skip
+    def invented(request: dict[str, Any]) -> list[str]:
+        good = faithful(request)
+        good[0] = good[0].replace(", which", " by 7777, which", 1)
+        good[-1] = good[-1].replace(".", "; the trial will fail, doubled over twelve months.")
+        return good
 
     respx.post(URL).mock(side_effect=answering(invented))
     run_id, tally = run(seeded, cfg(rejected_samples=2))
     assert (tally.n_called, tally.n_stored, tally.n_rejected) == (3, 0, 3)
     assert memos(seeded) == []
-    for reason in ("number", "banned_language", "comparison", "number_word"):
+    for reason in ("number", "driver_number", "banned_language", "comparison",
+                   "number_word"):  # fmt: skip
         assert tally.rejections[reason] == 3, reason
     assert tally.alert(0.2)
     with psycopg.connect(seeded) as con:
@@ -249,7 +257,7 @@ def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
 ) -> None:
     from trialpulse.memo import review
 
-    respx.post(URL).mock(side_effect=answering(lambda p: [*faithful(p)[:2], "It will fail."]))
+    respx.post(URL).mock(side_effect=answering(lambda r: [*faithful(r)[:-1], "It will fail."]))
     run(seeded, cfg())  # every memo refused
     respx.post(URL).mock(side_effect=answering(faithful))
     run(seeded, cfg())  # then stored
@@ -258,7 +266,62 @@ def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
     text = path.read_text(encoding="utf-8")
     assert text.count("Check run again: passed.") == 3
     assert text.count("### R") == 3
-    assert "Reasons: banned_language" in text
+    assert "banned_language" in text
+    assert text.count("Reasons: ") == 3
     assert "```json" in text
     for name in ("Acme Pharma", "Northern University Hospital", "Hand-placed trial"):
         assert name not in text
+
+
+@respx.mock
+def test_the_stored_memo_is_the_normalized_text_that_was_checked(seeded: str) -> None:
+    """memo_v2: a non-breaking hyphen and a narrow space are stored as plain characters."""
+
+    def special(request: dict[str, Any]) -> list[str]:
+        found = faithful(request)
+        found[0] = found[0].replace(" which ", "\u202fwhich ").replace("the risk", "the\u00a0risk")
+        return [s.replace("-", "\u2011") for s in found]
+
+    respx.post(URL).mock(side_effect=answering(special))
+    _, tally = run(seeded, cfg())
+    assert tally.n_stored == 3
+    with psycopg.connect(seeded) as con:
+        rows = con.execute("SELECT paragraphs, payload FROM serving.trial_memos").fetchall()
+        names = [r[0] for r in con.execute(g.NAMES_SQL)]
+    for paragraphs, payload in rows:
+        text = "".join(paragraphs)
+        assert not any(ch in text for ch in "\u2011\u202f\u00a0")
+        assert checks.check(paragraphs, payload, names).paragraphs == list(paragraphs)
+
+
+@respx.mock
+def test_a_memo_of_another_prompt_version_is_deleted_and_written_again(seeded: str) -> None:
+    respx.post(URL).mock(side_effect=answering(faithful))
+    run(seeded, cfg())
+    with psycopg.connect(seeded) as con:
+        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v1'")
+        con.commit()
+    respx.post(URL).mock(side_effect=answering(lambda r: ["It will fail."]))  # all refused
+    _, tally = run(seeded, cfg())
+    assert (tally.n_deleted, tally.n_called, tally.n_stored) == (3, 3, 0)
+    assert memos(seeded) == []  # never left beside a newer score
+    respx.post(URL).mock(side_effect=answering(faithful))
+    _, again = run(seeded, cfg())
+    assert (again.n_called, again.n_stored) == (3, 3)
+    with psycopg.connect(seeded) as con:
+        versions = {r[0] for r in con.execute("SELECT prompt_version FROM serving.trial_memos")}
+    assert versions == {"memo_v2"}
+
+
+@respx.mock
+def test_a_dry_run_reports_tokens_and_writes_nothing(seeded: str) -> None:
+    respx.post(URL).mock(side_effect=answering(faithful))
+    complete, close = g.groq_complete(cfg())
+    try:
+        found = g.dry_run(seeded, cfg(), complete, DAY, 2)
+    finally:
+        close()
+    assert [(f["total_tokens"], f["passed"]) for f in found] == [(1500, True)] * 2
+    assert memos(seeded) == []
+    with psycopg.connect(seeded) as con:
+        assert con.execute("SELECT count(*) FROM monitoring.memo_runs").fetchone() == (0,)
