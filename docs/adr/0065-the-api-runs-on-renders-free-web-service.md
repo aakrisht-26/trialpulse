@@ -81,3 +81,17 @@ The dashboard keeps answers 15 minutes in its process, shared by every viewer (A
 - `api.trusted_proxies` keeps its value until decision 3's measurement; its comment says so.
   Measured 2026-11-10: see below.
 - The README's deployment link and Step 15's public URL point to Render once the API is deployed.
+
+## Measured latency (2026-11-17)
+
+Measurements of one run, not targets: Step 15's 200 ms target was for a local load test. `uv run python scripts/api_latency.py` asked the deployed `/v1/trials/{id}/risk` once for each of 50 different scored trials of one large sponsor's portfolio, one request every 1.2 s (under the limit of 60 a minute per client), after one warm-up request, from one client machine over the public internet (round trips, network included):
+
+| Measure | Value |
+| --- | --- |
+| Answers | 50 of 50 answered 200, status scored |
+| p50 | 250 ms |
+| p95 | 305 ms |
+| Maximum | 837 ms |
+| Minimum | 240 ms |
+
+**Cold start: not observed.** The first request after 16 minutes without requests from this client took 1,763 ms (sent 09:57:50 UTC), but a redeploy at 09:44:37 UTC had left the new instance only about 13 minutes idle. A second try with nothing deployed in between, after 17 minutes (sent 10:15:16 UTC), took 1,328 ms. Neither is the spin-up of a free instance (about a minute): the instance stayed up, through other traffic or Render's own behaviour, and the second of delay is consistent with Neon waking its compute and a new connection. A spin-up remains possible after longer idle spans; the dashboard waits it out (ADR 0054).
