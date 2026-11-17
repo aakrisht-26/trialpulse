@@ -252,6 +252,7 @@ class AlertsConfig(_Section):
     watermark_lag_days: PositiveInt
     quarantine_share: float = Field(gt=0, le=1)
     drift_feature_share: float = Field(gt=0, le=1)
+    drift_top_features: tuple[str, ...] = Field(min_length=1)
 
 
 class ProjectConfig(BaseSettings):
