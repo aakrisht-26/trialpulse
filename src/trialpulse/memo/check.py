@@ -17,6 +17,7 @@ A memo passes only if all of these hold (the reason codes in brackets):
 - [banned_language] none of CLAUDE.md Section 2's forbidden claims: outcome claims ("fail",
   "will stop"), efficacy or safety claims, advice to patients, certainty words;
 - [name] no sponsor display name the API can show and no personal title;
+- [link] no web address and no Markdown link, since the page renders the text as Markdown;
 - [required_phrase] a trial in the top 100 says "elevated early-stop risk"; [risk_stated]
   a trial chosen for a move states its 12-month risk as a percent; [direction] it states the
   direction of the move ("rose" or "increased"; "fell" or "decreased") and never the
@@ -71,6 +72,7 @@ BANNED = re.compile(
     re.IGNORECASE,
 )
 TITLES = re.compile(r"\b(?:Dr|Prof|Mr|Mrs|Ms|MD|PhD)\b\.?")
+LINKS = re.compile(r"https?://|\bwww\.|\]\(|<a\b|\.(?:com|org|gov|net)\b", re.IGNORECASE)
 REQUIRED = "elevated early-stop risk"
 RISE = re.compile(r"\b(?:rose|risen|rising|increased|increase)\b", re.IGNORECASE)
 FALL = re.compile(r"\b(?:fell|fallen|falling|decreased|decrease|dropped|declined)\b",
@@ -189,6 +191,8 @@ def check(
             result.fail("name", name)
     for m in TITLES.finditer(text):
         result.fail("name", m.group(0))
+    for m in LINKS.finditer(text):
+        result.fail("link", m.group(0))
 
     chosen = set(payload.get("chosen_as") or ())
     if TOP in chosen and REQUIRED not in lowered:

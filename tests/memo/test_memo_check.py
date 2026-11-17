@@ -63,6 +63,8 @@ def test_a_faithful_memo_passes() -> None:
         ("Its safety record is poor; enrollment went from 120 to 80.", "banned_language"),
         ("It will certainly stop; enrollment went from 120 to 80.", "banned_language"),
         ("We recommend a review: enrollment went from 120 to 80.", "banned_language"),
+        ("See [the record](https://clinicaltrials.gov) for 120 to 80.", "link"),
+        ("Enrollment went from 120 to 80 (www.example.org).", "link"),
     ],
 )
 def test_a_fabricated_fact_or_claim_is_refused(third: str, reason: str) -> None:
