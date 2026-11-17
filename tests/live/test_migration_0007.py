@@ -7,6 +7,7 @@ from alembic import command
 from alembic.config import Config
 
 from trialpulse.config import REPO_ROOT
+from trialpulse.live import store
 
 ROW = ("2023-01-06", 12, -1, "all", "m/1")
 
@@ -55,4 +56,4 @@ def test_the_migration_goes_down_and_up_again(scratch: str) -> None:
         assert con.execute("SELECT to_regclass('monitoring.drift')").fetchone() == (None,)
     command.upgrade(alembic, "head")
     with psycopg.connect(_plain(scratch), autocommit=True) as con:
-        assert con.execute("SELECT version_num FROM alembic_version").fetchone() == ("0007",)
+        assert con.execute("SELECT version_num FROM alembic_version").fetchone() == (store.HEAD,)
