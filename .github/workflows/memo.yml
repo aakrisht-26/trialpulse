@@ -1,0 +1,113 @@
+name: Risk memos
+
+# ADR 0084: after each successful daily run (and by hand), writes the per-trial risk memos of
+# the top 100 unflagged trials and the trials whose risk moved, from stored values only, and
+# keeps a memo only if the fabrication check passes. It reads and writes Neon and calls Groq;
+# no Hugging Face token, no dataset and no dataset module reach this runner (ADR 0040, held
+# by tests/test_workflows.py). daily.yml is unchanged: this workflow only follows it.
+on:
+  workflow_run:
+    workflows: ["Daily live run"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-memo
+  cancel-in-progress: false
+
+env:
+  HF_HUB_OFFLINE: "1"
+  UV_NO_SYNC: "1"
+
+jobs:
+  memo:
+    name: Write and check the risk memos
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60  # about 4 memos a minute under Groq's free per-minute limit
+    outputs:
+      error_class: ${{ steps.run.outputs.error_class }}
+      memo_alert: ${{ steps.run.outputs.memo_alert }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.11.26"
+          enable-cache: true  # dependencies only
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked --no-dev --no-group dataset --no-group dashboard  # ADR 0040
+
+      - name: Memos
+        id: run
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          uv run python -m trialpulse.memo.generate --target neon --trigger "${TRIGGER}" || {
+            echo "error_class=MemoRunFailed" >> "$GITHUB_OUTPUT"; exit 1; }
+
+  rejections:
+    name: Open or update the rejection issue
+    needs: memo
+    if: >-
+      always() && github.ref == 'refs/heads/main' && needs.memo.outputs.memo_alert == 'rejections'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Memo rejections over 20%"
+          body="Run ${RUN_URL}: the fabrication check refused over 20% of the run's memos (ADR 0084); monitoring.memo_runs has the reasons."
+          number=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
+
+  notify:
+    name: Open or update the failure issue
+    needs: memo
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.memo.result == 'failure' || needs.memo.result == 'cancelled')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.memo.result }}
+          ERROR_CLASS: ${{ needs.memo.outputs.error_class }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Memo run failed"
+          body="Run ${RUN_URL}: ${RESULT}, error class ${ERROR_CLASS:-unknown}."
+          number=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')
+          if [ -n "${number}" ]; then
+            gh issue comment "${number}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi

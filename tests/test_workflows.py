@@ -133,6 +133,35 @@ def test_the_laptop_tasks_wait_out_the_daily_crons() -> None:
         assert "21:30" not in path.read_text(encoding="utf-8"), path.name
 
 
+def test_the_memo_workflow_follows_a_successful_daily_run_and_holds_the_groq_key() -> None:
+    """ADR 0084: memo.yml starts after a successful daily run on main (or by hand), has its
+    own failure issue and rejection issue, and is the only workflow that reads GROQ_API_KEY;
+    daily.yml knows nothing of it."""
+    daily = _load(REPO_ROOT / ".github" / "workflows" / "daily.yml")
+    memo = _load(REPO_ROOT / ".github" / "workflows" / "memo.yml")
+    on = memo[True] if True in memo else memo["on"]
+    assert on["workflow_run"] == {"workflows": [daily["name"]], "types": ["completed"],
+                                  "branches": ["main"]}  # fmt: skip
+    assert "workflow_dispatch" in on
+    assert memo["permissions"] == {"contents": "read"}
+    assert memo["concurrency"]["cancel-in-progress"] is False
+    jobs = memo["jobs"]
+    assert "github.event.workflow_run.conclusion == 'success'" in jobs["memo"]["if"]
+    assert "permissions" not in jobs["memo"]
+    steps = {s.get("name"): s for s in jobs["memo"]["steps"]}
+    assert set(steps["Memos"]["env"]) == {"NEON_DATABASE_URL", "GROQ_API_KEY", "TRIGGER"}
+    assert "python -m trialpulse.memo.generate --target neon" in steps["Memos"]["run"]
+    for name in ("rejections", "notify"):
+        assert jobs[name]["needs"] == "memo"
+        assert jobs[name]["permissions"] == {"contents": "read", "issues": "write"}
+    assert "needs.memo.outputs.memo_alert == 'rejections'" in jobs["rejections"]["if"]
+    assert "needs.memo.result == 'failure'" in jobs["notify"]["if"]
+    for path in WORKFLOWS:
+        text = path.read_text(encoding="utf-8")
+        assert ("GROQ_API_KEY" in text) == (path.name == "memo.yml"), path.name
+    assert "memo" not in (REPO_ROOT / ".github" / "workflows" / "daily.yml").read_text("utf-8")
+
+
 def test_ci_requires_postgres_for_the_database_tests() -> None:
     """Review finding 4: in CI an unreachable Postgres fails the database tests."""
     ci = _load(REPO_ROOT / ".github" / "workflows" / "ci.yml")
@@ -169,7 +198,7 @@ def test_a_missing_postgres_skips_locally_and_fails_where_it_is_required(
 
 # The dataset client stays off the runners (item 2 of the last cloud task) ---------------------
 
-LIVE_WORKFLOWS = ("daily.yml", "grade.yml", "timing.yml")
+LIVE_WORKFLOWS = ("daily.yml", "grade.yml", "memo.yml", "timing.yml")
 DATASET_PACKAGES = ("huggingface-hub", "datasets")
 
 
