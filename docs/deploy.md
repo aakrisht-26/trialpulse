@@ -106,6 +106,20 @@ What to check after Part 2:
 4. Cold start: after the API has idled for over 15 minutes, open a page. Expect the waiting message (the service starting), then the page; never a traceback (ADR 0054).
 5. Secrets can be changed later in the app's settings in your workspace; the app restarts with them.
 
+### The deployed app (2026-11-17)
+
+Deployed by Aakrisht on 2026-11-17 at <https://trialpulse-demo.streamlit.app>, with these settings:
+
+| Setting | Value |
+| --- | --- |
+| Repository | `aakrisht-26/trialpulse` |
+| Branch | `main` |
+| Main file path | `app/Home.py` |
+| Python version | 3.12 |
+| Secrets | `API_URL = "https://trialpulse-api.onrender.com"` (the API's public address, the only entry; not a secret) |
+
+Checked the same day from the laptop with `uv run python scripts/check_dashboard.py --url https://trialpulse-demo.streamlit.app`: Overview (13 s), Portfolio (6 s), Trial detail for the scored trial (8 s), Trial detail for `NCT00000000` (6 s), Landscape (8 s), Why trials stop (6 s) and Model health (6 s), each `ok`, then `7 of 7 pages passed` and exit code 0. Because the app deploys from `main`, every push to main redeploys it as well as the API.
+
 ### After the dashboard is deployed
 
 1. **Check every page of the deployed app** from the laptop (Playwright drives the installed Chrome, headless, in a fresh profile; it waits out a sleeping app and the API's cold start within the dashboard's 3-minute budget):
