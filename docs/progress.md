@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: the risk memo's Neon session, from the hotspot (ADR 0084): migrate Neon to 0008 (`uv run python -m trialpulse.live.migrate`) when no daily run is in progress, push at once, CI and Render, the API role's read-only check of serving.trial_memos, one dispatch of memo.yml, then `uv run python -m trialpulse.memo.review --target neon` and Aakrisht's review of data/memo_review/<date>.md before `api.memo_public` is turned on. The cron start times are measured to 2026-12-01.
+Next step: Aakrisht reviews data/memo_review/2026-11-17.md (20 stored memos, 5 rejected) and decides on the non-breaking hyphen of the check (below) before `api.memo_public` is turned on; the slip record (`88f4e6a`) and this record are pushed with the next full suite. The cron start times are measured to 2026-12-01.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -5160,3 +5160,12 @@ Approved by Aakrisht on 2026-11-17: all nine recommendations of docs/memo_plan.m
 - **How it was contained.** Render deploys only after CI passes (`autoDeployTrigger: checksPass` in render.yaml), so I cancelled the CI run of `0b7755d` (44114396288) before it finished; Render made no deployment, and the live API stayed on `b39a902`, which reads no memo table. Nothing on Neon changed.
 - **The fix.** On the hotspot, each Neon step ran as its own command with its exit code checked: port 5432 reachable, no daily run in progress, the migration (exit 0, 0007 to 0008), a read-only check of the head (0008) and of both new tables, and only then the CI run again, so Render deployed after Neon had the tables.
 - **The rule kept from it** (Aakrisht, 2026-11-17): every Neon step is its own command with its exit code checked before the next; no `&&` chain through a pipe, and no `tail` or `Select-Object` hiding a failure; port 5432 is confirmed reachable before a migration, and an unreachable port is a stop, not a retry loop.
+
+### The risk memo's Neon session (2026-11-17, on the hotspot)
+
+- **Neon:** port 5432 reachable; no daily run in progress; migrated 0007 to 0008 (exit 0); head 0008 and both tables confirmed read-only. CI re-run on `0b7755d` (44114396288, attempt 2) green at 18:04:05 UTC; Render deployed it after that (deployment 7861813659 created 18:04:11, live 18:04:37). The risk endpoint answers with `"memo": null` (the flag is off).
+- **The API role:** reads `serving.trial_memos` (0 rows before the run); has no INSERT, UPDATE, DELETE or TRUNCATE on it; and cannot see the `monitoring` schema at all (permission denied).
+- **The first memo run** (dispatch, run 44144043602, 19 min 14 s, status succeeded): 136 trials chosen (the top 100, 2 of them also moved, and 36 moved only), 100 calls (the cap; the 36 movers left for later runs), **87 stored, 13 rejected** (13%, under the 20% alert): 12 `required_phrase`, 1 `invalid_json`. Tokens: 182,617 of the free 200,000 a day (about 1,826 a memo, as estimated). Neon 292.3 MB against the 700 MB line; the memo tables 0.28 MB.
+- **A finding for Aakrisht:** all 5 sampled `required_phrase` rejections do contain the phrase, written with a non-breaking hyphen (U+2011) between "early" and "stop"; the check compares an ASCII hyphen, so those are false rejections, very likely all 12. The stored memos hold the same character in words such as "12-month" (with U+2011) 40 times. Recommendation: replace U+2010 and U+2011 with an ASCII hyphen in the check's normalization, as it already does for em and en dashes (a code change, with a test, not made without approval).
+- **The review file:** data/memo_review/2026-11-17.md (gitignored), the first 20 stored memos with their payloads (every one passes the check run again) and 5 rejected memos with their reasons.
+- **Tokens tonight:** the run used 91% of the day's free tokens, so the memo run after tonight's daily job will stop cleanly at the daily limit (status stopped, no failure) and finish the rest on later days.
