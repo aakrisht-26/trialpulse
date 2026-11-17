@@ -88,7 +88,7 @@ Next step: the run of Aakrisht's decisions of 2026-11-17 (the drift alert on the
 | 7 | Point-in-time features | Approved 2026-10-10 (ADRs 0018 to 0021 accepted). Personal-title sponsor names no longer stored (ADR 0022, warehouse schema version 3), decided in the same review |
 | 8 | Evaluation harness and test lock | Approved 2026-09-23. ADRs 0016 and 0017 approved 2026-10-07 (censoring groups once per origin, events first at ties) |
 | 9 | Baselines and Cox analysis | Approved 2026-10-10 (ADR 0023 accepted). Runs logged to DagsHub after the review |
-| 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted |
+| 10 | Discrete-time models and tuning | Approved 2026-10-19 (ADRs 0024 to 0026 accepted; the champion is M4 without the text families). The recalibration of ADR 0027 was measured against its rule and not adopted (ADR 0027 rejected by Aakrisht 2026-11-17) |
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |

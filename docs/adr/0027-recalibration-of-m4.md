@@ -1,7 +1,8 @@
 # 0027. A recalibration of M4, and the rule it must pass
 
 - Date: 2026-10-19
-- Status: **Proposed, with its rule fixed before the measurement.** Aakrisht agreed in the review of Step 10 (2026-10-19) to recommendation (c) of the Step 10 report: "Before measuring the recalibration, commit the rule it must pass; then measure it on the development origins only, and adopt it only if it passes." This file is that commit. The measurement comes after it, and its result is added below without changing anything above the line "Result".
+- Status: **Rejected 2026-11-17 by Aakrisht: the measurement failed its own rule; ADR 0032 took over.**
+- Original status (2026-10-19), kept as written: **Proposed, with its rule fixed before the measurement.** Aakrisht agreed in the review of Step 10 (2026-10-19) to recommendation (c) of the Step 10 report: "Before measuring the recalibration, commit the rule it must pass; then measure it on the development origins only, and adopt it only if it passes." This file is that commit. The measurement comes after it, and its result is added below without changing anything above the line "Result".
 - Would change CLAUDE.md Section 9 (M4's predictions) only if the measurement passes the rule.
 
 ## Context
