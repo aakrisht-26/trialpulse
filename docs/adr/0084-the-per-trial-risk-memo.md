@@ -1,7 +1,7 @@
 # 0084. The per-trial risk memo (Stretch item 2)
 
 - Date: 2026-11-17
-- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below.
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences.
 
 ## Context
 
@@ -34,6 +34,37 @@ The changes decided with the approval:
 - **Rejected samples.** For the review of change C, up to 5 rejected memos per run are kept in `monitoring.memo_runs` with their reasons. They are never served: the API reads `serving` only.
 - **Dashes.** An em or en dash in the model's text is replaced by a comma or "to" before the check, so the project's writing rule holds on the page.
 - **Names.** The check refuses every sponsor display name the API can show (`serving.sponsors`), and personal titles (Dr, Prof, MD, PhD).
+
+## Amendment of 2026-11-18: memo_v2
+
+Decided by Aakrisht on 2026-11-18, after the review of the first 20 memos (data/memo_review/2026-11-17.md). The flag stays off.
+
+### What the review found
+
+Every number checked out, but statements about record changes were wrong in ways the number check cannot catch:
+
+- memos 1, 16 and 18 say that no record change is held while their payloads list several: the model confused `field_changes` (before and after values, held only since go-live) with `record_changes` (the amendment markers, held from the bootstrap on);
+- memo 17 contradicts itself (it names a record change, then says none is held);
+- memo 6 attaches the wrong change kinds to dates (2025-09-04 changed the status only, and the enrollment change of 2026-05-20 is missing);
+- memo 19 is garbled ("start_date after 2026-11-19 before 2026-11-18 post_date 2026-11-16");
+- the memos mostly restate raw feature names (`enrolled_to_first_target_ratio = 0.05`), which a reader cannot use.
+
+The 12 `required_phrase` rejections of the first run were false: the model wrote "early-stop" with a non-breaking hyphen (U+2011).
+
+### Decision
+
+1. **Paragraphs 1 and 3 are a template, not the model's.** Paragraph 1 states the risks, the score date and why the trial was chosen; for a move, the direction, the previous risk and its date. "elevated early-stop risk" appears only for a trial in the top 100. Paragraph 3 lists the record changes newest first (at most 10) with exactly the payload's change kinds, then every field change as "<field label> moved from <before> to <after> on <post date>". When no field change is held, it says plainly that before and after values are held only from go-live (2026-11-08, `memo.values_held_from`) onward. It never says that no record change is held when the payload has one.
+2. **The model writes only paragraph 2:** exactly one sentence per 12-month driver, in the payload's order. The payload gains, per driver, a plain-English label and a display value, from a committed table of the 54 served features (`trialpulse.memo.labels`, built from the registry's descriptions in docs/features.md): a ratio as a percent with one decimal, months as "N months", a flag as a phrase, a category in plain words. The model is sent only the 12-month drivers (label, value, effect), not the whole payload.
+3. **The check gains a per-sentence rule** for paragraph 2: as many sentences as drivers; sentence i holds driver i's label verbatim (case aside) and its direction as "raises the risk" or "lowers the risk" (never the other), no other driver's label, and no number but driver i's display value in an allowed rendering. Paragraphs 1 and 3 must equal the template built from the payload. Every earlier rule (numbers, dates, ids, banned language, names, links) still applies to the whole memo.
+4. **Normalization before the check:** every Unicode hyphen, dash and minus (U+2010 to U+2015, U+2212, U+FE58, U+FE63, U+FF0D) becomes "-", and non-breaking, narrow and thin spaces (U+00A0, U+202F, U+2009, U+2007) become a space. The stored memo is exactly the normalized text that was checked. This replaces the earlier dash rule (a dash read as a comma, or as "to" between numbers).
+5. **Tests:** the five real failures above as fabricated v2 cases that the template or the check makes impossible, plus a swapped direction, a swapped driver order, an extra label, and the hyphen and space cases.
+6. **Prompt `memo_v2`**, payload version 2, so every memo regenerates on the next run; a stored memo of another prompt version is deleted rather than left beside a newer score. Before the first v2 dispatch, a dry run on 3 payloads (`--dry-run 3`, which writes nothing to Neon) measures the v2 tokens per memo, and the dispatch waits until the free daily limit leaves enough for 100 memos rather than stopping halfway.
+
+### Consequences
+
+- The memo carries less model-written text: two of its three paragraphs are deterministic and tested, and the model's paragraph is held sentence by sentence to the stored drivers.
+- The API's note on the memo says which paragraph a model wrote.
+- The table of labels is a new place to keep in step with the registry: a test fails when a served feature has no entry.
 
 ## Alternatives
 
