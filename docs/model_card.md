@@ -4,7 +4,7 @@ Research demo. Not medical advice. Not for patient decision-making.
 
 **Source: [ClinicalTrials.gov](https://clinicaltrials.gov).** Data as of 2026-09-25. TrialPulse normalizes the registry records and adds derived early-stop risk scores and drivers, which are not part of ClinicalTrials.gov (ADR 0008).
 
-An elevated early-stop risk is an operational statement about a registry record. It says nothing about whether a treatment works. Every number on this card comes from [results.md](results.md) (the registered results of the locked test), [explanations.md](explanations.md) or the documents they cite, and the served scope from [scoring_checks.md](scoring_checks.md); the data is described in [data_card.md](data_card.md).
+An elevated early-stop risk is an operational statement about a registry record. It says nothing about whether a treatment works. Every number on this card comes from [results.md](results.md) (the registered results of the locked test), [explanations.md](explanations.md) or the documents they cite, and the served scope from [scoring_checks.md](scoring_checks.md); the data is described in [data_card.md](data_card.md). The section "The live system" is different in kind: its numbers are monitoring, from ADRs 0076 and 0078, never registered results.
 
 ## Model details
 
@@ -13,7 +13,7 @@ An elevated early-stop risk is an operational statement about a registry record.
 - **Training:** one model per walk-forward origin, on the landmarks before the origin, with every outcome cut off at the origin (ADR 0016), and with the settings tuned on the development origins (`config/tuned/m4.json`, ADR 0025). At the 2018 and 2019 origins it trained on 567,423 and 653,603 landmark rows and grew 1,046 and 1,146 boosting rounds.
 - **Explanations:** the five drivers of each prediction, from exact TreeSHAP values (ADR 0033, below).
 - **Version:** the model and every result were fixed by the pre-registration, `docs/preregistration.md`, registered on 2026-10-21 (tag `prereg-v1`, commit `2ee8498`). The record of the locked results is commit `4991ea5`.
-- **The served model** (Steps 13 to 16): M4 with the same tuned settings, fitted on all available data (the final cohort, with the origin set to the day after the data cutoff), and registered in MLflow as `trialpulse-m4` with the alias `champion` (ADR 0034). It is a new fit: no metric of it is reported, and every number in the evaluation below comes from the per-origin models of Step 11.
+- **The served model** (Steps 13 to 16): M4 with the same tuned settings, fitted on all available data (the final cohort, with the origin set to the day after the data cutoff, its training data through 2026-09-25), and registered in MLflow as `trialpulse-m4` version 1 with the alias `champion` (ADR 0034); every served score carries `trialpulse-m4/1`. It is a new fit: no metric of it is reported, and every number in the evaluation below comes from the per-origin models of Step 11.
 
 ## Intended use
 
@@ -28,6 +28,15 @@ The served scores (Step 13, ADR 0034) are asked for on any date, while the evalu
 - **A date between landmarks:** every feature is computed as of the date, the two time features are held at the last landmark passed, and the horizon starts on the date. On rows 3 months after a landmark this ranked better than the score of the last landmark row: AUC at 12 months 0.7190 against 0.7035 at the 2016 origin, 0.7117 against 0.6975 at the 2017 origin.
 - **Trials 42 to 119 months after registration** are scored as at landmark 6 and flagged "outside the validated range". Their development AUC at 12 months, averaged over the two origins, was 0.7336 (42 to 59 months) and 0.7271 (60 to 119 months), against 0.7161 at landmark 6. Their mean predicted risk was above the observed risk at every origin (for example 4.2% against 2.8% for 60 to 119 months at the 2017 origin), so these scores may overstate the risk. Flagged scores never enter a headline number, and Step 17 grades them as their own group.
 - **Not scored, with a reason code:** trials 120 months or older (no development row reaches that age) and trials with a status reversal visible on the date (CLAUDE.md Section 6 excludes them).
+
+## The live system: monitoring, not registered results
+
+Since 2026-11-08 the served champion scores every open trial each day (Steps 14 and 15); Step 17 watches it. Nothing in this section is a registered result, and nothing here changes one.
+
+- **Grading.** A monthly workflow grades the served predictions against the outcomes that have arrived, matured or partial-horizon, with the harness's metrics, flagged trials as their own group (ADR 0077). No live prediction has a matured 12-month outcome before November 2027.
+- **The replay** (ADR 0078): every Friday of 2023 and the first half of 2024 scored by M4 with the same settings, fitted as of 2023-01-01 the way a walk-forward origin is, and graded against outcomes that had matured by the data cutoff: a 12-month AUC mean of 0.7506 (0.7356 to 0.7583 over the dates), calibration slope 0.869; at 24 months 0.7363. It is above the registered numbers because it grades every open trial at its true landmark index, older trials included, with features on the scoring date; at landmark index 0 alone it is 0.7116. It shows the champion's method behaving in a later period, not the served fit's accuracy.
+- **Drift** (ADR 0076): each weekly full run compares 52 features and both risks with the trials served on 2026-11-03 by Evidently's population stability index at 0.1, long-tailed columns compared by their position in that reference. Checked before relying on it: 0 of 52 features flagged on unchanged data, 22 of 22 numeric features flagged when each was shifted by half its standard deviation. A rise of a fifth in every risk is not flagged (PSI 0.0219 at 12 months): that is a shift of calibration, which the grading watches.
+- **Retraining and the gate** (ADR 0080): a quarterly retrain on the laptop trains a challenger, but no challenger is promoted before 12-month outcomes have matured for predictions made after the champion's training data (about November 2027); the comparison then uses a challenger fitted before the window it is judged on. Every run so far has recorded "not promoted".
 
 ## Out-of-scope uses
 
@@ -95,6 +104,8 @@ Three example risk timelines, drawn from the test origins by a declared seeded r
 - **Calibration** at 24 months is below the registered range (above).
 - **The text of a record** (eligibility criteria, summary) is not used: on the development origins it lowered the AUC (ADR 0026), and on the test origins it made no measurable difference, +0.0001 (-0.0042 to +0.0045).
 - **The example timelines** in [explanations.md](explanations.md) are three trials drawn by a declared rule, illustrations rather than results.
+- **Versions that failed review.** The registry rejects some submitted updates, and the pinned dataset holds them as ordinary versions dated at the registry's reset notice; TrialPulse keeps that rule everywhere, so a small share of event dates are earlier than the next public version showing the same status ([data_card.md](data_card.md), item 8; ADR 0073). The registered results are kept as they are.
+- **The live feed hides some versions.** API v2 shows only each record's latest version, so a version superseded between two daily pulls never reaches the live path ([data_card.md](data_card.md), item 10; ADR 0038 accepts that loss).
 
 ## Ethics
 

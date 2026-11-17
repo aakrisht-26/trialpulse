@@ -19,10 +19,14 @@ NOTICE = "Research demo. Not medical advice. Not for patient decision-making."
 NUMBER = re.compile(r"(?<![\w.,-])\d{1,3}(?:,\d{3})+(?!\d|,\d)|(?<![\w.])\d+\.\d+(?!\d|\.\d)")
 SOURCES = {
     "model_card.md": ("results.md", "explanations.md", "preregistration.md", "data_audit.md",
-                      "scoring_checks.md"),
+                      "scoring_checks.md",
+                      # the live system's section: monitoring numbers, never registered results
+                      "adr/0076-drift-in-the-weekly-full-run.md",
+                      "adr/0078-the-replay-scores-with-a-model-of-its-own-origin.md"),
     "data_card.md": ("data_audit.md", "feasibility_report.md", "eda.md", "reason_labeling.md",
                      "results.md", "preregistration.md",
-                     "adr/0073-the-gap-release-read-under-the-pinned-rules.md"),
+                     "adr/0073-the-gap-release-read-under-the-pinned-rules.md",
+                     "adr/0041-one-later-read-of-the-gap.md"),  # what the live feed hides
 }  # fmt: skip
 
 

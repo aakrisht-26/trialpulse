@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: the overnight run of 2026-11-17: the push checkpoint (full suite, push, CI, Render), then items 10 to 13; items 1 to 9 done (records at the end of this file).
+Next step: the overnight run of 2026-11-17: items 11 (interview guide), 12 (coverage), 13 (security audit), then the finish; items 1 to 10 done, the checkpoint c113abc pushed.
 
 | Step | Title | Status |
 | --- | --- | --- |
