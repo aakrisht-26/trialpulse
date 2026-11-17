@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: Aakrisht's decisions on the risk memo plan (docs/memo_plan.md, decisions 1 to 9); meanwhile the start times of the scheduled daily runs at 21:43 and 00:47 UTC are measured for two weeks, to 2026-12-01 (records at the end of this file).
+Next step: building the risk memo (ADR 0084): the payload builder and the fabrication check with their tests, then memo.yml, the migration, the API field and the page section (off), the secret, the full suite; then Neon from the hotspot and the first memo run. The cron start times are measured to 2026-12-01.
 
 | Step | Title | Status |
 | --- | --- | --- |
