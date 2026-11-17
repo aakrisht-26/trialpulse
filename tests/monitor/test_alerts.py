@@ -113,6 +113,39 @@ def test_the_share_rule_still_names_no_top_feature() -> None:
     assert found["drift"] == "21% of the features drifted in the week of 2026-11-13"
 
 
+def test_states_list_every_kind_with_keys_that_ignore_daily_noise() -> None:
+    """A key holds only the details that matter (ADR 0081, comments on change only)."""
+    quiet = alerts.states(QUIET, CFG, TODAY, 0.7122)
+    assert set(quiet) == set(alerts.KINDS)
+    assert all(s == {"raised": False, "key": "", "detail": ""} for s in quiet.values())
+    late = {**QUIET, "data_date": dt.date(2026, 11, 12)}
+    today, tomorrow = (alerts.states(late, CFG, day, 0.7122)["watermark_lag"]
+                       for day in (TODAY, TODAY + dt.timedelta(days=1)))  # fmt: skip
+    assert today["raised"]
+    assert tomorrow["raised"]
+    assert today["key"] == tomorrow["key"] == "data as of 2026-11-12"  # today is not in it
+    assert today["detail"] != tomorrow["detail"]
+    held = [alerts.states({**QUIET, "records_quarantined": n}, CFG, TODAY, 0.7122)["quarantine"]
+            for n in (61, 300)]  # fmt: skip
+    assert [h["key"] for h in held] == ["", ""]  # counts of one run are not details
+
+
+def test_a_drift_key_changes_with_its_rules_and_top_features_only() -> None:
+    def key(**change: object) -> str:
+        return str(alerts.states({**QUIET, **change}, CFG, TODAY, 0.7122)["drift"]["key"])
+
+    top = key(drift_share=1 / 52, drifted_features=["enrollment_count"])
+    assert top == "top features enrollment_count"
+    assert key(drift_share=2 / 52, drifted_features=["enrollment_count", "x"],
+               drift_week=dt.date(2026, 11, 20)) == top  # fmt: skip
+    assert key(drift_share=1 / 52, drifted_features=["sponsor_class"]) != top
+    assert key(drift_share=0.3) == "share over the threshold"
+    assert key(drift_share=0.3, drifted_features=["landmark_index"]) == (
+        "share over the threshold; top features landmark_index"
+    )
+    assert key(drift_share=0.1) == ""
+
+
 def test_every_alert_kind_is_listed() -> None:
     assert set(alerts.KINDS) == {"watermark_lag", "quarantine", "drift", "matured_auc"}
 
@@ -170,7 +203,13 @@ def test_the_command_writes_the_alert_kinds_for_the_workflow(
     output = tmp_path / "github_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     assert alerts.main(["--target", "local"]) == 0
-    written = output.read_text(encoding="utf-8").strip()
-    assert written.startswith("alerts=")
-    assert set(written.removeprefix("alerts=").split(",")) == {
+    kinds_line, states_line = output.read_text(encoding="utf-8").strip().splitlines()
+    assert kinds_line.startswith("alerts=")
+    assert set(kinds_line.removeprefix("alerts=").split(",")) == {
         "watermark_lag", "quarantine", "drift", "matured_auc"}  # fmt: skip
+    import json
+
+    written = json.loads(states_line.removeprefix("alert_states="))
+    assert set(written) == set(alerts.KINDS)
+    assert all(s["raised"] for s in written.values())
+    assert written["matured_auc"]["key"] == "predictions of 2027-11-01"

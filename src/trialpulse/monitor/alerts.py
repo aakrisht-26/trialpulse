@@ -18,6 +18,11 @@ Each alert kind becomes one GitHub issue (opened or reused by daily.yml's alerts
 
 It reads Neon only, in one read-only snapshot, and never fails because of an alert: alerts go
 to the step output `alerts` (a comma list) and the printed summary. It reads no dataset.
+
+The step output `alert_states` is one JSON object with every kind, raised or not, and a key of
+the details that matter (`states`): the alerts job comments on an issue only when a kind's
+state or key changes (`monitor.alert_issues`). A key leaves out what moves every day (today's
+date, counts, shares, the drift week), so a lasting alert is one comment, not two a day.
 """
 
 import argparse
@@ -78,6 +83,27 @@ def check(
     return found
 
 
+def states(
+    state: Mapping[str, Any], cfg: AlertsConfig, today: dt.date, floor: float
+) -> dict[str, dict[str, Any]]:
+    """Every alert kind, raised or not, with its message and the key of its details: the
+    stale data date, the drift rules that fired and their top features, the graded prediction
+    date; a quarantine has no key (its counts belong to one run)."""
+    found = check(state, cfg, today, floor)
+    keys: dict[str, str] = {
+        "watermark_lag": f"data as of {state.get('data_date')}",
+        "quarantine": "",
+        "matured_auc": f"predictions of {state.get('matured_date')}",
+    }
+    share = state.get("drift_share")
+    top = top_features_drifted(cfg.drift_top_features, state.get("drifted_features") or ())
+    rules = (["share over the threshold"] if share is not None and share > cfg.drift_feature_share
+             else []) + ([f"top features {', '.join(top)}"] if top else [])  # fmt: skip
+    keys["drift"] = "; ".join(rules)
+    return {kind: {"raised": kind in found, "key": keys[kind] if kind in found else "",
+                   "detail": found.get(kind, "")} for kind in KINDS}  # fmt: skip
+
+
 def read_state(dsn: str) -> dict[str, Any]:
     import psycopg
 
@@ -128,12 +154,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--target", choices=("local", "neon"), required=True)
     args = parser.parse_args(argv)
     cfg = load_project_config()
-    found = check(read_state(_dsn(args.target)), cfg.alerts,
-                  dt.datetime.now(dt.UTC).date(), registered_auc_floor())  # fmt: skip
+    every = states(read_state(_dsn(args.target)), cfg.alerts,
+                   dt.datetime.now(dt.UTC).date(), registered_auc_floor())  # fmt: skip
+    found = {kind: s["detail"] for kind, s in every.items() if s["raised"]}
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with Path(output).open("a", encoding="utf-8") as fh:
             fh.write(f"alerts={','.join(found)}\n")
+            fh.write(f"alert_states={json.dumps(every, separators=(',', ':'))}\n")
     print(json.dumps({"alerts": found}, indent=2))
     return 0
 
