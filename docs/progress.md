@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: the overnight run of 2026-11-17: item 5 (the fresh clone, its test suite running), then item 6 (demo GIF), then the push checkpoint; items 1 to 4 and 7 to 9 done.
+Next step: the overnight run of 2026-11-17: the push checkpoint (full suite, push, CI, Render), then items 10 to 13; items 1 to 9 done (records at the end of this file).
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -5055,3 +5055,24 @@ New requirement (ADR 0008, accepted; listed in the CLAUDE.md Amendments section)
 The README now states the attribution and the note. It will show a data-as-of date once data or results are published.
 
 - [x] Follow-up: terms recorded; ADR 0008 written; README, CLAUDE.md Amendments and this log updated.
+
+## Overnight run of 2026-11-17 (Step 18, unattended)
+
+Aakrisht asleep, on the Wi-Fi that blocks Neon: nothing in this run touched Neon. No change to production behaviour (src/trialpulse live, api, scoring, monitor, app/ and the workflows untouched).
+
+### Item 5: the README quickstart from a fresh clone (2026-11-17, 04:58 to 05:08 India time)
+
+Cloned from GitHub (main at `d9dd603`) into `E:\tp-fresh` and followed the quickstart literally in PowerShell (`data/logs/fresh_clone_20261117.log`):
+
+| Command | Result |
+| --- | --- |
+| `git clone https://github.com/aakrisht-26/trialpulse.git` | exit 0 |
+| `cd trialpulse` | `E:\tp-fresh\trialpulse` |
+| `uv sync` | exit 0 in 44 s (a new `.venv`, packages from uv's cache) |
+| `Copy-Item .env.example .env` | done |
+| `notepad .env` | by script, since the run was unattended: `DATABASE_URL` set to the local address `.env.example` gives in its comment; nothing else |
+| `docker compose up -d` | exit 0: the project's container (`trialpulse-postgres-1`) was already running |
+| `uv run alembic upgrade head` | exit 0 in 10 s |
+| `uv run pytest -q -m "slow or not slow"` | exit 0 in 577 s: **1,695 passed, 15 skipped** (the tests that need the gated data, the LLM sample or Evidently skip and say why) |
+
+The quickstart worked on the first pass, so the README needed no fix. Not run: the gated-dataset block (it needs Aakrisht's Hugging Face token and accepted terms) and the local API and dashboard block. **Not deleted:** the harness refuses to remove a top-level folder of the drive (`E:\tp-fresh`, the clone and its environment only); Aakrisht removes it with `Remove-Item -Recurse -Force E:\tp-fresh`.
