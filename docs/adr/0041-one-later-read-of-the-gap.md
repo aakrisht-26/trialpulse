@@ -25,3 +25,7 @@ The pinned revision ends on 2026-09-25 and go-live is planned for about 2026-12-
 
 - About 150 lines of laptop code, built with the bootstrap, not in the cloud session.
 - The gap read is the last dataset read before go-live; any later one needs its own ADR.
+
+## Measured: parity layer 5b (2026-11-08)
+
+What API v2 hides, from the API pull of 2026-11-06 (28,750 records) against the later release: of the gap's 31,459 versions (4,053 trials), API v2 never showed 8,125 (445 that failed review, 7,680 superseded by a later post date). On the 22,262 latest versions both hold, 65 content hashes differ (sponsor name 27, official title 2, summary 15, eligibility 21). On the release date every one of the 88,420 served trials differs on `open_interventional_trials`, the registry-wide count of open trials that the hidden versions move; per-trial features differ on fewer trials (sponsor prior ended 4,951, version counts 2,282, sponsor prior stopped 288, start slip 71, 35 or fewer on each other feature). This is the loss ADR 0038 accepts on the live path.
