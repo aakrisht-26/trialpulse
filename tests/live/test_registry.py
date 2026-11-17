@@ -82,3 +82,34 @@ def test_a_fetched_bundle_naming_another_version_is_refused(tmp_path: Path) -> N
     download = _fake_download({"files": {}, "version": f"{registry.MODEL_NAME}/7"})
     with pytest.raises(RefusedError, match="names trialpulse-m4/7"):
         registry.fetch("champion", tmp_path, FakeClient(), download)
+
+
+def test_the_command_fetches_the_alias_into_the_folder_the_daily_job_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[str, Path]] = []
+
+    def fetch(alias: str, folder: Path) -> list[str]:
+        calls.append((alias, folder))
+        return [registry.META, "model.txt"]
+
+    monkeypatch.setattr(registry, "fetch", fetch)
+    assert registry.main(["--alias", "champion", "--to", str(tmp_path / "bundle")]) == 0
+    assert calls == [("champion", tmp_path / "bundle")]
+    assert "trialpulse-m4@champion: 2 files" in capsys.readouterr().out
+
+
+def test_the_command_needs_a_folder_unless_it_attaches_the_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(SystemExit):  # argparse's error: --to is required
+        registry.main(["--alias", "champion"])
+    attached: list[Path] = []
+
+    def attach(path: Path, alias: str) -> dict[str, str]:
+        attached.append(path)
+        return {"model": registry.MODEL_NAME, "version": "1", "run_id": "r"}
+
+    monkeypatch.setattr(registry, "attach_decisions", attach)
+    assert registry.main(["--attach-decisions"]) == 0
+    assert [p.name for p in attached] == [registry.DECISIONS]

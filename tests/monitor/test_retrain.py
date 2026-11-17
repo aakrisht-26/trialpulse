@@ -105,3 +105,69 @@ def test_the_challengers_run_logs_the_four_files_the_champions_run_logs(tmp_path
     logged = retrain.challenger_artifacts(tmp_path, {"files": files})
     assert [p.name for p in logged] == [bundle.BOOSTER, bundle.LEVELS, bundle.PRIORS, bundle.META]
     assert all(p.parent == tmp_path for p in logged)
+
+
+def test_the_window_comparison_fits_as_of_its_first_date_and_grades_both_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The glue the quarterly retrain runs once a window exists (first about November 2027),
+    with the fit and the scoring replaced: a challenger fitted as of the window's first date,
+    both models scored on every window date, graded against the final cohort's outcomes."""
+    import numpy as np
+
+    from trialpulse.monitor import gate
+    from trialpulse.scoring import bundle
+
+    data_date = dt.date(2027, 11, 1)
+    window = gate.Window(dt.date(2026, 9, 26), dt.date(2026, 10, 26))
+    rng = np.random.default_rng(3)
+    n = 2000
+    stop = rng.random(n) < 0.1
+    ids = [f"NCT{i:08d}" for i in range(n)]
+    outcomes = tmp_path / "outcomes.parquet"
+    pd.DataFrame({"trial_id": ids, "event": np.where(stop, 1, 0),
+                  "event_date": np.where(stop, pd.Timestamp("2027-02-01"),
+                                         pd.Timestamp(data_date)),  # open to the data date
+                  "reversal": False}).to_parquet(outcomes)  # fmt: skip
+    fitted: list[dt.date] = []
+    scored: list[tuple[list[dt.date], list[str]]] = []
+
+    def fit(cfg: object, origin: dt.date, warehouse: Path, interventions: str,
+            built: dict[str, object], folder: Path) -> dict[str, object]:  # fmt: skip
+        fitted.append(origin)
+        folder.mkdir(parents=True)  # as the real fit does when it saves the bundle there
+        return {"model": {"rounds": 1}}
+
+    def score_on_dates(cfg: object, days: list[dt.date], bundles: dict[str, object],
+                       warehouse: Path, interventions: str) -> pd.DataFrame:  # fmt: skip
+        scored.append((list(days), sorted(bundles)))
+        frames = []
+        for day in days:
+            for role in bundles:
+                risk = np.where(stop, 0.6, 0.05) if role == gate.CHAMPION else rng.random(n)
+                frames.append(pd.DataFrame({
+                    "nct_id": ids, "prediction_date": day, "risk_12m": risk,
+                    "risk_24m": risk, "sponsor_class": "OTHER", "landmark_index": 0,
+                    "flagged": False, "model_version": role}))  # fmt: skip
+        return pd.concat(frames, ignore_index=True)
+
+    monkeypatch.setattr(retrain, "fit_window_challenger", fit)
+    monkeypatch.setattr(retrain, "score_on_dates", score_on_dates)
+    monkeypatch.setattr(bundle, "load_bundle", lambda cfg, folder: "the window challenger")
+    built = {"outcomes": outcomes, "landmarks": tmp_path / "l", "features_dir": tmp_path / "f"}
+    found, graded = retrain.window_comparison(CFG, retrain.as_of(CFG, data_date), window,
+                                              tmp_path / "w.duckdb", "glob", built,
+                                              "the champion", tmp_path)  # fmt: skip
+    days = gate.window_dates(window, CFG.retraining.window_dates)
+    assert days == [dt.date(2026, 9, 26), dt.date(2026, 10, 26)]
+    assert fitted == [days[0]]  # blind to every graded date
+    assert scored == [(days, [gate.CHALLENGER, gate.CHAMPION])]
+    assert found.dates == 2
+    assert found.champion_auc == pytest.approx(1.0)
+    assert found.challenger_auc == pytest.approx(0.5, abs=0.08)
+    assert graded["dates"] == [d.isoformat() for d in days]
+    assert (tmp_path / "window" / "window_grades.csv").is_file()
+    decision = gate.decide(CFG.retraining, window, found.champion_auc, found.challenger_auc,
+                           found.challenger_slope)  # fmt: skip
+    assert not decision.promoted
+    assert "is below the champion's" in decision.reason
