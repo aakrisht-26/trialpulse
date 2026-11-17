@@ -9,7 +9,10 @@ Each alert kind becomes one GitHub issue (opened or reused by daily.yml's alerts
 - `quarantine`: the latest daily run quarantined more than `alerts.quarantine_share` (1%) of
   the records it fetched;
 - `drift`: the latest drift week has more than `alerts.drift_feature_share` (20%) of its
-  features drifted (ADR 0076);
+  features drifted (ADR 0076), or one of `alerts.drift_top_features` drifted, the 5 most
+  important features (ADR 0081, amended 2026-11-17). `sponsor_stop_rate` has no drift row of
+  its own (it is computed after the features from three that are checked, ADR 0076), so it
+  counts as drifted when one of those three did;
 - `matured_auc`: the latest matured live 12-month AUC is below the lowest lower bound of the
   registered 12-month AUC intervals of the locked test (docs/model_statement.json; ADR 0048).
 
@@ -30,6 +33,18 @@ from trialpulse.config import REPO_ROOT, AlertsConfig, load_project_config
 
 STATEMENT_PATH = REPO_ROOT / "docs" / "model_statement.json"
 KINDS = ("watermark_lag", "quarantine", "drift", "matured_auc")
+# A top feature without a drift row of its own, watched through the columns it is computed from
+# (monitor.drift.DERIVED; the rate of features.transforms.SponsorPriors).
+DERIVED_INPUTS = {
+    "sponsor_stop_rate": ("sponsor_class", "sponsor_prior_ended", "sponsor_prior_stopped"),
+}
+
+
+def top_features_drifted(top: Sequence[str], drifted: Sequence[str]) -> list[str]:
+    """The top features that drifted, in the order of `top`: a feature with a drift row by
+    that row, a derived one by any of its inputs."""
+    seen = set(drifted)
+    return [f for f in top if f in seen or seen.intersection(DERIVED_INPUTS.get(f, ()))]
 
 
 def registered_auc_floor(path: Path = STATEMENT_PATH) -> float:
@@ -51,8 +66,11 @@ def check(
     if fetched and quarantined / fetched > cfg.quarantine_share:
         found["quarantine"] = f"{quarantined} of {fetched} records quarantined"
     share = state.get("drift_share")
-    if share is not None and share > cfg.drift_feature_share:
-        found["drift"] = f"{share:.0%} of the features drifted in the week of {state['drift_week']}"
+    top = top_features_drifted(cfg.drift_top_features, state.get("drifted_features") or ())
+    if (share is not None and share > cfg.drift_feature_share) or top:
+        named = f"; top features drifted: {', '.join(top)}" if top else ""
+        found["drift"] = (f"{share or 0:.0%} of the features drifted in the week of "
+                          f"{state['drift_week']}{named}")  # fmt: skip
     auc = state.get("matured_auc")
     if auc is not None and auc < floor:
         found["matured_auc"] = (f"matured 12-month AUC {auc:.4f} (predictions of "
@@ -80,6 +98,11 @@ def read_state(dsn: str) -> dict[str, Any]:
                       AND week_date = (SELECT max(week_date) FROM monitoring.drift)
                     GROUP BY week_date"""
         ).fetchone()
+        drifted = con.execute(
+            """SELECT column_name FROM monitoring.drift WHERE kind = 'feature' AND drifted
+                      AND week_date = (SELECT max(week_date) FROM monitoring.drift)
+                    ORDER BY column_name"""
+        ).fetchall()
         matured = con.execute(
             """SELECT prediction_date, auc FROM monitoring.graded_predictions
                     WHERE source = 'live' AND matured AND horizon_months = 12
@@ -92,6 +115,7 @@ def read_state(dsn: str) -> dict[str, Any]:
         "records_quarantined": last[1] if last else None,
         "drift_week": drift[0] if drift else None,
         "drift_share": float(drift[1]) if drift else None,
+        "drifted_features": [r[0] for r in drifted],
         "matured_date": matured[0] if matured else None,
         "matured_auc": float(matured[1]) if matured else None,
     }

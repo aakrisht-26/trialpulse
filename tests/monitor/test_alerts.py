@@ -5,19 +5,57 @@ from pathlib import Path
 
 import pytest
 
-from trialpulse.config import load_project_config
+from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.monitor import alerts
 
 CFG = load_project_config().alerts
 TODAY = dt.date(2026, 11, 16)
 QUIET = {"data_date": dt.date(2026, 11, 13), "records_fetched": 6000, "records_quarantined": 60,
          "drift_week": dt.date(2026, 11, 13), "drift_share": 0.20,
-         "matured_date": None, "matured_auc": None}  # fmt: skip
+         "drifted_features": ["n_versions"], "matured_date": None, "matured_auc": None}  # fmt: skip
+TOP = ("enrollment_count", "sponsor_stop_rate", "planned_duration_months", "landmark_index",
+       "sponsor_class")  # fmt: skip
 
 
 def test_the_thresholds_are_the_decided_ones() -> None:
     assert (CFG.watermark_lag_days, CFG.quarantine_share, CFG.drift_feature_share) == (3, 0.01, 0.2)
     assert alerts.registered_auc_floor() == 0.7122  # the lower of the 2018 and 2019 bounds
+    assert CFG.drift_top_features == TOP
+
+
+def _importance_by_12_month_mean() -> list[str]:
+    """The features of docs/explanations.md's importance table, largest '12 months, mean'
+    first (a tie keeps the table's order)."""
+    lines = (REPO_ROOT / "docs" / "explanations.md").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("| Feature | Family |"))
+    header = [c.strip() for c in lines[start].strip("|").split("|")]
+    column = header.index("12 months, mean")
+    rows = []
+    for line in lines[start + 2 :]:
+        if not line.startswith("|"):
+            break
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        rows.append((cells[0], float(cells[column])))
+    assert len(rows) >= 10  # the table (its 15 largest features), not a fragment
+    return [name for name, _ in sorted(rows, key=lambda r: -r[1])]
+
+
+def test_the_top_features_are_the_top_5_of_the_importance_table() -> None:
+    ranked = _importance_by_12_month_mean()
+    assert list(CFG.drift_top_features) == ranked[:5]
+
+
+def test_every_top_feature_is_watched_by_a_drift_row() -> None:
+    """A top feature has a column in the drift reference, or is a derived feature whose inputs
+    all have one (the step compares exactly the reference's columns)."""
+    import json
+
+    from trialpulse.monitor import drift
+
+    columns = set(json.loads(drift.REFERENCE_PATH.read_text(encoding="utf-8"))["columns"])
+    assert set(alerts.DERIVED_INPUTS) == set(drift.DERIVED)
+    for name in CFG.drift_top_features:
+        assert name in columns or set(alerts.DERIVED_INPUTS[name]) <= columns, name
 
 
 def test_a_snapshot_at_every_threshold_raises_nothing() -> None:
@@ -36,6 +74,43 @@ def test_each_alert_kind_fires_just_past_its_threshold() -> None:
     found = alerts.check(low, CFG, TODAY, 0.7122)
     assert set(found) == {"matured_auc"}
     assert "0.7121" in found["matured_auc"]
+
+
+def test_a_drifted_top_feature_raises_the_drift_alert_below_the_share() -> None:
+    """Rule 2 (ADR 0081, amended 2026-11-17): one top feature is enough, at any share."""
+    one = {**QUIET, "drift_share": 1 / 52, "drifted_features": ["enrollment_count"]}
+    found = alerts.check(one, CFG, TODAY, 0.7122)
+    assert set(found) == {"drift"}
+    assert found["drift"].endswith("top features drifted: enrollment_count")
+    for name in ("landmark_index", "sponsor_class", "planned_duration_months"):
+        state = {**QUIET, "drift_share": 1 / 52, "drifted_features": [name]}
+        assert set(alerts.check(state, CFG, TODAY, 0.7122)) == {"drift"}
+
+
+def test_the_sponsor_rate_counts_as_drifted_through_its_inputs() -> None:
+    for name in ("sponsor_prior_ended", "sponsor_prior_stopped"):
+        state = {**QUIET, "drift_share": 1 / 52, "drifted_features": [name]}
+        assert "top features drifted: sponsor_stop_rate" in alerts.check(
+            state, CFG, TODAY, 0.7122)["drift"]  # fmt: skip
+    both = {**QUIET, "drift_share": 2 / 52, "drifted_features": ["sponsor_class", "x"]}
+    assert alerts.check(both, CFG, TODAY, 0.7122)["drift"].endswith(
+        "top features drifted: sponsor_stop_rate, sponsor_class")  # fmt: skip
+
+
+def test_other_features_alone_raise_nothing_at_or_below_the_share() -> None:
+    others = ["n_versions", "registration_year", "status", "x"]
+    for share in (0.0, 0.2):
+        state = {**QUIET, "drift_share": share, "drifted_features": others}
+        assert alerts.check(state, CFG, TODAY, 0.7122) == {}
+    assert alerts.top_features_drifted(TOP, []) == []
+    assert "drift" not in alerts.check(
+        {**QUIET, "drift_week": None, "drift_share": None, "drifted_features": []},
+        CFG, TODAY, 0.7122)  # fmt: skip
+
+
+def test_the_share_rule_still_names_no_top_feature() -> None:
+    found = alerts.check({**QUIET, "drift_share": 0.21}, CFG, TODAY, 0.7122)
+    assert found["drift"] == "21% of the features drifted in the week of 2026-11-13"
 
 
 def test_every_alert_kind_is_listed() -> None:
@@ -82,6 +157,7 @@ def test_the_state_is_read_from_the_monitoring_tables(scratch: str) -> None:
     assert (state["records_fetched"], state["records_quarantined"]) == (400, 30)  # latest run
     assert state["drift_week"] == dt.date(2026, 11, 13)
     assert state["drift_share"] == pytest.approx(1 / 3)  # features only, the latest week
+    assert state["drifted_features"] == ["a"]  # not the risk, not the earlier week
     assert (state["matured_date"], state["matured_auc"]) == (dt.date(2027, 11, 1), 0.70)
 
 
