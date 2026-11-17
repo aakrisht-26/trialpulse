@@ -343,7 +343,8 @@ def test_a_typed_registry_id_is_read_in_capitals(stub_api: StubApi) -> None:
     at.run()
     at.text_input(key="nct_input").input(" nct00000002 ").run()
     assert "/v1/trials/NCT00000002/risk" in stub_api.calls
-    assert at.query_params["nct"] == ["NCT00000002"]
+    # Streamlit 1.67's AppTest reads a single value as a str (streamlit PR 17191), 1.64's as a list
+    assert at.query_params["nct"] == "NCT00000002"
 
 
 # Portfolio and flags (ADR 0055) --------------------------------------------------------------
