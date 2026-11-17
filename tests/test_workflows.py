@@ -82,7 +82,7 @@ def test_every_action_is_known_and_pinned_to_a_commit(path: Path) -> None:
 def test_the_daily_job_has_two_crons_and_a_separate_failure_job() -> None:
     daily = _load(REPO_ROOT / ".github" / "workflows" / "daily.yml")
     on = daily[True] if True in daily else daily["on"]  # YAML 1.1 reads "on" as true
-    assert [c["cron"] for c in on["schedule"]] == ["30 21 * * *", "30 0 * * *"]
+    assert [c["cron"] for c in on["schedule"]] == ["43 21 * * *", "47 0 * * *"]
     assert daily["permissions"] == {"contents": "read"}
     jobs = daily["jobs"]
     assert jobs["daily"]["timeout-minutes"] == 90
@@ -117,6 +117,20 @@ def test_the_alerts_job_comments_on_change_with_the_standard_library_only() -> N
     assert steps[1]["env"]["ALERT_STATES"] == "${{ needs.daily.outputs.alert_states }}"
     assert steps[1]["env"]["PYTHONPATH"] == "src"
     assert "setup-uv" not in str(job)  # nothing installed
+
+
+def test_the_laptop_tasks_wait_out_the_daily_crons() -> None:
+    """The backup waits from the first cron to the second, the retrain from the first to 08:00
+    UTC (ADR 0045 as amended 2026-11-17): their windows follow the crons."""
+    backup = (REPO_ROOT / "scripts" / "backup_weekly.ps1").read_text(encoding="utf-8")
+    assert "21:43 to 00:47 UTC" in backup
+    assert "$minutes -ge (21 * 60 + 43) -or $minutes -lt 47" in backup
+    assert "AddMinutes(47)" in backup
+    retrain = (REPO_ROOT / "scripts" / "retrain_quarterly.ps1").read_text(encoding="utf-8")
+    assert "21:43 to 08:00 UTC" in retrain
+    assert "$minutes -ge (21 * 60 + 43) -or $minutes -lt (8 * 60)" in retrain
+    for path in (REPO_ROOT / "scripts").glob("*.ps1"):
+        assert "21:30" not in path.read_text(encoding="utf-8"), path.name
 
 
 def test_ci_requires_postgres_for_the_database_tests() -> None:

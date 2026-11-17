@@ -8,7 +8,7 @@
 # output to data/logs/backup_<date>.log, then `backup report`, which opens or reuses the GitHub
 # issue "Weekly backup failed" on a failure (date and exit code only) and closes it on the next
 # success. A task that starts late (StartWhenAvailable, after the laptop slept) inside the
-# daily job's window, 21:30 to 00:30 UTC, first waits until 00:30 UTC. The backup prints
+# daily job's window, 21:43 to 00:47 UTC (its two crons), first waits until 00:47 UTC. The backup prints
 # counts, sizes and digests only; an unexpected error is printed with every address masked.
 
 $ErrorActionPreference = "Continue"  # 5.1 turns a redirected native stderr line into an error under Stop
@@ -24,10 +24,10 @@ if ($LASTEXITCODE -eq 0) {
 
 $now = (Get-Date).ToUniversalTime()
 $minutes = $now.Hour * 60 + $now.Minute
-if ($minutes -ge (21 * 60 + 30) -or $minutes -lt 30) {
-    $until = $now.Date.AddMinutes(30)
-    if ($minutes -ge 30) { $until = $until.AddDays(1) }
-    "$(Get-Date -Format o) inside the daily job's window: waiting until 00:30 UTC" | Out-File -Append -Encoding utf8 $log
+if ($minutes -ge (21 * 60 + 43) -or $minutes -lt 47) {
+    $until = $now.Date.AddMinutes(47)
+    if ($minutes -ge 47) { $until = $until.AddDays(1) }
+    "$(Get-Date -Format o) inside the daily job's window: waiting until 00:47 UTC" | Out-File -Append -Encoding utf8 $log
     Start-Sleep -Seconds ([int]($until - $now).TotalSeconds)
 }
 

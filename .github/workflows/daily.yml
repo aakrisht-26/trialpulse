@@ -5,8 +5,9 @@ name: Daily live run
 # tests/test_workflows.py).
 on:
   schedule:
-    - cron: "30 21 * * *"  # Section 12
-    - cron: "30 0 * * *"   # the second cron: does nothing if the day already succeeded
+    # Off the half hour (ADR 0045, amended 2026-11-17): GitHub started runs at :30 hours late.
+    - cron: "43 21 * * *"  # Section 12
+    - cron: "47 0 * * *"   # the second cron: does nothing if the day already succeeded
   workflow_dispatch:
 
 permissions:

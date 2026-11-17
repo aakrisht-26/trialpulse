@@ -4,7 +4,7 @@
 #
 # It runs `trialpulse.monitor.retrain --target neon` from the repository's folder and appends its
 # output to data/logs/retrain_<date>.log. A task that starts late (StartWhenAvailable) inside the
-# daily job's span, 21:30 to 08:00 UTC (GitHub starts the scheduled runs hours late), first waits
+# daily job's span, 21:43 to 08:00 UTC (GitHub starts the scheduled runs hours late), first waits
 # until 08:00 UTC. The retrain prints counts and its decision only, never a connection string.
 
 $ErrorActionPreference = "Continue"  # 5.1 turns a redirected native stderr line into an error under Stop
@@ -14,7 +14,7 @@ $log = Join-Path "data\logs" ("retrain_" + (Get-Date -Format "yyyyMMdd") + ".log
 
 $now = (Get-Date).ToUniversalTime()
 $minutes = $now.Hour * 60 + $now.Minute
-if ($minutes -ge (21 * 60 + 30) -or $minutes -lt (8 * 60)) {
+if ($minutes -ge (21 * 60 + 43) -or $minutes -lt (8 * 60)) {
     $until = $now.Date.AddHours(8)
     if ($minutes -ge (8 * 60)) { $until = $until.AddDays(1) }
     "$(Get-Date -Format o) inside the daily job's span: waiting until 08:00 UTC" | Out-File -Append -Encoding utf8 $log
