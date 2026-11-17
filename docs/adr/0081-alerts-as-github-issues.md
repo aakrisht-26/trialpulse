@@ -33,3 +33,15 @@ Alternative considered for the sponsor rate: give it a drift row of its own, whi
 | All four at once | the three features | no (3 of 52) | `enrollment_count`, `planned_duration_months` | **drift** |
 
 The risks are not features, so neither rule reads them; a uniform rise in the risks stays the grading's to see (ADRs 0077 and 0080).
+
+## Amendment of 2026-11-17: a comment only on a change
+
+Decided by Aakrisht on 2026-11-17. The alerts job commented on an alert's open issue at every run that raised it, about two a day with the second cron. It now writes only when the alert's state changes (raised, cleared, raised again after clearing) or its details change, and never twice for the same state:
+
+- The alerts step writes `alert_states`: every kind, raised or not, with a key of the details that matter (`monitor.alerts.states`). The key leaves out what moves every day: for the watermark lag it is the stale data date (not today's date); for drift, the rules that fired and the drifted top features (not the share or the week); for the matured AUC, the graded prediction date; a quarantine has no key, since its counts belong to one run.
+- `monitor.alert_issues` (standard library and the GitHub CLI only, so the job installs nothing) compares each kind with the last state recorded on its open issue, a hidden marker in the issue or comments written by GitHub Actions (a marker written by anyone else is ignored). It opens an issue on a raise with none open, comments on a change, and does nothing otherwise. A cleared alert gets a comment and its issue stays open for a person to close; a later raise is recorded on it while it is open, and opens a new issue once it is closed. An issue from before this change, which has no marker, counts as raised with an unknown key, so it gets one comment and then stays quiet.
+- The job runs whenever the alerts step answered, raised or not, so a clear is recorded. A step that could not read the monitoring tables writes no states, and the job then changes nothing: it never reads as a cleared alert.
+
+Tests: the decision table, a simulation of many runs on an in-memory GitHub (a lasting alert opens one issue and is never commented on again; a changed top feature, a clear and a raise after it are one comment each), separate issues per kind, closed issues, the issues opened before the change, foreign markers, missing or unreadable states, and that the helper imports the standard library only.
+
+Alternatives: the previous state in a Neon table (a write path from the alerts job, which has no database secret) or in the Actions cache (evicted after 7 days unused, so a quiet week would forget a raised alert). The issue itself holds the state where a person reads it.
