@@ -8,7 +8,7 @@
 
 1. **Reason labels for new early stops (decision 10)** are deferred to Step 15. The `why_stopped` text stays in the API record; only labels are ever stored.
 2. **Backups (decision 11):** a weekly scheduled task on Aakrisht's laptop pulls `live.study_versions` and the score history to `data/` (3 to 4 MB a week); never a public artifact. `serving.trial_score_history` gains `run_id`. Neon's own restore reaches back 6 hours only.
-3. **Missed runs (decision 12):** `daily.yml` has a second cron, 3 hours after the first (00:30 UTC), that does nothing if the day already has a succeeded run. The idempotence test of Step 14 runs the job twice with that check bypassed.
+3. **Missed runs (decision 12):** `daily.yml` has a second cron, 3 hours after the first (00:30 UTC; 00:47 UTC since the amendment of 2026-11-17 below), that does nothing if the day already has a succeeded run. The idempotence test of Step 14 runs the job twice with that check bypassed.
 4. **Run control (decision 13):**
    - **The date d** is the date of API v2's `dataTimestamp`, read once. Records posted after d wait. A Saturday or Sunday run does nothing.
    - **The pull** starts at the last stored watermark minus 3 days. The watermark is the earlier of the latest stored post date and d. A pull fails on zero records, on a count that differs from `totalCount`, and when more than 5 stored overlap rows come back neither with their date nor a later one (skipped on the first run).
@@ -37,3 +37,7 @@
 ## Consequences
 
 - The numbers above live in `config/project.yaml` under `live:`, not in code.
+
+## Amendment of 2026-11-17: the crons off the half hour
+
+Decided by Aakrisht on 2026-11-17. GitHub started the scheduled daily runs 3.6 to 7.1 hours late at 21:30 and 00:30 UTC, the busiest minutes of its scheduler. The two crons move to odd minutes in the same order: the first at 21:43 UTC (CLAUDE.md Section 12's job), the second at 00:47 UTC, about 3 hours later, still doing nothing when the day already succeeded. The laptop's tasks follow: the backup waits out 21:43 to 00:47 UTC, the retrain 21:43 to 08:00 UTC (docs/deploy.md, Parts 4 and 5). The effect is measured on the run start times of the next two weeks (docs/progress.md).
