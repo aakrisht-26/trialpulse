@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: Aakrisht checks the first nightly daily run on the upgraded dependencies (2026-11-17 21:30 UTC) and reviews the run of his decisions of 2026-11-17 (records at the end of this file); after his dashboard deploy, its public link in the README and Step 16's close-out.
+Next step: Aakrisht checks the first nightly daily run on the upgraded dependencies (2026-11-17 21:30 UTC) and reviews the closing of Step 16 (records at the end of this file); Steps 14, 15 and 16 are approved, and Step 18 continues.
 
 | Step | Title | Status |
 | --- | --- | --- |
@@ -92,11 +92,11 @@ Next step: Aakrisht checks the first nightly daily run on the upgraded dependenc
 | 11 | Pre-registration, locked test and results | Approved 2026-10-25 (ADRs 0028 to 0032 accepted): both primary claims held (AUC at 12 months 0.730 and 0.723; H2's slope +0.0088), H1, H3 and H4 falsified and published |
 | 12 | Explainability, model card, data card | Approved 2026-10-26 (ADR 0033 accepted) |
 | 13 | Scoring pipeline and model registry | Approved 2026-10-31 (ADRs 0034 to 0036 accepted); the registry confirmed by Aakrisht on DagsHub |
-| 14 | Live ingestion and daily workflow | Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
-| 15 | API service | Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-08 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
-| 16 | Dashboard | Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; the deployment and the screenshots against the deployed API are left for the laptop |
+| 14 | Live ingestion and daily workflow | **Approved 2026-11-17 by Aakrisht** (every acceptance criterion verified, the deployed dashboard checked page by page). Decided 2026-11-01 (ADRs 0037 to 0045). Phase A on the laptop approved 2026-11-06. Phase B on the laptop done 2026-11-07 (the census and replay checked and fixed, the full replay passes). Storage options of ADRs 0068 to 0070 built; the estimate with them is 683.9 MB. Phase B on Neon done and verified 2026-11-07. The gap read (ADR 0041): ADR 0073 accepted and built 2026-11-08; ADRs 0074 and 0075 accepted 2026-11-08, ADR 0075 amended the same day (a class change under the same name); the overlap check passes, the gap store is written, parity 5b measured, and the rebootstrap at the seed 2026-11-03 rehearsed on local Postgres and run on Neon 2026-11-08, with every check equal (Neon 260.2 MB; no daily run on Neon yet). Deployment prepared (render.yaml, docs/deploy.md), not deployed. `daily.yml` disabled |
+| 15 | API service | **Approved 2026-11-17 by Aakrisht** (every acceptance criterion verified, the deployed dashboard checked page by page). Approved 2026-11-01 (ADRs 0046 to 0051 accepted); merged from `step-15-cloud`; review fixes merged 2026-11-01 (ADRs 0058 to 0064); deployed on Render (ADR 0065) and live since 2026-11-08 at https://trialpulse-api.onrender.com; the per-client rate limit keyed by CF-Connecting-IP and measured on the deployed service 2026-11-10 |
+| 16 | Dashboard | **Approved 2026-11-17 by Aakrisht** (every acceptance criterion verified, the deployed dashboard checked page by page). Approved 2026-11-01 (ADRs 0052 to 0057 accepted); merged from `step-16-cloud`; deployed on Streamlit Community Cloud on 2026-11-17 at https://trialpulse-demo.streamlit.app; every page checked against the deployed API by `scripts/check_dashboard.py` (7 of 7); the screenshots in `docs/figures/dashboard_*.png` were taken on 2026-11-10 against the live API (no page changed since) |
 | 17 | Monitoring, retraining and replay | Approved 2026-11-10 (ADRs 0076 to 0082); built and run 2026-11-10 to 2026-11-17, the Neon writes from the hotspot on 2026-11-17; verified and approved by Aakrisht on 2026-11-17 (main `d9dd603`, CI green, Render live) |
-| 18 | Documentation and polish | The overnight run of 2026-11-17 (README, CHANGELOG, fresh clone, demo GIF, link check, cards, resume bullets, interview guide, coverage, audit) verified by Aakrisht; his decisions of 2026-11-17 built the same day (records at the end of this file); the dashboard's public link waits for his deploy |
+| 18 | Documentation and polish | The overnight run of 2026-11-17 (README, CHANGELOG, fresh clone, demo GIF, link check, cards, resume bullets, interview guide, coverage, audit) verified by Aakrisht; his decisions of 2026-11-17 built the same day (records at the end of this file); the dashboard deployed 2026-11-17 (https://trialpulse-demo.streamlit.app) and its link in the README |
 
 ## Working notes
 
@@ -5119,3 +5119,12 @@ Verified by Aakrisht before this run: ruff and mypy clean, `pytest -q` 1,457 pas
 | 5. Next step line | Fixed (the line above) | `ad6f70e` and this commit |
 
 **On main:** once this commit is on main, the next nightly daily run (cron 21:30 UTC on 2026-11-17) is the first on the new dependencies; Aakrisht checks it on 2026-11-18. The commit, CI run and Render deployment are in his report of this run.
+
+## The dashboard deployed, Step 16 closed (2026-11-17)
+
+Deployed by Aakrisht on Streamlit Community Cloud on 2026-11-17 at https://trialpulse-demo.streamlit.app (repository `aakrisht-26/trialpulse`, branch `main`, `app/Home.py`, Python 3.12, the secret `API_URL` set to the API's public address). Steps 14, 15 and 16 approved by Aakrisht on 2026-11-17: every acceptance criterion verified, the deployed dashboard checked page by page.
+
+- **The page check** (`uv run python scripts/check_dashboard.py --url https://trialpulse-demo.streamlit.app`, from the laptop): Overview 13 s, Portfolio 6 s, Trial detail (scored) 8 s, Trial detail (not served) 6 s, Landscape 8 s, Why trials stop 6 s, Model health 6 s, each `ok`; `7 of 7 pages passed`, exit code 0. The app was awake, so no waking was needed.
+- **README:** the intro and the Status row name the dashboard's address; `tests/test_readme.py` now requires it and still refuses any Hugging Face Spaces address and the old "not deployed yet" sentence.
+- **docs/deploy.md** Part 2 records the deployed app, its settings and the check; **docs/resume_bullets.md**'s third bullet names the dashboard, its note removed; **CHANGELOG.md** records the deployment.
+- **Links:** `scripts/check_links.py` offline and with `--external` (the new address included); results in the report of this run.
