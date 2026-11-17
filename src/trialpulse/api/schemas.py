@@ -61,6 +61,18 @@ class NotScored(BaseModel):
     reason_text: str
 
 
+class Memo(BaseModel):
+    """An AI-written summary of a trial's stored drivers and record changes (ADR 0084)."""
+
+    label: str
+    note: str
+    as_of_date: dt.date = Field(description="The score date the memo was checked against")
+    generated_date: dt.date
+    model: str
+    prompt_version: str
+    paragraphs: list[str]
+
+
 class TrialRisk(Envelope):
     nct_id: str
     brief_title: str | None
@@ -70,6 +82,9 @@ class TrialRisk(Envelope):
     status: Literal["scored", "not_scored"]
     score: Score | None
     not_scored: NotScored | None
+    memo: Memo | None = Field(
+        None, description="Null when there is no memo checked against the served score"
+    )
     risk_language: str = "Scores describe elevated early-stop risk, not whether a trial will fail."
 
 

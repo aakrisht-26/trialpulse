@@ -101,6 +101,25 @@ def _envelope(api: Api | None, status: int, detail: str,
     return JSONResponse(body.model_dump(mode="json"), status_code=status, headers=headers)
 
 
+MEMO_LABEL = "AI-written summary of the stored drivers and record changes"
+MEMO_NOTE = (
+    "Written by a language model from this trial's stored values; every number and date was "
+    "checked against them, and a memo that failed the check is never shown. A driver says what "
+    "moved the model's score, not why a trial stops (ADR 0033)."
+)
+
+
+def _memo(row: dict[str, Any], public: bool) -> dict[str, Any] | None:
+    """The trial's memo when memos are public and it was checked against the served score."""
+    if not public or row.get("memo_paragraphs") is None:
+        return None
+    return {
+        "label": MEMO_LABEL, "note": MEMO_NOTE, "as_of_date": row["memo_as_of"],
+        "generated_date": row["memo_generated_at"].date(), "model": row["memo_model"],
+        "prompt_version": row["memo_prompt"], "paragraphs": list(row["memo_paragraphs"]),
+    }  # fmt: skip
+
+
 def _drivers(row: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     names = model_columns()
     out: dict[str, list[dict[str, Any]]] = {"12": [], "24": []}
@@ -201,9 +220,13 @@ def create_app(api: Api) -> FastAPI:
         def compute() -> dict[str, Any]:
             rows = api.db.rows(
                 """SELECT l.*, n.reason, n.as_of_date AS not_scored_date, d.brief_title,
-                  d.sponsor_class, d.areas, sp.display_name
+                  d.sponsor_class, d.areas, sp.display_name, m.paragraphs AS memo_paragraphs,
+                  m.valid_as_of AS memo_as_of, m.generated_at AS memo_generated_at,
+                  m.model AS memo_model, m.prompt_version AS memo_prompt
                 FROM (SELECT CAST(:id AS text) AS nct_id) k
                 LEFT JOIN serving.trial_scores_latest l ON l.nct_id = k.nct_id
+                LEFT JOIN serving.trial_memos m
+                  ON m.nct_id = k.nct_id AND m.valid_as_of = l.as_of_date
                 LEFT JOIN serving.trials_not_scored n ON n.nct_id = k.nct_id
                 LEFT JOIN serving.trial_display d ON d.nct_id = k.nct_id
                 LEFT JOIN serving.sponsors sp ON sp.sponsor_id = d.sponsor_id""",
@@ -225,11 +248,13 @@ def create_app(api: Api) -> FastAPI:
                     "true_landmark_index": r["true_landmark_index"],
                     "model_version": r["model_version"], "drivers": _drivers(r),
                 }  # fmt: skip
-                return {**base, "status": "scored", "score": score, "not_scored": None}
+                return {**base, "status": "scored", "score": score, "not_scored": None,
+                        "memo": _memo(r, api.cfg.memo_public)}  # fmt: skip
             reason = str(r["reason"])
             not_scored = {"as_of_date": r["not_scored_date"], "reason": reason,
                           "reason_text": REASON_TEXT.get(reason, reason)}  # fmt: skip
-            return {**base, "status": "not_scored", "score": None, "not_scored": not_scored}
+            return {**base, "status": "not_scored", "score": None, "not_scored": not_scored,
+                    "memo": None}  # fmt: skip
 
         body = api.answer(("risk", nct_id), compute)
         if body.get("missing"):
