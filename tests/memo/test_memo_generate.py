@@ -241,3 +241,24 @@ def test_the_command_writes_the_rejection_alert_for_the_workflow(
     monkeypatch.setattr(module.dt, "datetime", Frozen)
     assert g.main(["--target", "local", "--trigger", "workflow_dispatch"]) == 0
     assert output.read_text(encoding="utf-8").strip() == "memo_alert=rejections"
+
+
+@respx.mock
+def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
+    seeded: str, tmp_path: Path
+) -> None:
+    from trialpulse.memo import review
+
+    respx.post(URL).mock(side_effect=answering(lambda p: [*faithful(p)[:2], "It will fail."]))
+    run(seeded, cfg())  # every memo refused
+    respx.post(URL).mock(side_effect=answering(faithful))
+    run(seeded, cfg())  # then stored
+    assert review.main(["--target", "local", "--out-dir", str(tmp_path)]) == 0
+    (path,) = tmp_path.glob("*.md")
+    text = path.read_text(encoding="utf-8")
+    assert text.count("Check run again: passed.") == 3
+    assert text.count("### R") == 3
+    assert "Reasons: banned_language" in text
+    assert "```json" in text
+    for name in ("Acme Pharma", "Northern University Hospital", "Hand-placed trial"):
+        assert name not in text
