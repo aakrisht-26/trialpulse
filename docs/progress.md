@@ -75,7 +75,7 @@ uv run python -m trialpulse.feasibility.spike --part h
 
 Current step: **Step 18, documentation and polish** (approved by Aakrisht on 2026-11-17, all but the dashboard's public link, which follows his deploy). Step 17 approved by Aakrisht on 2026-11-17 after his verification.
 
-Next step: the finish of the overnight run of 2026-11-17 (the full suite on the final tree, the drift tests, push, CI, Render, the morning report); items 1 to 13 done, records at the end of this file.
+Next step: the run of Aakrisht's decisions of 2026-11-17 (the drift alert on the top 5 features, the dependency upgrades, ADR 0027 rejected, the resume bullets), then the full suite, push, CI and Render; records at the end of this file. The overnight run of 2026-11-17 is finished and verified by Aakrisht.
 
 | Step | Title | Status |
 | --- | --- | --- |
