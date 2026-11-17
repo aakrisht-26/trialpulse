@@ -2,8 +2,8 @@
 
 Bullets chosen by Aakrisht on 2026-11-17 for a data science or machine learning engineering resume. Each number is rounded on purpose from the source line cited in the comment under its bullet (line numbers as of 2026-11-17). The positioning follows CLAUDE.md Section 2: operational early-stop risk of trial portfolios, never treatment efficacy.
 
-- Built TrialPulse, an end-to-end risk engine that estimates each open clinical trial's probability of stopping early within 12 and 24 months, rebuilding trials point in time from 4.4M registry versions of 604K trials to prevent data leakage.
-  <!-- 4.4M from 4,444,542 versions and 604K from 604,583 trials: docs/progress.md line 445 (Step 3, the warehouse). 604,583 rounds to 605K; 604K is the number cut to its thousands. -->
+- Built TrialPulse, an end-to-end risk engine that estimates each open clinical trial's probability of stopping early within 12 and 24 months, rebuilding trials point in time from 4.4M registry versions of about 605K trials to prevent data leakage.
+  <!-- 4.4M from 4,444,542 versions and about 605K from 604,583 trials (rounded to the nearest thousand): docs/progress.md line 445 (Step 3, the warehouse). -->
 
 - Modeled early stopping as a competing risk with a discrete-time LightGBM model and IPCW evaluation. On a pre-registered, locked test (hypotheses git-tagged before scoring, falsified ones published), it reached a 12-month AUC of 0.72 to 0.73 and a 3.1 to 3.2x lift in the top 10% of risk.
   <!-- AUC at 12 months 0.730 (2018) and 0.723 (2019), lift at 10% 3.23 (2018) and 3.06 (2019): docs/results.md lines 68 and 69 (M4). -->
