@@ -96,6 +96,17 @@ def test_the_hash_follows_the_values_as_shown_only() -> None:
     assert json.loads(p.canonical(build())) == build()
 
 
+def test_a_retention_leaves_fewer_field_changes_never_other_ones() -> None:
+    """ADR 0069 deletes old versions; the memo's payload then shows a subset of its changes."""
+    third = {**VERSIONS[1], "effective_date": dt.date(2026, 11, 12), "status": "SUSPENDED"}
+    held = [*VERSIONS, third]
+    everything = p.field_changes(held, 10)
+    after = p.field_changes(held[1:], 10)  # the oldest version deleted
+    assert after
+    assert all(c in everything for c in after)
+    assert len(after) < len(everything)
+
+
 def test_halves_round_up_and_shares_render_without_trailing_zeros() -> None:
     assert [p.percent(x) for x in (0.125, 0.135, 0.0049, 0.995)] == [13, 14, 0, 100]
     assert [p.as_shown(v) for v in (2.50, "3.000", 7, True, None, ["B", "A"], "PHASE2")] == [

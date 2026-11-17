@@ -272,6 +272,13 @@ def test_retention_that_lost_its_lease_deletes_nothing(
 # ADR 0069: what the daily job reads of live.study_versions survives the retention -----------
 
 DAILY_READERS = {"latest_live", "versions_after", "latest_post_date", "overlap_rows"}
+# Readers outside the daily job that a retention cannot break, each with why (ADR 0069):
+OTHER_READERS = {
+    # memo.generate (ADR 0084): the before and after values of the versions still held; after
+    # a retention it shows fewer changes, never wrong ones, and the changed payload hash
+    # regenerates the memo (tests/memo/test_memo_payload.py)
+    "read_inputs",
+}
 
 
 def _readers_of_versions() -> set[str]:
@@ -297,7 +304,7 @@ def _readers_of_versions() -> set[str]:
 
 
 def test_the_daily_job_reads_versions_only_through_four_store_functions() -> None:
-    assert _readers_of_versions() == DAILY_READERS
+    assert _readers_of_versions() == DAILY_READERS | OTHER_READERS
 
 
 def _daily_reads(dsn: str) -> dict[str, Any]:
