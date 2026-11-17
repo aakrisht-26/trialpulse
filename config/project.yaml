@@ -125,6 +125,7 @@ api:
   forwarded_diagnostic: false      # ADR 0065's measurement: logs the headers' shape only
   cache_entries: 20000
   page_size_max: 200
+  memo_public: false               # ADR 0084: memos stay off the API until Aakrisht's review
 
 retraining:                       # Section 14's promotion gate (ADR 0080)
   auc_margin: 0.005               # challenger AUC at 12 months >= champion's minus this
@@ -132,6 +133,19 @@ retraining:                       # Section 14's promotion gate (ADR 0080)
   slope_high: 1.2
   horizon_months: 12              # the gate reads the 12-month horizon only (ADR 0080)
   window_dates: 3                 # the window's latest monthly prediction dates graded (ADR 0080)
+
+memo:                             # the per-trial risk memo (ADR 0084)
+  model: openai/gpt-oss-120b
+  reasoning_effort: low           # the memo is short; fewer reasoning tokens than Step 6
+  max_completion_tokens: 2048
+  prompt: memo_v1.md              # src/trialpulse/memo/prompts/
+  top_n: 100                      # the top unflagged trials by 12-month risk
+  move_threshold: 0.05            # a 12-month risk move that chooses a trial
+  move_window_days: 7             # the move's latest score row is at most this old
+  cap_per_run: 100                # memo calls a run makes at most
+  max_record_changes: 10          # record changes in a payload, the latest first
+  rejection_alert_share: 0.20     # rejections over this share of a run's calls: an issue
+  rejected_samples: 5             # rejected memos kept per run for the review, never served
 
 alerts:                           # one GitHub issue per alert kind (ADR 0081)
   watermark_lag_days: 3           # Section 14: watermark lag at most 3 days

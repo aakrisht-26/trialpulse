@@ -234,6 +234,23 @@ class ApiConfig(_Section):
     forwarded_diagnostic: bool = False  # temporary: log the proxy chain's shape (ADR 0065)
     cache_entries: PositiveInt
     page_size_max: PositiveInt
+    memo_public: bool = False  # ADR 0084: the risk endpoint's memo is null while off
+
+
+class MemoConfig(_Section):
+    """The per-trial risk memo (ADR 0084)."""
+
+    model: str
+    reasoning_effort: str
+    max_completion_tokens: PositiveInt
+    prompt: str
+    top_n: PositiveInt
+    move_threshold: float = Field(gt=0, lt=1)
+    move_window_days: PositiveInt
+    cap_per_run: PositiveInt
+    max_record_changes: PositiveInt
+    rejection_alert_share: float = Field(gt=0, le=1)
+    rejected_samples: NonNegativeInt
 
 
 class RetrainingConfig(_Section):
@@ -281,6 +298,7 @@ class ProjectConfig(BaseSettings):
     seeds: SeedConfig
     live: LiveConfig
     api: ApiConfig
+    memo: MemoConfig
     retraining: RetrainingConfig
     alerts: AlertsConfig
 
