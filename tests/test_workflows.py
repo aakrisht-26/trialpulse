@@ -43,7 +43,7 @@ def _load(path: Path) -> dict[str, Any]:
 def _modules() -> set[str]:
     found = set()
     for path in WORKFLOWS:
-        found |= set(re.findall(r"python -m ([\w.]+)", path.read_text(encoding="utf-8")))
+        found |= set(re.findall(r"python3? -m ([\w.]+)", path.read_text(encoding="utf-8")))
     return found
 
 
@@ -100,6 +100,23 @@ def test_the_daily_job_has_two_crons_and_a_separate_failure_job() -> None:
     assert "always()" in steps["Alerts"]["if"]  # a failed run still raises its alerts
     assert steps["Alerts"]["continue-on-error"] is True  # and they never fail it
     assert "always()" in jobs["alerts"]["if"]
+
+
+def test_the_alerts_job_comments_on_change_with_the_standard_library_only() -> None:
+    """ADR 0081: the job runs whenever the alerts step answered (raised or not, so a clear is
+    recorded), installs nothing and runs the helper; the daily job hands it every state."""
+    jobs = _load(REPO_ROOT / ".github" / "workflows" / "daily.yml")["jobs"]
+    assert jobs["daily"]["outputs"]["alert_states"] == "${{ steps.alerts.outputs.alert_states }}"
+    job = jobs["alerts"]
+    assert "needs.daily.outputs.alert_states != ''" in job["if"]
+    assert job["permissions"] == {"contents": "read", "issues": "write"}
+    steps = job["steps"]
+    assert steps[0]["uses"].startswith("actions/checkout@")
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert [s["run"] for s in steps[1:]] == ["python3 -m trialpulse.monitor.alert_issues"]
+    assert steps[1]["env"]["ALERT_STATES"] == "${{ needs.daily.outputs.alert_states }}"
+    assert steps[1]["env"]["PYTHONPATH"] == "src"
+    assert "setup-uv" not in str(job)  # nothing installed
 
 
 def test_ci_requires_postgres_for_the_database_tests() -> None:
@@ -175,6 +192,8 @@ def test_the_live_workflows_install_without_the_dataset_group(name: str) -> None
     assert "uv pip" not in text
     commands = re.findall(r"^\s*run: (.*)$", text, flags=re.MULTILINE)
     for command in commands:  # nothing but the sync and the project's own modules
+        if command == "python3 -m trialpulse.monitor.alert_issues":
+            continue  # standard library only, nothing installed (test_alert_issues.py)
         assert command.startswith(("uv sync", "uv run python -m trialpulse.", "|")), command
 
 

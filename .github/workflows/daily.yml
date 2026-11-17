@@ -31,6 +31,7 @@ jobs:
       error_class: ${{ steps.run.outputs.error_class }}
       drift_failed: ${{ steps.run.outputs.drift_failed }}
       alerts: ${{ steps.alerts.outputs.alerts }}
+      alert_states: ${{ steps.alerts.outputs.alert_states }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -78,35 +79,33 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-  # One issue per alert kind (ADR 0081), reused while it stays open.
+  # One issue per alert kind (ADR 0081), written to only when the kind's state changes: raised,
+  # cleared, raised again, or its details changed (monitor.alert_issues). It runs whenever the
+  # alerts step answered, raised or not, so a clear is recorded too; a step that could not read
+  # the monitoring tables writes no states and changes nothing.
   alerts:
-    name: Open or update the alert issues
+    name: Open, update or clear the alert issues
     needs: daily
     if: >-
-      always() && github.ref == 'refs/heads/main' && needs.daily.outputs.alerts != ''
+      always() && github.ref == 'refs/heads/main' && needs.daily.outputs.alert_states != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
       issues: write
     steps:
-      - name: Open or update one issue per alert kind
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Comment only when an alert's state changes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          ALERTS: ${{ needs.daily.outputs.alerts }}
+          ALERT_STATES: ${{ needs.daily.outputs.alert_states }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          for kind in ${ALERTS//,/ }; do
-            title="Alert: ${kind}"
-            body="Run ${RUN_URL} raised the alert ${kind} (ADR 0081); its log has the numbers."
-            number=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')
-            if [ -n "${number}" ]; then
-              gh issue comment "${number}" --body "${body}"
-            else
-              gh issue create --title "${title}" --body "${body}"
-            fi
-          done
+          PYTHONPATH: src  # the standard library and the GitHub CLI only: nothing to install
+        run: python3 -m trialpulse.monitor.alert_issues
 
   # The drift step never fails the run (ADR 0076); its failure opens or reuses its own issue.
   drift:
