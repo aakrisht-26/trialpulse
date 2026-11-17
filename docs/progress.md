@@ -5128,3 +5128,12 @@ Deployed by Aakrisht on Streamlit Community Cloud on 2026-11-17 at https://trial
 - **README:** the intro and the Status row name the dashboard's address; `tests/test_readme.py` now requires it and still refuses any Hugging Face Spaces address and the old "not deployed yet" sentence.
 - **docs/deploy.md** Part 2 records the deployed app, its settings and the check; **docs/resume_bullets.md**'s third bullet names the dashboard, its note removed; **CHANGELOG.md** records the deployment.
 - **Links:** `scripts/check_links.py` offline and with `--external` (the new address included); results in the report of this run.
+
+## The run of 2026-11-17, afternoon (Step 18)
+
+Verified by Aakrisht before this run: ruff and mypy clean, `pytest -q` 1,463 passed, the alert, app and README tests 112 passed, the drift environment 17 passed, `check_links` 0 broken, `check_dashboard` 7 of 7 on the deployed app, pip-audit no known vulnerabilities, CI green on `26314e4`. No Neon (Wi-Fi).
+
+| Item | Result | Commit |
+| --- | --- | --- |
+| 1. Resume fix | The first bullet reads "about 605K trials" (604,583 rounded to the nearest thousand), its comment updated. Full suite on that tree 1,721 passed, 3 skipped, 674 s; pushed | `075eb09` |
+| 2. DeepHit skipped | Stretch item 1 is not built (decided by Aakrisht 2026-11-17): it adds PyTorch and a long training job, a gain over the discrete-time LightGBM on these tabular features is unlikely, and any comparison would be on the development origins only, since the locked test is spent. ADR 0083, listed in CLAUDE.md's Amendments | this commit |
