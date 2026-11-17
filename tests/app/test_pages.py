@@ -477,3 +477,37 @@ def test_model_health_without_a_statement_or_a_data_date(stub_api: StubApi) -> N
     assert "The model statement is not loaded yet." in shown
     assert "The data-as-of date is not known" in shown
     assert "Data as of: not known yet" in shown
+
+
+# The risk memo (ADR 0084) --------------------------------------------------------------------
+
+MEMO = {
+    "label": "AI-written summary of the stored drivers and record changes",
+    "note": "Written by a language model from this trial's stored values; every number and "
+    "date was checked against them.",
+    "as_of_date": "2026-09-25",
+    "generated_date": "2026-09-26",
+    "model": "openai/gpt-oss-120b",
+    "prompt_version": "memo_v1",
+    "paragraphs": ["First paragraph.", "Second paragraph.", "Third paragraph."],
+}
+
+
+def test_no_memo_section_while_the_api_serves_none(stub_api: StubApi) -> None:
+    at = app("trial", nct="NCT00000002")
+    assert not at.exception
+    assert [e.label for e in at.expander] == []
+
+
+def test_a_served_memo_is_a_collapsed_labeled_section_with_the_notice(stub_api: StubApi) -> None:
+    stub_api.override("/v1/trials/NCT00000002/risk", memo=MEMO)
+    at = app("trial", nct="NCT00000002")
+    assert not at.exception
+    (section,) = at.expander
+    assert section.label == MEMO["label"]
+    texts = [m.value for m in section.markdown]
+    assert texts == MEMO["paragraphs"]
+    captions = " ".join(c.value for c in section.caption)
+    assert "checked against them" in captions
+    assert "openai/gpt-oss-120b (memo_v1) for the score of 2026-09-25" in captions
+    assert "Research demo. Not medical advice. Not for patient decision-making." in captions

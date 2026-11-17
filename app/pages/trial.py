@@ -59,6 +59,17 @@ def main(page: ui.Page) -> None:
                      "Contribution (log-odds)": d["contribution"]}
                     for d in score["drivers"].get(horizon, [])]  # fmt: skip
             tab.dataframe(rows, hide_index=True)
+        memo = trial.get("memo")
+        if memo:  # ADR 0084: only while memos are public, and only beside its own score
+            with st.expander(memo["label"], expanded=False):
+                for paragraph in memo["paragraphs"]:
+                    st.markdown(paragraph)
+                st.caption(
+                    f"Written on {memo['generated_date']} by {memo['model']} "
+                    f"({memo['prompt_version']}) for the score of {memo['as_of_date']}. "
+                    f"{memo['note']}"
+                )
+                st.caption(ui.NOTICE)
     else:
         missing = trial["not_scored"]
         st.markdown(":grey-badge[:material/block: No current score]")
