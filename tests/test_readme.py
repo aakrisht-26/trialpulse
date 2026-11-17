@@ -127,10 +127,12 @@ def test_the_wording_rules() -> None:
 
 
 def test_live_links_only_for_what_is_deployed() -> None:
-    """The API is live on Render (ADR 0065); the dashboard is not deployed yet, so no
-    Streamlit app URL, and no Spaces URL at all."""
+    """The API is live on Render (ADR 0065) and the dashboard on Streamlit Community Cloud
+    (deployed 2026-11-17); no Spaces URL at all, and no sentence saying it is not deployed."""
     text = _text()
     assert "https://trialpulse-api.onrender.com" in text
+    assert "https://trialpulse-demo.streamlit.app" in text
     assert "hf.space" not in text
-    assert "streamlit.app" not in text
-    assert "there is no public dashboard link yet" in text
+    assert "huggingface.co/spaces" not in text
+    assert "not deployed yet" not in text
+    assert "there is no public dashboard link yet" not in text
