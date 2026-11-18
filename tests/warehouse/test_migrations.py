@@ -65,9 +65,14 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
     }
     for word in ("investigator", "email", "contact", "phone", "affiliation"):
         assert word not in sql.lower()
+    views = set(re.findall(r"CREATE VIEW ([a-z_]+\.[a-z_]+) AS", sql))
+    assert views == {"serving.monitoring_grades", "serving.monitoring_drift",
+                     "serving.monitoring_promotions", "serving.trial_first_posts"}  # fmt: skip
     down = _render(capsys, "head", "base")
     for table in tables:
         assert f"DROP TABLE {table};" in down
+    for view in views:
+        assert f"DROP VIEW IF EXISTS {view};" in down
     assert "ALTER TABLE live.study_versions DROP COLUMN last_known_status;" in down
     assert "ALTER TABLE serving.trial_score_history DROP COLUMN reasons;" in down
 

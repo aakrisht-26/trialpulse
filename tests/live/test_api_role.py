@@ -37,6 +37,45 @@ def test_the_role_reads_serving_and_nothing_else(scratch: str) -> None:
             con.execute(f"DROP ROLE {role}")
 
 
+def test_the_role_reads_first_post_dates_through_the_view_only(scratch: str) -> None:
+    """ADR 0043 amended: the timeline's join runs as the API's role, which reads the view of
+    first-post dates while live.trial_state stays closed to it."""
+    import datetime as dt
+
+    dsn = scratch.replace("postgresql+psycopg://", "postgresql://", 1)
+    role, password = f"api_test_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex
+    first = dt.date(2024, 10, 28)
+    with psycopg.connect(dsn) as con, con.cursor() as cur:
+        cur.execute(
+            """INSERT INTO live.trial_state (nct_id, effective_date, status,
+              study_first_post_date, title_phase, intervention_types, feature_hash,
+              n_versions, ever_suspended, recent_post_dates, reversal)
+              VALUES ('NCT01234567', '2026-11-12', 'RECRUITING', %s, 'NONE', '{}', %s,
+              2, false, '{}', false)""",
+            (first, bytes(32)),
+        )
+        cur.execute("""INSERT INTO serving.amendment_markers (nct_id, post_dates, kinds)
+                       VALUES ('NCT01234567', %s, %s)""", ([first], [1]))  # fmt: skip
+        grant_read_only(cur, password, role)
+        con.commit()
+    as_role = conninfo.make_conninfo(dsn, user=role, password=password)
+    try:
+        with psycopg.connect(as_role, autocommit=True) as con:
+            row = con.execute(
+                """SELECT m.post_dates, m.kinds, f.first_post_date
+                FROM serving.amendment_markers m
+                LEFT JOIN serving.trial_first_posts f ON f.nct_id = m.nct_id
+                WHERE m.nct_id = 'NCT01234567'"""
+            ).fetchone()
+            assert row == ([first], [1], first)
+            with pytest.raises(psycopg.Error):
+                con.execute("SELECT study_first_post_date FROM live.trial_state")
+    finally:
+        with psycopg.connect(dsn, autocommit=True) as con:
+            con.execute(f"DROP OWNED BY {role}")
+            con.execute(f"DROP ROLE {role}")
+
+
 def test_the_command_makes_a_strong_password_of_its_own() -> None:
     """Review finding 12: the command accepted a typed password (16 characters checked);
     Neon refuses a role made by SQL whose password has less than 60 bits of entropy. It now
