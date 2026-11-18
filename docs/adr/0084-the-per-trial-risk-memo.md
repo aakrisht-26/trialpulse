@@ -1,7 +1,7 @@
 # 0084. The per-trial risk memo (Stretch item 2)
 
 - Date: 2026-11-17
-- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences. **Amended again 2026-11-18** (memo_v3, below): the audit of the memo_v2 memos found statements the template and the labels got wrong.
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences. **Amended again 2026-11-18** (memo_v3, below): the audit of the memo_v2 memos found statements the template and the labels got wrong. Two details flagged while building memo_v3 were approved the same day; whether a model keeps writing paragraph 2 is decided after the review of the memo_v3 memos.
 
 ## Context
 
@@ -85,6 +85,8 @@ Decided by Aakrisht on 2026-11-18, after an automated read-only audit of the 20 
 
 ### Implementation details decided while building (flagged for review)
 
+Aakrisht approved the first two items on 2026-11-18, with the null `first_posted` of a trial the live state no longer holds (ADR 0043 as amended).
+
 - The API's names of the marker codes change with the memo's (one table): "dates" becomes "dates or status verification" and "title phase or interventions" becomes "intervention types or title phase".
 - The other-level rule and the connective-words rule of item 4 go beyond the decision's wording. An adversarial review of the diff before its commit (two reviewers, two verifiers) showed why: with the display rule alone, "The recruitment status is no longer recruiting", "which never raises the risk", "and the sponsor class is industry" and "although the trial was terminated" all passed. The connective-words rule closes them and also refuses a plural "are" after a singular label; the prompt asks for exactly "The <label> is <value>, which <effect>."
 - The same review led to: outcome claims in the past tense or as a likelihood ("was terminated", "has stopped", "likely to end") in the banned list; the word rules reading a snake_case token as words ("the_trial_will_fail"), the number rule still skipping feature names; flag phrases that claim no more than the feature ("this month or earlier" for a start that is no longer ahead, "not closed" for enrollment, "not shown as reached in the registry" for primary completion, the first posting against the recorded start month); "not stated in the record" for a missing value, so a missing flag never reads as its "no"; a completion date shown at its recorded precision; the status feature's words limited to the open statuses a served trial can have (ADR 0014); and, once retention (ADR 0069) can have deleted a version posted since go-live, "no earlier version is still held" in place of "first version held since go-live".
@@ -94,6 +96,7 @@ Decided by Aakrisht on 2026-11-18, after an automated read-only audit of the 20 
 
 - More of paragraph 3 is fixed text, and none of it can call a first posting a change or contradict a count of versions.
 - The labels are longer; a sentence can run to about 30 words.
+- With the connective-words rule the model's freedom of wording is nearly nil: a driver sentence is "The <label> is <value>, which <effect>." with connective words only, which a template could write as well. After the review of the memo_v3 memos, Aakrisht decides whether to keep the model for paragraph 2 or to replace it with a template (noted 2026-11-18).
 
 ## Alternatives
 
