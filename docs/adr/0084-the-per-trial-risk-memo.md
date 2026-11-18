@@ -1,7 +1,7 @@
 # 0084. The per-trial risk memo (Stretch item 2)
 
 - Date: 2026-11-17
-- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences.
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences. **Amended again 2026-11-18** (memo_v3, below): the audit of the memo_v2 memos found statements the template and the labels got wrong.
 
 ## Context
 
@@ -65,6 +65,35 @@ The 12 `required_phrase` rejections of the first run were false: the model wrote
 - The memo carries less model-written text: two of its three paragraphs are deterministic and tested, and the model's paragraph is held sentence by sentence to the stored drivers.
 - The API's note on the memo says which paragraph a model wrote.
 - The table of labels is a new place to keep in step with the registry: a test fails when a served feature has no entry.
+
+## Amendment of 2026-11-18 (second): memo_v3
+
+Decided by Aakrisht on 2026-11-18, after an automated read-only audit of the 20 memo_v2 memos (data/memo_review/2026-11-18-audit.md: two auditors, one adversarial verifier per auditor). The flag stays off.
+
+### What the audit found
+
+40 findings stand (13 high, 12 medium, 15 low) and the verifiers refuted 4; no memo was free of findings. Every high finding is in paragraph 3, the template: a trial's first posting was listed as a status change and counted (its marker has the status code, ADR 0043 as amended); "The record changed on N dates" counted only changes to fields the model reads, so it contradicted "versions posted" in the same memo; and a change since go-live whose version is the first one held was listed beside "no change in them is held". The medium findings: "(dates)" also covers a re-verification of the status; labels that misled ("slip is 33 months earlier", a registration lag that counts a start move again, "earlier suspension" for the current one, "landmark step", "ended" beside "stopped", a smoothed sponsor rate shown as the sponsor's own, an enrollment count without its type); and the per-sentence rule held only a display's numbers, not its words. The low findings: jargon ("unflagged", "go-live", "held"), no horizon and no caution before the driver sentences, labels repeated by their values, plural labels with "is", the date of a move read as the date of the rise, and "or" inside a list joined by "and". The v1 review's "2025-09-04 changed the status only" (above) was that trial's first posting.
+
+### Decision
+
+1. **The first posting (A).** Markers are read through `trialpulse.markers` (ADR 0043 as amended): the marker on the trial's first-post date from the live state is its first posting, kept apart in the payload (`first_posted_on`) and counted nowhere; trimmed markers keep their stored codes. The Trial detail page shows the first posting as "First posted".
+2. **Paragraph 3 (B).** It says exactly what it counts ("Since its first posting on D, changes to fields the model reads were posted on N dates", then "Versions that changed only other fields are not counted."), lists each of the latest changes as its own sentence with its kinds apart ("2026-05-20: status; dates or status verification; enrollment."), states when the status was last verified in its own sentence, and, for each change since go-live, either the values before and after (every field of the marker's groups; a change of the lead sponsor is stated without values) or "first version held since go-live; no earlier value to compare". The dates bit is named "dates" or "status verified" where two held versions show which changed (Aakrisht's choice of 2026-11-18), and "dates or status verification" elsewhere.
+3. **The labels (C).** The table is rewritten so that every label is a singular noun phrase ("The <label> is <value>" reads as English), counts are "number of ...", dates that moved are named by the date ("The start date is 39 months later than in the first version"), the registration lag is the start as now recorded with "any move of the start included", the suspension history and status are named apart, the landmark is "the 24-month checkpoint", ended trials are "by completion or early stop", the sponsor rate is "smoothed toward its class rate", and the enrollment count carries its type from the latest record.
+4. **The check (D).** Sentence i must hold driver i's display value word for word (case aside), with its numbers as before; it also may not hold another level or flag phrase of the same feature that the display does not contain, since "not suspended now" holds "suspended now". Beyond its label, display value and effect, a sentence may hold only connective words (the, a, an, is, which, and, this, that, it, its, of, at, with, being, here): the model is sent nothing else, so any other word (a negation, another feature, an outcome) would be invented. No served feature's label but its own may appear in it.
+5. **Paragraph 1.** "counting only scores inside the validated range" replaces "unflagged"; a move gives both scores ("rose from 47% in the score of 2026-11-03 to 55%"); and a fixed sentence before the drivers says they give what moved the model's 12-month score and that a driver is not a reason why a trial stops.
+6. **Prompt `memo_v3`**, payload version 3, so every memo regenerates on the next run, which may stop partway at the daily limit (item 6 above). Tests hold the 40 findings as cases memo_v3 makes impossible (`tests/memo/test_memo_audit_v2.py`).
+
+### Implementation details decided while building (flagged for review)
+
+- The API's names of the marker codes change with the memo's (one table): "dates" becomes "dates or status verification" and "title phase or interventions" becomes "intervention types or title phase".
+- The other-level rule and the connective-words rule of item 4 go beyond the decision's wording. An adversarial review of the diff before its commit (two reviewers, two verifiers) showed why: with the display rule alone, "The recruitment status is no longer recruiting", "which never raises the risk", "and the sponsor class is industry" and "although the trial was terminated" all passed. The connective-words rule closes them and also refuses a plural "are" after a singular label; the prompt asks for exactly "The <label> is <value>, which <effect>."
+- The same review led to: outcome claims in the past tense or as a likelihood ("was terminated", "has stopped", "likely to end") in the banned list; the word rules reading a snake_case token as words ("the_trial_will_fail"), the number rule still skipping feature names; flag phrases that claim no more than the feature ("this month or earlier" for a start that is no longer ahead, "not closed" for enrollment, "not shown as reached in the registry" for primary completion, the first posting against the recorded start month); "not stated in the record" for a missing value, so a missing flag never reads as its "no"; a completion date shown at its recorded precision; the status feature's words limited to the open statuses a served trial can have (ADR 0014); and, once retention (ADR 0069) can have deleted a version posted since go-live, "no earlier version is still held" in place of "first version held since go-live".
+- The enrollment count's type comes from the latest record (`live.trial_state`), the checkpoint and the recent window from `landmarks.spacing_months`; a change since go-live whose version retention removed says "its version is no longer held"; of several versions held on one day, the last ingested is compared.
+
+### Consequences
+
+- More of paragraph 3 is fixed text, and none of it can call a first posting a change or contradict a count of versions.
+- The labels are longer; a sentence can run to about 30 words.
 
 ## Alternatives
 
