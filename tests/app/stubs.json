@@ -13350,21 +13350,21 @@
    "data_as_of": "2026-09-25",
    "markers": [
     {
-     "changed": [
-      "status"
-     ],
+     "changed": [],
+     "first_posted": true,
      "post_date": "2025-01-10"
     },
     {
      "changed": [
-      "dates",
+      "dates or status verification",
       "enrollment"
      ],
+     "first_posted": false,
      "post_date": "2026-03-02"
     }
    ],
    "nct_id": "NCT00000001",
-   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043).",
+   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043). A marker on the trial's first-post date, as the live state gives it, is its first posting, not a change; for a trial the live state no longer holds (an ended trial), first_posted is null and every marker shows its stored groups, so its first posting may read as a status change.",
    "notice": "Research demo. Not medical advice. Not for patient decision-making.",
    "points": [
     {
@@ -13507,9 +13507,17 @@
     "url": "https://clinicaltrials.gov"
    },
    "data_as_of": "2026-09-25",
-   "markers": [],
+   "markers": [
+    {
+     "changed": [
+      "status"
+     ],
+     "first_posted": false,
+     "post_date": "2025-06-02"
+    }
+   ],
    "nct_id": "NCT00000002",
-   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043).",
+   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043). A marker on the trial's first-post date, as the live state gives it, is its first posting, not a change; for a trial the live state no longer holds (an ended trial), first_posted is null and every marker shows its stored groups, so its first posting may read as a status change.",
    "notice": "Research demo. Not medical advice. Not for patient decision-making.",
    "points": [
     {
@@ -13693,7 +13701,7 @@
    "data_as_of": "2026-09-25",
    "markers": [],
    "nct_id": "NCT00000004",
-   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043).",
+   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043). A marker on the trial's first-post date, as the live state gives it, is its first posting, not a change; for a trial the live state no longer holds (an ended trial), first_posted is null and every marker shows its stored groups, so its first posting may read as a status change.",
    "notice": "Research demo. Not medical advice. Not for patient decision-making.",
    "points": [
     {
@@ -13756,7 +13764,7 @@
    "data_as_of": "2026-09-25",
    "markers": [],
    "nct_id": "NCT00000005",
-   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043).",
+   "note": "The first point is the trial's score at the data cutoff, regenerated when the live system started (or its first live score, for a trial registered later); there are no scores before it. After it, a point is written when a score moves by 0.01 or more, the record changes, a landmark passes or the model changes. Markers before the first point show amendments only (ADR 0043). A marker on the trial's first-post date, as the live state gives it, is its first posting, not a change; for a trial the live state no longer holds (an ended trial), first_posted is null and every marker shows its stored groups, so its first posting may read as a status change.",
    "notice": "Research demo. Not medical advice. Not for patient decision-making.",
    "points": [
     {

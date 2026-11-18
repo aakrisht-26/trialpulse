@@ -22,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from trialpulse import markers as mk
 from trialpulse.api import areas as area_list
 from trialpulse.api import schemas as s
 from trialpulse.api.db import Database, DatabaseRefused, Unavailable, engine_for
@@ -45,8 +46,6 @@ REASON_TEXT = {
     "trained or checked on.",
     "band_not_validated": "Registered in an age band whose development check failed (ADR 0034).",
 }
-MARKER_BITS = {1: "status", 2: "dates", 4: "enrollment", 8: "design", 16: "sponsor",
-               32: "title phase or interventions"}  # fmt: skip
 LOG = logging.getLogger("trialpulse.api")
 REFUSED = (
     "the API's database refused the query: a configuration error (logged by its SQLSTATE), "
@@ -276,14 +275,19 @@ def create_app(api: Api) -> FastAPI:
                 {"id": nct_id},
             )
             marks = api.db.rows(
-                "SELECT post_dates, kinds FROM serving.amendment_markers WHERE nct_id = :id",
+                """SELECT m.post_dates, m.kinds, f.first_post_date
+                FROM serving.amendment_markers m
+                LEFT JOIN serving.trial_first_posts f ON f.nct_id = m.nct_id
+                WHERE m.nct_id = :id""",
                 {"id": nct_id},
             )
             if not points and not marks:
                 return {"missing": True}
-            markers = [
-                {"post_date": d, "changed": [n for b, n in MARKER_BITS.items() if k & b]}
-                for m in marks for d, k in zip(m["post_dates"], m["kinds"], strict=True)
+            markers = [  # the first posting is named as such only on its date (ADR 0043)
+                {"post_date": r.post_date, "changed": r.changed(),
+                 "first_posted": r.first_posted if m["first_post_date"] is not None else None}
+                for m in marks
+                for r in mk.read(m["post_dates"], m["kinds"], m["first_post_date"])
             ]  # fmt: skip
             return {"nct_id": nct_id, "points": points, "markers": markers}
 

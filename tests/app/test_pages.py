@@ -281,7 +281,9 @@ def test_a_flagged_trial_shows_its_score_badge_note_drivers_and_timeline(
     assert names == ["Early-stop risk, 12 months", "Early-stop risk, 24 months",
                      "Outside the validated range", "Registry update"]  # fmt: skip
     assert spec["data"][3]["x"] == ["2025-01-10", "2026-03-02"]
-    assert spec["data"][3]["text"] == ["Changed: status", "Changed: dates, enrollment"]
+    assert spec["data"][3]["text"] == [  # the first posting is not a change (ADR 0043)
+        "First posted", "Changed: dates or status verification, enrollment"
+    ]  # fmt: skip
     shade = spec["layout"]["shapes"][0]
     assert shade["x1"] == min(spec["data"][0]["x"])  # the shaded span ends at the first point
     assert shade["x0"] < "2025-01-10"
@@ -293,6 +295,14 @@ def test_an_unflagged_trial_has_no_badge(stub_api: StubApi) -> None:
     shown = texts(at)
     assert ui.FLAG_BADGE not in shown
     assert "Outside the validated range" not in [t["name"] for t in chart(at)["data"]]
+
+
+def test_a_marker_that_is_not_the_first_posting_keeps_its_change(stub_api: StubApi) -> None:
+    """Trial 2's markers were trimmed: its oldest stored marker is a status change after its
+    first posting, so it reads as a change, never as "First posted" (ADR 0043)."""
+    at = app("trial", nct="NCT00000002")
+    update = next(t for t in chart(at)["data"] if t["name"] == "Registry update")
+    assert (update["x"], update["text"]) == (["2025-06-02"], ["Changed: status"])
 
 
 def test_a_trial_without_a_score_shows_its_reason_and_no_risk(stub_api: StubApi) -> None:

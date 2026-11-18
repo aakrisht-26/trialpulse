@@ -26,6 +26,14 @@ def _date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
 
+def marker_text(marker: dict[str, Any]) -> str:
+    """A marker's hover text: "First posted" for the trial's first posting, which is not a
+    change (ADR 0043), else the groups of fields that changed."""
+    if marker.get("first_posted"):
+        return "First posted"
+    return "Changed: " + ", ".join(marker["changed"])
+
+
 def timeline(points: list[dict[str, Any]], markers: list[dict[str, Any]],
              scored_now: bool) -> go.Figure:  # fmt: skip
     """Every served point at 12 and 24 months, the amendment markers on the same date axis,
@@ -55,7 +63,7 @@ def timeline(points: list[dict[str, Any]], markers: list[dict[str, Any]],
         fig.add_trace(go.Scatter(
             x=[_date(m["post_date"]) for m in markers], y=[top * 1.08] * len(markers),
             mode="markers", name="Registry update", marker={"symbol": "triangle-down", "size": 11},
-            text=["Changed: " + ", ".join(m["changed"]) for m in markers],
+            text=[marker_text(m) for m in markers],
             hovertemplate="%{x|%Y-%m-%d}<br>%{text}<extra></extra>",
         ))  # fmt: skip
     marker_days = [_date(m["post_date"]) for m in markers]

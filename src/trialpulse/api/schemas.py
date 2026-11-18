@@ -99,7 +99,17 @@ class TimelinePoint(BaseModel):
 
 class Marker(BaseModel):
     post_date: dt.date
-    changed: list[str]
+    changed: list[str] = Field(
+        description="The groups of fields a feature reads that changed on this date; empty for "
+        "the first posting"
+    )
+    first_posted: bool | None = Field(
+        None,
+        description="True when the marker is the trial's first posting, not a change: its date "
+        "is the trial's first-post date in the live state (ADR 0043). Null when the live state "
+        "holds no first-post date for the trial (an ended trial): its markers show their "
+        "stored groups.",
+    )
 
 
 class Timeline(Envelope):
@@ -111,7 +121,10 @@ class Timeline(Envelope):
         "system started (or its first live score, for a trial registered later); there are no "
         "scores before it. After it, a point is written when a score moves by 0.01 or more, "
         "the record changes, a landmark passes or the model changes. Markers before the first "
-        "point show amendments only (ADR 0043)."
+        "point show amendments only (ADR 0043). A marker on the trial's first-post date, as the "
+        "live state gives it, is its first posting, not a change; for a trial the live state no "
+        "longer holds (an ended trial), first_posted is null and every marker shows its stored "
+        "groups, so its first posting may read as a status change."
     )
 
 

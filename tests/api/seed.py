@@ -2,8 +2,9 @@
 
 `seed(dsn, scored, unscored)` writes `scored` served trials and `unscored` trials without a
 score, with their display rows, sponsors (some without a display name), history, markers,
-reason counts, the data status and the model statement; `HAND` rows come first, with known
-values the tests check. No real registry data: titles and names are made up.
+two live-state rows with first-post dates, reason counts, the data status and the model
+statement; `HAND` rows come first, with known values the tests check. No real registry data:
+titles and names are made up.
 """
 
 import datetime as dt
@@ -32,6 +33,14 @@ HAND: tuple[tuple[str, bool, bool, float, str | None, list[int], str | None], ..
 SPONSORS = (("sp-acme", "Acme Pharma Inc.", "acme pharma inc", "INDUSTRY"),
             ("sp-northern", "Northern University Hospital", "northern university hospital",
              "OTHER"))  # fmt: skip
+# First-post dates in the live state (the view serving.trial_first_posts, ADR 0043): trial 1's
+# oldest marker is its first posting; trial 2's markers were trimmed, so its oldest marker, a
+# status change, is not.
+FIRST_POSTS = (("NCT00000001", dt.date(2025, 1, 10)), ("NCT00000002", dt.date(2024, 2, 1)))
+STATE = """INSERT INTO live.trial_state (nct_id, effective_date, status, study_first_post_date,
+    title_phase, intervention_types, feature_hash, n_versions, ever_suspended,
+    recent_post_dates, reversal)
+    VALUES (%s, %s, 'RECRUITING', %s, 'NONE', '{}', %s, 2, false, '{}', false)"""
 
 
 def _risk(rng: random.Random) -> float:
@@ -63,6 +72,7 @@ def seed(dsn: str, scored: int = 40, unscored: int = 6, rng_seed: int = 7) -> di
         else:
             missing.append((nct, DAY, 21, reason, bytes(32)))
     markers.append(("NCT00000001", [dt.date(2025, 1, 10), dt.date(2026, 3, 2)], [1, 2 | 4]))
+    markers.append(("NCT00000002", [dt.date(2025, 6, 2)], [1]))  # trimmed: a status change
     history.append(("NCT00000001", DAY + dt.timedelta(days=7), MODEL, 0.33, 0.5, ["calendar"],
                     2, 9, bytes(32), True))  # fmt: skip
     n_sponsors = max(10, scored // 40)
@@ -114,6 +124,8 @@ def seed(dsn: str, scored: int = 40, unscored: int = 6, rng_seed: int = 7) -> di
               ("text", "text", "text", "text"), sponsors)  # fmt: skip
         _copy(cur, "serving.amendment_markers", ("nct_id", "post_dates", "kinds"),
               ("text", "date[]", "int2[]"), markers)  # fmt: skip
+        for nct, first_post in FIRST_POSTS:
+            cur.execute(STATE, (nct, DAY, first_post, bytes(32)))
         _copy(cur, "serving.reason_counts", ("month", "reason", "sponsor_class", "n"),
               ("date", "text", "text", "int4"), counts)  # fmt: skip
         cur.execute(

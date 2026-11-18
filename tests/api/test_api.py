@@ -129,11 +129,37 @@ def test_the_timeline_holds_points_and_amendment_markers(make_client: Make) -> N
     body = client.get("/v1/trials/NCT00000001/timeline").json()
     assert [p["as_of_date"] for p in body["points"]] == ["2026-09-25", "2026-10-02"]
     assert body["points"][1]["reasons"] == ["calendar"]
-    assert body["markers"] == [
-        {"post_date": "2025-01-10", "changed": ["status"]},
-        {"post_date": "2026-03-02", "changed": ["dates", "enrollment"]},
-    ]
+    assert body["markers"] == [  # the oldest marker is on the first-post date: not a change
+        {"post_date": "2025-01-10", "changed": [], "first_posted": True},
+        {"post_date": "2026-03-02", "changed": ["dates or status verification", "enrollment"],
+         "first_posted": False},
+    ]  # fmt: skip
     assert "the first point is the trial's score at the data cutoff" in body["note"].lower()
+    assert "is its first posting, not a change" in body["note"]
+    assert "first_posted is null" in body["note"]
+
+
+def test_trimmed_markers_keep_their_stored_names(make_client: Make) -> None:
+    """Trial 2 was first posted on 2024-02-01, before its oldest stored marker, a status
+    change: that marker is never named the first posting (ADR 0043)."""
+    client, _, _ = make_client()
+    body = client.get("/v1/trials/NCT00000002/timeline").json()
+    assert body["markers"] == [
+        {"post_date": "2025-06-02", "changed": ["status"], "first_posted": False}
+    ]
+
+
+def test_without_a_live_state_row_markers_are_named_by_their_codes(
+    make_client: Make, seeded: str
+) -> None:
+    with psycopg.connect(seeded) as con:
+        con.execute("DELETE FROM live.trial_state WHERE nct_id = 'NCT00000001'")
+    client, _, _ = make_client()
+    body = client.get("/v1/trials/NCT00000001/timeline").json()
+    # null: the live state holds no first-post date for the trial
+    assert [(m["changed"], m["first_posted"]) for m in body["markers"]] == [
+        (["status"], None), (["dates or status verification", "enrollment"], None)
+    ]  # fmt: skip
 
 
 def test_the_reason_summary_holds_counts_and_the_stops_after_the_labels(make_client: Make) -> None:
