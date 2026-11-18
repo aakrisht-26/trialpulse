@@ -138,7 +138,7 @@ memo:                             # the per-trial risk memo (ADR 0084)
   model: openai/gpt-oss-120b
   reasoning_effort: low           # the memo is short; fewer reasoning tokens than Step 6
   max_completion_tokens: 2048
-  prompt: memo_v2.md              # src/trialpulse/memo/prompts/ (memo_v2, ADR 0084 amended)
+  prompt: memo_v3.md              # src/trialpulse/memo/prompts/ (memo_v3, ADR 0084 amended)
   top_n: 100                      # the top unflagged trials by 12-month risk
   move_threshold: 0.05            # a 12-month risk move that chooses a trial
   move_window_days: 7             # the move's latest score row is at most this old

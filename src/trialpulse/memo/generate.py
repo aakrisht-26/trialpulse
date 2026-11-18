@@ -13,7 +13,7 @@ One run, in order:
    date; a stored memo whose trial is no longer chosen and whose payload changed, whose trial
    is no longer scored, or that another prompt version wrote, is deleted;
 4. asks the model for each chosen trial without a current memo, the top 100 first, at most
-   `memo.cap_per_run` calls; the model writes only the driver sentences (memo_v2), sent only
+   `memo.cap_per_run` calls; the model writes only the driver sentences (since memo_v2), sent only
    the 12-month drivers (`template.model_request`), and the template adds the first and third
    paragraphs; each memo goes through the fabrication check (`check.check`), and only a memo
    that passes is stored, as the normalized text that was checked, each in its own short
@@ -191,6 +191,14 @@ def read_inputs(con: Any, cfg: MemoConfig, today: dt.date) -> Inputs:
 Complete = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+def versions_kept_from(today: dt.date) -> dt.date:
+    """The date from which retention keeps every version held (ADR 0069): it deletes only
+    versions posted before the run's date less `live.version_retention_months`."""
+    from trialpulse.cohort.rules import add_months
+
+    return add_months(today, -load_project_config().live.version_retention_months)
+
+
 def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, version: str,
          features: Sequence[str]) -> tuple[dict[str, dict[str, Any]], list[str], list[str],
                                            dict[str, dt.date]]:  # fmt: skip
@@ -200,13 +208,14 @@ def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, version: str,
     chosen = pl.choose(inputs.scores, inputs.history, cfg.top_n, cfg.move_threshold,
                        cfg.move_window_days, today)  # fmt: skip
     scores = {str(s["nct_id"]): s for s in inputs.scores}
+    kept_from = versions_kept_from(today)
     payloads: dict[str, dict[str, Any]] = {}
     for nct, (reasons, move) in chosen.items():
         payloads[nct] = pl.build(scores[nct], inputs.states.get(nct, {}),
                                  inputs.displays.get(nct), inputs.markers.get(nct),
                                  inputs.versions.get(nct, []), reasons, move, features,
                                  cfg.top_n, cfg.max_record_changes,
-                                 cfg.values_held_from)  # fmt: skip
+                                 cfg.values_held_from, kept_from)  # fmt: skip
     current: dict[str, dt.date] = {}
     delete: list[str] = []
     for nct, memo in inputs.memos.items():

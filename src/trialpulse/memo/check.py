@@ -4,14 +4,18 @@ never stored.
 A memo passes only if all of these hold (the reason codes in brackets):
 
 - [structure] exactly three non-empty paragraphs, the second of at most 1,000 characters;
-- [template] the first and third paragraphs are exactly the template's (`memo.template`,
-  memo_v2): the risks and why the trial was chosen, and its record changes;
+- [template] the first and third paragraphs are exactly the template's (`memo.template`):
+  the risks and why the trial was chosen, and its record changes;
 - [sentence_count] the second paragraph has exactly one sentence per 12-month driver (or is
   the fixed sentence of a payload without one); in sentence i, [driver_label] driver i's
-  label appears (case aside), [driver_direction] its effect appears as "raises the risk" or
-  "lowers the risk" and the other effect does not, [other_label] no other driver's label
-  appears, and [driver_number] every number is driver i's display value in an allowed
-  rendering (memo_v2);
+  label appears (case aside), [driver_value] driver i's display value appears word for word
+  (case aside) and no other level or flag phrase of its feature that the display does not
+  hold (memo_v3), [driver_direction] its effect appears as "raises the risk" or
+  "lowers the risk" and the other effect does not, [other_label] no label of another served
+  feature appears, [driver_words] beyond its label, display value and effect the sentence
+  holds only connective words ("the", "is", "which" and the like; memo_v3), since the model
+  is sent nothing else, so a negation, another fact or an outcome would be invented, and
+  [driver_number] every number is driver i's display value in an allowed rendering;
 - [registry_id] no registry id but the trial's own;
 - [date] every ISO date (YYYY-MM-DD) is a date of the payload; [date_format] no date in any
   other form (a month's name, a slashed or dotted date, a quarter);
@@ -23,7 +27,9 @@ A memo passes only if all of these hold (the reason codes in brackets):
 - [comparison] no multiplier or ratio words ("doubled", "twice", "3 times", "x times", "2x",
   "twofold"), so no comparison the payload does not hold (change A);
 - [banned_language] none of CLAUDE.md Section 2's forbidden claims: outcome claims ("fail",
-  "will stop"), efficacy or safety claims, advice to patients, certainty words;
+  "will stop", and since memo_v3 "was terminated", "has stopped", "likely to end"), efficacy
+  or safety claims, advice to patients, certainty words; the word rules read a snake_case
+  token as words ("the_trial_will_fail"), while the number rule skips feature names;
 - [name] no sponsor display name the API can show and no personal title;
 - [link] no web address and no Markdown link, since the page renders the text as Markdown;
 - [required_phrase] a trial in the top 100 says "elevated early-stop risk"; [risk_stated]
@@ -44,7 +50,7 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
-from trialpulse.memo import template
+from trialpulse.memo import labels, template
 from trialpulse.memo.payload import MOVED, TOP
 
 NCT = re.compile(r"\bNCT\d{8}\b")
@@ -78,7 +84,12 @@ BANNED = re.compile(
     r"|\bpatients?\s+should\b|\byou\s+should\b|\bshould\s+(?:not\s+)?(?:enroll|join|avoid)\b"
     r"|\benrol(?:l|ling|ls)?\s+in\b|\bconsider\s+enrolling\b|\byour\s+doctor\b|\btalk\s+to\b"
     r"|\brecommend\w*|\badvi[cs]\w*"
-    r"|\bcertain(?:ly)?\b|\bguarantee\w*|\bdefinitely\b|\binevitabl\w*|\bsurely\b",
+    r"|\bcertain(?:ly)?\b|\bguarantee\w*|\bdefinitely\b|\binevitabl\w*|\bsurely\b"
+    # memo_v3: outcome claims in the past tense or as a likelihood
+    r"|\b(?:was|were|has|have|had|is|are|been|being|got|gets|get)\s+(?:been\s+)?"
+    r"(?:terminated|withdrawn|stopped|halted|ended|discontinued|cancell?ed)\b"
+    r"|\b(?:likely|unlikely|probably|expected|set|about|bound)\s+to\s+(?:be\s+)?"
+    r"(?:stop|end|terminat\w*|withdraw\w*|fail|close|halt)\w*\b",
     re.IGNORECASE,
 )
 TITLES = re.compile(r"\b(?:Dr|Prof|Mr|Mrs|Ms|MD|PhD)\b\.?")
@@ -95,6 +106,12 @@ SPACES = "\u00a0\u202f\u2009\u2007"
 NORMAL = str.maketrans({**dict.fromkeys(HYPHENS, "-"), **dict.fromkeys(SPACES, " ")})
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 EFFECTS = {"raises": "raises the risk", "lowers": "lowers the risk"}
+# memo_v3: besides its driver's label, value and effect, a sentence holds only these words,
+# which carry no fact of their own; the model is sent nothing else, so any other word (a
+# negation, another feature, an outcome) would be invented.
+CONNECTIVES = frozenset({"the", "a", "an", "is", "which", "and", "this", "that", "it", "its",
+                         "of", "at", "with", "being", "here"})  # fmt: skip
+WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 @dataclass
@@ -126,13 +143,39 @@ def sentences(paragraph: str) -> list[str]:
     return [s for s in SENTENCE_END.split(paragraph.strip()) if s]
 
 
+def _phrase(phrase: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", re.IGNORECASE)
+
+
 def _has(phrase: str, text: str) -> bool:
     """The phrase appears in the text as whole words, case aside."""
-    return re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text, re.IGNORECASE) is not None
+    return _phrase(phrase).search(text) is not None
+
+
+def _extra_words(sentence: str, driver: Mapping[str, Any]) -> list[str]:
+    """The words of a driver's sentence beyond its display value, its label, an effect phrase
+    (each taken out once, case aside) and the connective words."""
+    rest = sentence
+    for phrase in (str(driver["display"]), str(driver["label"]), *EFFECTS.values()):
+        rest = _phrase(phrase).sub(" ", rest, count=1)
+    return [w for w in WORD.findall(rest) if w.lower() not in CONNECTIVES]
+
+
+def _alternatives(driver: Mapping[str, Any]) -> list[str]:
+    """The other words a category or flag of the driver's feature can be shown with, those the
+    displayed value does not itself hold: "not suspended now" holds "suspended now", so a
+    sentence holding the display can still say the opposite unless these are refused."""
+    entry = labels.FEATURES.get(str(driver.get("feature")))
+    if entry is None:
+        return []
+    phrases = [*entry.levels.values(), entry.yes, entry.no]
+    display = str(driver["display"])
+    return [x for x in phrases if x and x != display and not _has(x, display)]
 
 
 def _drivers(paragraph: str, payload: Mapping[str, Any], result: CheckResult) -> None:
-    """The per-sentence rule of the second paragraph (memo_v2)."""
+    """The per-sentence rule of the second paragraph (memo_v2; the display value word for word
+    since memo_v3)."""
     drivers = template.drivers_12(payload)
     if not drivers:
         if paragraph != template.NO_DRIVERS:
@@ -145,15 +188,24 @@ def _drivers(paragraph: str, payload: Mapping[str, Any], result: CheckResult) ->
     for i, (sentence, driver) in enumerate(zip(found, drivers, strict=True), start=1):
         if not _has(driver["label"], sentence):
             result.fail("driver_label", f"sentence {i} lacks '{driver['label']}'")
+        if not _has(driver["display"], sentence):
+            result.fail("driver_value", f"sentence {i} lacks '{driver['display']}'")
+        for phrase in _alternatives(driver):
+            if _has(phrase, sentence):
+                result.fail("driver_value", f"sentence {i} says '{phrase}'")
         effect = EFFECTS[driver["direction"]]
         other = next(e for e in EFFECTS.values() if e != effect)
         if not _has(effect, sentence):
             result.fail("driver_direction", f"sentence {i} lacks '{effect}'")
         if _has(other, sentence):
             result.fail("driver_direction", f"sentence {i} says '{other}'")
-        for j, other_driver in enumerate(drivers, start=1):
-            if j != i and _has(other_driver["label"], sentence):
-                result.fail("other_label", f"sentence {i} names '{other_driver['label']}'")
+        others = {d["label"] for d in drivers} | {e.label for e in labels.FEATURES.values()}
+        for label in sorted(others - {driver["label"]}):
+            if _has(label, sentence) and not _has(label, str(driver["display"])):
+                result.fail("other_label", f"sentence {i} names '{label}'")
+        extra = _extra_words(sentence, driver)
+        if extra:
+            result.fail("driver_words", f"sentence {i} holds '{' '.join(extra)}'")
         numbers, _ = allowed({"display": driver["display"]})
         for token in NUMBER.findall(IDENTIFIER.sub(" ", sentence)):
             d = _decimal(token)
@@ -235,16 +287,17 @@ def check(
     for pattern in OTHER_DATES:
         for m in pattern.finditer(rest):
             result.fail("date_format", m.group(0).strip())
-    words = IDENTIFIER.sub(" ", rest)
-    for m in NUMBER_WORDS.finditer(words):
+    words = IDENTIFIER.sub(" ", rest)  # for the number rule: a feature name is no number
+    spaced = rest.replace("_", " ")  # for the word rules: a snake_case claim reads as words
+    for m in NUMBER_WORDS.finditer(spaced):
         result.fail("number_word", m.group(0))
-    for m in COMPARISONS.finditer(words):
+    for m in COMPARISONS.finditer(spaced):
         result.fail("comparison", m.group(0).strip())
     for token in NUMBER.findall(words):
         d = _decimal(token)
         if d is None or not any(d == n for n in numbers):
             result.fail("number", token)
-    for m in BANNED.finditer(words):
+    for m in BANNED.finditer(spaced):
         result.fail("banned_language", m.group(0))
     lowered = text.lower()
     for name in names:
@@ -265,10 +318,10 @@ def check(
         if not re.search(rf"(?<![\d.]){risk}\s*(?:%|percent\b)", text):
             result.fail("risk_stated", f"the 12-month risk {risk}% is not stated")
         same, other = (RISE, FALL) if move["direction"] == "rose" else (FALL, RISE)
-        if not same.search(words):
+        if not same.search(spaced):
             result.fail("direction", f"the direction '{move['direction']}' is not stated")
-        for m in other.finditer(words):
+        for m in other.finditer(spaced):
             result.fail("direction", f"the opposite direction '{m.group(0)}'")
-        if move["direction"] == "fell" and TOP not in chosen and ELEVATED.search(words):
+        if move["direction"] == "fell" and TOP not in chosen and ELEVATED.search(spaced):
             result.fail("elevated_after_fall", "a fallen risk called elevated")
     return result

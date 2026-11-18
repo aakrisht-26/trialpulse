@@ -2,47 +2,59 @@
 
 A payload holds what the memo may say and nothing else: the trial's registry id, its served
 risks as whole percents and their date, the five drivers per horizon (feature, value as shown,
-direction, and since payload version 2 a plain-English label and display value from
-`memo.labels`), its record changes (the amendment markers' dates and the groups of fields they
-changed, with their total, and, for versions held since go-live, each changed field's label
-and its displayed value before and after), the date from which before and after values are
-held, its sponsor class, status and the phase stated in its title, and why it was chosen. It
-never
-holds a title, a sponsor name, a sponsor id or any free text: the builder takes only the
-columns listed here, and a test checks that what it is given beyond them never reaches the
-payload. The SHA-256 of its canonical JSON is the payload hash; a memo is regenerated only
+direction, and a plain-English label and display value from `memo.labels`), its record
+changes, the date from which before and after values are held, its sponsor class, status, the
+phase stated in its title and the month its status was last verified, and why it was chosen.
+It never holds a title, a sponsor name, a sponsor id or any free text: the builder takes only
+the columns listed here, and a test checks that what it is given beyond them never reaches
+the payload. The SHA-256 of its canonical JSON is the payload hash; a memo is regenerated only
 when it changes.
+
+The record changes (payload version 3, memo_v3) are read through `trialpulse.markers`: the
+marker on the trial's first-post date (from the live state) is its first posting, kept apart
+as `first_posted_on` and counted nowhere; every other marker is a change to the fields the
+model reads, named by its groups. The dates group is named "dates" or "status verified" only
+where two versions held since go-live show which changed, and "dates or status verification"
+elsewhere. For each change since go-live, `since_go_live` says whether it could be compared
+with an earlier held version and, if so, which shown fields moved from what to what; a
+trial's first version held since go-live has no earlier value to compare.
 
 Everything here is a pure function of rows already read, so it is tested offline.
 """
 
 import datetime as dt
 import hashlib
-import itertools
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from trialpulse import markers as mk
 from trialpulse.memo import labels
 
-PAYLOAD_VERSION = 2
+PAYLOAD_VERSION = 3
 HORIZONS = (12, 24)
 DRIVERS_PER_HORIZON = 5
 TOP = "top_100"
 MOVED = "moved"
-# The groups of an amendment marker's code (live.contract.MARKER_GROUPS), in words.
-GROUP_NAMES: dict[int, str] = {
-    1: "status", 2: "dates", 4: "enrollment", 8: "design", 16: "sponsor",
-    32: "interventions or phase in the title",
-}  # fmt: skip
-# Fields whose before and after values a payload may show: values, never names or texts.
-CHANGE_FIELDS: tuple[str, ...] = (
-    "status", "start_date", "primary_completion_date", "completion_date", "enrollment_count",
-    "enrollment_type", "allocation", "intervention_model", "primary_purpose", "masking",
-    "healthy_volunteers", "sex", "minimum_age_years", "maximum_age_years",
-    "lead_sponsor_class", "title_phase", "intervention_types",
+# Fields whose before and after values a payload may show: every field of an amendment
+# marker's groups (live.contract.MARKER_GROUPS), values only (a sponsor's change is stated
+# without them).
+CHANGE_FIELDS: tuple[str, ...] = tuple(labels.FIELDS)
+# The dates group: the schedule's dates, with their precision and type, and the status
+# verified date, which the memo names apart (memo_v3).
+SCHEDULE_FIELDS: tuple[str, ...] = (
+    "start_date", "primary_completion_date", "primary_completion_date_precision",
+    "primary_completion_date_type", "completion_date", "completion_date_precision",
 )  # fmt: skip
+VERIFIED_FIELD = "status_verified_date"
+DATES_NAME = mk.NAMES[mk.DATES]
+SCHEDULE_NAME = "dates"
+VERIFIED_NAME = "status verified"
+COMPARED = "compared"  # an earlier held version shows the values before
+FIRST_HELD = "first_held"  # the first version held since go-live: nothing to compare with
+EARLIER_NOT_HELD = "earlier_not_held"  # no earlier version is still held (retention ran)
+NOT_HELD = "not_held"  # no version of that date is held any more
 
 
 def percent(risk: float) -> int:
@@ -78,9 +90,23 @@ def _number(x: float) -> str:
     return f"{x:.3f}".rstrip("0").rstrip(".")
 
 
-def drivers(row: Mapping[str, Any], names: Sequence[str]) -> dict[str, list[dict[str, str]]]:
+def _date(value: Any) -> dt.date | None:
+    """A stored date as a date; None when missing."""
+    if value is None or str(value).strip() in ("", "none", "None"):
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    return dt.date.fromisoformat(str(value)[:10])
+
+
+def drivers(row: Mapping[str, Any], names: Sequence[str],
+            state: Mapping[str, Any] | None = None) -> dict[str, list[dict[str, str]]]:  # fmt: skip
     """The stored drivers of a score row (serving.trial_scores_latest), per horizon, each with
-    its label and display value (`memo.labels`) beside the feature and value as stored."""
+    its label and display value (`memo.labels`) beside the feature and value as stored; the
+    enrollment count's display reads the latest record's enrollment type."""
+    enrollment_type = (state or {}).get("enrollment_type")
     out: dict[str, list[dict[str, str]]] = {str(h): [] for h in HORIZONS}
     for months, feature, value, contribution in zip(
         row["driver_months"], row["driver_features"], row["driver_values"],
@@ -89,39 +115,114 @@ def drivers(row: Mapping[str, Any], names: Sequence[str]) -> dict[str, list[dict
         name = names[int(feature)]
         out.setdefault(str(months), []).append(
             {"feature": name, "label": labels.feature_label(name), "value": as_shown(value),
-             "display": labels.feature_display(name, str(value)),
+             "display": labels.feature_display(name, str(value), enrollment_type),
              "direction": "raises" if float(contribution) > 0 else "lowers"}
         )  # fmt: skip
     return out
 
 
-def record_changes(markers: Mapping[str, Any] | None, limit: int) -> list[dict[str, Any]]:
-    """The latest `limit` amendment markers, newest first: the post date and what changed."""
-    if not markers:
-        return []
-    pairs = sorted(zip(markers["post_dates"], markers["kinds"], strict=True), reverse=True)
-    return [{"post_date": as_shown(day),
-             "changed": [n for bit, n in GROUP_NAMES.items() if int(kind) & bit] or ["record"]}
-            for day, kind in pairs[:limit]]  # fmt: skip
+def _held(versions: Sequence[Mapping[str, Any]]) -> dict[dt.date, Mapping[str, Any]]:
+    """The versions held since go-live (live.study_versions) by post date, the last ingested
+    of each date (ties by feature hash, so the choice is deterministic)."""
+    out: dict[dt.date, Mapping[str, Any]] = {}
+    dated = [(day, v) for v in versions if (day := _date(v["effective_date"])) is not None]
+    for day, version in sorted(dated, key=lambda dv: (dv[0], str(dv[1].get("ingested_at")),
+                                                      str(dv[1].get("feature_hash")))):  # fmt: skip
+        out[day] = version
+    return out
 
 
-def field_changes(versions: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str, str]]:
-    """The changed values between consecutive versions held since go-live (live.study_versions,
-    oldest first), newest first, at most `limit`, each with its field's label and the values
-    displayed (`memo.labels`). The first held version has nothing before it, so it shows no
-    change."""
-    ordered = sorted(versions, key=lambda v: v["effective_date"])
-    found: list[dict[str, str]] = []
-    for before, after in itertools.pairwise(ordered):
-        for name in CHANGE_FIELDS:
-            old, new = as_shown(before.get(name)), as_shown(after.get(name))
-            if old != new:
-                found.append({"post_date": as_shown(after["effective_date"]), "field": name,
-                              "label": labels.field_label(name),
-                              "before": labels.field_display(name, old),
-                              "after": labels.field_display(name, new)})  # fmt: skip
-    found.sort(key=lambda c: c["post_date"], reverse=True)
-    return found[:limit]
+def _diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
+    return [name for name in CHANGE_FIELDS
+            if as_shown(before.get(name)) != as_shown(after.get(name))]  # fmt: skip
+
+
+Held = Mapping[dt.date, Mapping[str, Any]]
+Comparison = tuple[str, list[str], Mapping[str, Any] | None, Mapping[str, Any] | None]
+
+
+def _comparison(day: dt.date, held: Held, none_deleted: bool) -> Comparison:
+    """How a change of `day` compares with the versions held: compared (with the fields
+    that moved, and the versions before and after), the first held since go-live (only
+    while retention cannot have deleted a version posted since go-live, `none_deleted`),
+    no earlier version still held, or not held."""
+    if day not in held:
+        return NOT_HELD, [], None, None
+    earlier = [d for d in held if d < day]
+    if not earlier:
+        return (FIRST_HELD if none_deleted else EARLIER_NOT_HELD), [], None, None
+    before, after = held[earlier[-1]], held[day]
+    return COMPARED, _diff(before, after), before, after
+
+
+def _kinds(marker: mk.Marker, moved: Sequence[str] | None) -> list[str]:
+    """The groups of a change in words; the dates group exactly where the held versions show
+    which of its fields moved (`moved`, None when they cannot)."""
+    words = marker.changed()
+    if DATES_NAME not in words or moved is None:
+        return words
+    exact = ([SCHEDULE_NAME] if any(f in SCHEDULE_FIELDS for f in moved) else []) + (
+        [VERIFIED_NAME] if VERIFIED_FIELD in moved else [])  # fmt: skip
+    if not exact:
+        return words
+    i = words.index(DATES_NAME)
+    return [*words[:i], *exact, *words[i + 1 :]]
+
+
+def _value_change(name: str, before: Mapping[str, Any], after: Mapping[str, Any]
+                  ) -> dict[str, str]:  # fmt: skip
+    """A field's change as the memo shows it; a completion date at its recorded precision."""
+    entry = {"field": name, "label": labels.field_label(name)}
+    if labels.FIELDS[name].kind == labels.SPONSOR_ID:  # stated, never shown
+        return entry
+
+    def shown(row: Mapping[str, Any]) -> str:
+        return labels.field_display(name, as_shown(row.get(name)), row.get(f"{name}_precision"))
+
+    return {**entry, "before": shown(before), "after": shown(after)}
+
+
+def record_changes(
+    stored: Mapping[str, Any] | None,
+    versions: Sequence[Mapping[str, Any]],
+    first_post_date: dt.date | None,
+    values_held_from: dt.date,
+    limit: int,
+    versions_kept_from: dt.date | None = None,
+) -> dict[str, Any]:
+    """The record-change part of a payload (see the module text): the first posting, the
+    latest `limit` changes newest first with their groups in words, their count, and the
+    changes since go-live with what moved. `versions_kept_from` is the date from which
+    retention deletes no version (ADR 0069); while it is on or before go-live, no version
+    posted since go-live can have been deleted."""
+    read = mk.read((stored or {}).get("post_dates") or [], (stored or {}).get("kinds") or [],
+                   first_post_date)  # fmt: skip
+    first = next((m.post_date for m in read if m.first_posted), None)
+    changes = sorted(mk.changes(read), key=lambda m: m.post_date, reverse=True)
+    held = _held(versions)
+    none_deleted = (versions_kept_from or values_held_from) <= values_held_from
+    listed: list[dict[str, Any]] = []
+    since: list[dict[str, Any]] = []
+    for marker in changes[:limit]:
+        state, moved, before, after = (_comparison(marker.post_date, held, none_deleted)
+                                       if marker.post_date >= values_held_from
+                                       else (NOT_HELD, [], None, None))  # fmt: skip
+        exact = moved if state == COMPARED else None
+        listed.append({"post_date": as_shown(marker.post_date),
+                       "changed": _kinds(marker, exact)})  # fmt: skip
+        if marker.post_date < values_held_from:
+            continue
+        entry: dict[str, Any] = {"post_date": as_shown(marker.post_date), "held": state}
+        if state == COMPARED and before is not None and after is not None:
+            entry["values"] = [_value_change(name, before, after) for name in moved]
+        since.append(entry)
+    return {
+        "first_posted_on": as_shown(first),
+        "stored_markers": stored is not None,
+        "record_changes": listed,
+        "record_changes_total": len(changes),
+        "since_go_live": since,
+    }
 
 
 def build(
@@ -136,12 +237,17 @@ def build(
     top_n: int,
     max_changes: int,
     values_held_from: dt.date,
+    versions_kept_from: dt.date | None = None,
 ) -> dict[str, Any]:
     """The payload of one trial. `score` is its serving.trial_scores_latest row, `state` its
-    live.trial_state row, `display` its serving.trial_display row (only the sponsor class is
-    read), `markers` its serving.amendment_markers row, `versions` its live.study_versions."""
+    live.trial_state row (status, title phase, sponsor class, enrollment type, first-post date
+    and status verified date are read), `display` its serving.trial_display row (only the
+    sponsor class is read), `markers` its serving.amendment_markers row, `versions` its
+    live.study_versions; `versions_kept_from` the date from which retention keeps every
+    version (the run's date less `live.version_retention_months`)."""
     reasons = sorted(set(chosen))
     sponsor_class = (display or {}).get("sponsor_class") or state.get("lead_sponsor_class")
+    verified = _date(state.get("status_verified_date"))
     payload: dict[str, Any] = {
         "payload_version": PAYLOAD_VERSION,
         "nct_id": str(score["nct_id"]),
@@ -152,13 +258,13 @@ def build(
         "status": as_shown(state.get("status")),
         "phase_in_title": as_shown(state.get("title_phase")),
         "sponsor_class": as_shown(sponsor_class),
+        "status_verified_month": verified.strftime("%Y-%m") if verified else "none",
         "drivers_per_horizon": DRIVERS_PER_HORIZON,
-        "drivers": drivers(score, names),
-        "record_changes": record_changes(markers, max_changes),
-        "record_changes_total": len((markers or {}).get("post_dates") or []),
-        "field_changes": field_changes(versions, max_changes),
+        "drivers": drivers(score, names, state),
+        **record_changes(markers, versions, _date(state.get("study_first_post_date")),
+                         values_held_from, max_changes, versions_kept_from),
         "values_held_from": as_shown(values_held_from),
-    }
+    }  # fmt: skip
     if TOP in reasons:
         payload["top_n"] = int(top_n)
     if MOVED in reasons and move is not None:

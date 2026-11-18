@@ -35,7 +35,7 @@ def cfg(**over: Any) -> Any:
 
 
 def faithful(request: dict[str, Any]) -> list[str]:
-    """The driver sentences the prompt asks for, from what the model is sent (memo_v2)."""
+    """The driver sentences the prompt asks for, from what the model is sent (memo_v3)."""
     return [f"The {d['label']} is {d['value']}, which {d['effect']}."
             for d in request["drivers"]]  # fmt: skip
 
@@ -299,7 +299,7 @@ def test_a_memo_of_another_prompt_version_is_deleted_and_written_again(seeded: s
     respx.post(URL).mock(side_effect=answering(faithful))
     run(seeded, cfg())
     with psycopg.connect(seeded) as con:
-        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v1'")
+        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v2'")
         con.commit()
     respx.post(URL).mock(side_effect=answering(lambda r: ["It will fail."]))  # all refused
     _, tally = run(seeded, cfg())
@@ -310,7 +310,7 @@ def test_a_memo_of_another_prompt_version_is_deleted_and_written_again(seeded: s
     assert (again.n_called, again.n_stored) == (3, 3)
     with psycopg.connect(seeded) as con:
         versions = {r[0] for r in con.execute("SELECT prompt_version FROM serving.trial_memos")}
-    assert versions == {"memo_v2"}
+    assert versions == {"memo_v3"}
 
 
 @respx.mock
@@ -325,3 +325,10 @@ def test_a_dry_run_reports_tokens_and_writes_nothing(seeded: str) -> None:
     assert memos(seeded) == []
     with psycopg.connect(seeded) as con:
         assert con.execute("SELECT count(*) FROM monitoring.memo_runs").fetchone() == (0,)
+
+
+def test_versions_are_kept_from_the_run_date_less_the_retention() -> None:
+    """ADR 0069: retention deletes only versions posted before the run's date less
+    `live.version_retention_months` (6)."""
+    assert g.versions_kept_from(dt.date(2026, 11, 18)) == dt.date(2026, 5, 18)
+    assert g.versions_kept_from(dt.date(2027, 8, 31)) == dt.date(2027, 2, 28)
