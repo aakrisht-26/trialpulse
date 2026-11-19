@@ -184,4 +184,4 @@ def test_a_built_payload_makes_a_memo_that_passes() -> None:
     payload = rows.build()
     result = c.check(t.memo(payload), payload, ["Acme Pharma Inc."])
     assert result.passed, result.details
-    assert p.PAYLOAD_VERSION == 4
+    assert p.PAYLOAD_VERSION == 5

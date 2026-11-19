@@ -77,8 +77,7 @@ def test_a_category_covers_the_registrys_levels() -> None:
     [
         ("enrolled_to_first_target_ratio", "0.0672", "6.7%"),
         ("enrollment_target_ratio", "1.5", "150.0%"),
-        ("sponsor_stop_rate", "0.241", "24.1%, from the other ended trials listed under the "
-         "sponsor smoothed toward the class rate (the class rate alone without a track record)"),
+        ("sponsor_stop_rate", "0.241", "24.1%"),  # bare without its inputs (memo_v5)
         ("completion_slip_months", "-33", "33 months earlier than in the first version"),
         ("start_slip_months", "1", "1 month later than in the first version"),
         ("primary_completion_slip_months", "0", "in the same month as in the first version"),
@@ -95,8 +94,11 @@ def test_a_category_covers_the_registrys_levels() -> None:
         ("registration_year", "2019", "2019"),
         ("sponsor_prior_registrations", "1730", "1,730"),
         ("open_interventional_trials", "88,123", "88,123"),
-        ("landmark_index", "4", "stage 4 of 6, a stage every 6 months after the first posting"),
-        ("landmark_index", "0", "stage 0 of 6, the first posting itself"),
+        ("landmark_index", "4",
+         "stage 4 (stages run 0 to 6, a stage every 6 months after the first posting)"),
+        ("landmark_index", "0",
+         "stage 0 (stages run 0 to 6, a stage every 6 months after the first posting)"),
+        ("currently_suspended", "no", "not suspended now"),
         ("n_versions_recent", "124", "124 in the last 6 months"),
         ("currently_suspended", "yes", "suspended now"),
         ("ever_suspended", "yes", "recorded"),
@@ -195,10 +197,56 @@ def test_the_sponsor_counts_say_what_each_counts() -> None:
     assert lab.feature_label("sponsor_stop_rate") == ("early-stop rate used for the sponsor")
 
 
-def test_the_rate_says_how_it_is_made_for_every_sponsor() -> None:
-    shown = lab.feature_display("sponsor_stop_rate", "0.182")
-    assert shown.startswith("18.2%, from the other ended trials listed under the sponsor")
-    assert shown.endswith("(the class rate alone without a track record)")
+RATE_FORMS = [  # memo_v5: exactly one of the two forms, from the stored inputs
+    (
+        lab.RateInputs(True, 1, "OTHER", 0.16522),
+        "0.241",
+        "24.1%, from 1 other ended trial of the sponsor, smoothed toward the other (mostly "
+        "universities and hospitals) class rate of 16.5%",
+    ),
+    (
+        lab.RateInputs(True, 3090, "INDUSTRY", 0.15990),
+        "0.214",
+        "21.4%, from 3,090 other ended trials of the sponsor, smoothed toward the industry class "
+        "rate of 16.0%",
+    ),
+    (
+        lab.RateInputs(True, 0, "NIH", 0.15010),
+        "0.150",
+        "15.0%, from 0 other ended trials of the sponsor, smoothed toward the NIH class rate of "
+        "15.0%",
+    ),
+    (
+        lab.RateInputs(False, None, "INDUSTRY", 0.15990),
+        "0.160",
+        "16.0%, the industry class rate, as the sponsor has no track record",
+    ),
+    (
+        lab.RateInputs(False, None, None, 0.16241),
+        "0.162",
+        "16.2%, the overall rate, as the sponsor has no track record",
+    ),
+]
+
+
+@pytest.mark.parametrize(("inputs", "value", "shown"), RATE_FORMS)
+def test_the_rate_says_exactly_how_it_was_made(inputs: Any, value: str, shown: str) -> None:
+    """The memo_v4 audit (memo 2): the display named both ways a rate can be made, so beside
+    no registration 24.1% read as the class rate (16.5%)."""
+    assert lab.feature_display("sponsor_stop_rate", value, rate=inputs) == shown
+
+
+@pytest.mark.parametrize(("inputs", "value", "shown"), RATE_FORMS)
+def test_both_rate_forms_pass_the_check(inputs: Any, value: str, shown: str) -> None:
+    payload = one_driver("sponsor_stop_rate", value, "raises", rate=inputs)
+    assert payload["drivers"]["12"][0]["display"] == shown
+    paragraphs = t.memo(payload)
+    assert (
+        paragraphs[1]
+        == f"The early-stop rate used for the sponsor is {shown}, which raises the risk."
+    )
+    result = c.check(paragraphs, payload, ["Acme Pharma Inc."])
+    assert result.passed, result.details
 
 
 def test_the_stage_is_never_shown_in_months() -> None:
@@ -244,11 +292,17 @@ def test_no_sentence_about_one_feature_names_another() -> None:
                 assert not any(c._has(entry.label, s) for s in texts), (name, other)
 
 
-def one_driver(name: str, value: str, direction: str, kind: str | None = None) -> dict[str, Any]:
+def one_driver(name: str, value: str, direction: str, kind: str | None = None,
+               rate: Any = None) -> dict[str, Any]:  # fmt: skip
     driver = {"feature": name, "label": lab.feature_label(name), "value": value,
-              "display": lab.feature_display(name, value, kind),
+              "display": lab.feature_display(name, value, kind, rate),
               "direction": direction}  # fmt: skip
-    return {
+    block = {} if rate is None else {"sponsor_rate": {
+        "has_record": rate.has_record,
+        "other_ended": rate.other_ended if rate.other_ended is not None else "none",
+        "class": rate.sponsor_class or "none",
+        "class_rate_percent": f"{rate.class_rate * 100:.1f}"}}  # fmt: skip
+    return {**block,
         "payload_version": p.PAYLOAD_VERSION, "nct_id": "NCT01234567", "score_date": "2026-11-16",
         "horizons_months": [12, 24], "risk_percent": {"12": 14, "24": 26},
         "chosen_as": [p.TOP], "top_n": 100, "drivers_per_horizon": 5,

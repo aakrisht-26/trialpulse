@@ -3,7 +3,8 @@ API's timeline and the risk memo, and the one rule for a trial's first posting.
 
 A marker is a post date and a code, the sum of the groups of fields a feature reads that
 changed on that date (`live.contract.MARKER_GROUPS`, whose codes these are). A trial's first
-version has the code 1, the status group, although nothing changed: it is the first posting.
+version has the code 1, the recruitment status group, although nothing changed: it is the
+first posting.
 When markers are read, a marker is named "first posted", and left out of every count of
 changes, only when its post date equals the trial's first-post date from the live state
 (`live.trial_state.study_first_post_date`, which the API reads through the view
@@ -13,8 +14,9 @@ day) is shown as stored.
 
 The dates group covers the start, primary completion and completion dates (with their
 precision and type) and the status verified date, and its code cannot tell them apart, so it
-is named "dates or status verification"; the risk memo names it exactly where two versions
-held since go-live show which changed (ADR 0084, memo_v3).
+is named "dates or status verification", everywhere (since memo_v5, ADR 0085 amended: one
+name per group, in the memo as on the timeline). The status group is named "recruitment
+status", as the memo's driver sentences name the field.
 
 This module imports nothing from the project, so the API's image may use it (Step 15).
 """
@@ -30,7 +32,7 @@ DESIGN = 8
 SPONSOR = 16
 INTERVENTIONS = 32
 NAMES: dict[int, str] = {
-    STATUS: "status",
+    STATUS: "recruitment status",
     DATES: "dates or status verification",
     ENROLLMENT: "enrollment",
     DESIGN: "design",

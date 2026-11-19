@@ -76,6 +76,7 @@ class Tally:
     n_rejected: int = 0
     n_deleted: int = 0
     n_over_cap: int = 0
+    n_waiting: int = 0  # chosen, but the score row lacks the rate's inputs (memo_v5)
     rejections: dict[str, int] = field(default_factory=dict)
     samples: list[dict[str, Any]] = field(default_factory=list)
     prompt_tokens: int = 0
@@ -103,7 +104,8 @@ def version(cfg: MemoConfig) -> str:
 # Reading ----------------------------------------------------------------------------------
 
 SCORES_SQL = """SELECT nct_id, as_of_date, risk_12m, risk_24m, flagged, driver_months,
-    driver_features, driver_values, driver_contributions FROM serving.trial_scores_latest"""
+    driver_features, driver_values, driver_contributions, sponsor_has_record,
+    sponsor_other_ended, sponsor_class_rate FROM serving.trial_scores_latest"""
 HISTORY_SQL = """SELECT nct_id, as_of_date, risk_12m FROM (
       SELECT nct_id, as_of_date, risk_12m, row_number() OVER (
         PARTITION BY nct_id ORDER BY as_of_date DESC, history_id DESC) AS rn
@@ -158,22 +160,27 @@ def versions_kept_from(today: dt.date) -> dt.date:
 
 def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, written: str,
          features: Sequence[str]) -> tuple[dict[str, dict[str, Any]], list[str], list[str],
-                                           dict[str, dt.date]]:  # fmt: skip
+                                           dict[str, dt.date], list[str]]:  # fmt: skip
     """The payloads of the chosen trials, the trials to build a memo for (top 100 first, by
     risk), the stored memos to delete, and the stored memos that stay current with their new
-    date. `written` is the memo version of this run;
+    date, and the chosen trials that wait for the rate's inputs (memo_v5). `written` is the
+    memo version of this run;
     `features` are the names the stored driver indexes point to (the API's `model_columns`)."""
     chosen = pl.choose(inputs.scores, inputs.history, cfg.top_n, cfg.move_threshold,
                        cfg.move_window_days, today)  # fmt: skip
     scores = {str(s["nct_id"]): s for s in inputs.scores}
     kept_from = versions_kept_from(today)
     payloads: dict[str, dict[str, Any]] = {}
+    waiting: list[str] = []
     for nct, (reasons, move) in chosen.items():
-        payloads[nct] = pl.build(scores[nct], inputs.states.get(nct, {}),
-                                 inputs.displays.get(nct), inputs.markers.get(nct),
-                                 inputs.versions.get(nct, []), reasons, move, features,
-                                 cfg.top_n, cfg.max_record_changes,
-                                 cfg.values_held_from, kept_from)  # fmt: skip
+        try:
+            payloads[nct] = pl.build(scores[nct], inputs.states.get(nct, {}),
+                                     inputs.displays.get(nct), inputs.markers.get(nct),
+                                     inputs.versions.get(nct, []), reasons, move, features,
+                                     cfg.top_n, cfg.max_record_changes,
+                                     cfg.values_held_from, kept_from)  # fmt: skip
+        except pl.RateInputsMissingError:  # its stored memo stays until it can be rebuilt
+            waiting.append(nct)
     current: dict[str, dt.date] = {}
     delete: list[str] = []
     for nct, memo in inputs.memos.items():
@@ -181,12 +188,14 @@ def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, written: str,
                 and bytes(memo["payload_hash"]) == pl.payload_hash(payloads[nct]))  # fmt: skip
         if same:
             current[nct] = scores[nct]["as_of_date"]
+        elif nct in waiting:
+            delete.append(nct)  # never left beside a newer score; rebuilt once it has inputs
         elif nct not in payloads or memo["prompt_version"] != written:
             delete.append(nct)
     build = [n for n in payloads if n not in current]
     build.sort(key=lambda n: (pl.TOP not in payloads[n]["chosen_as"],
                             -float(scores[n]["risk_12m"]), n))  # fmt: skip
-    return payloads, build, sorted(delete), current
+    return payloads, build, sorted(delete), current, sorted(waiting)
 
 
 def run_memos(
@@ -213,8 +222,10 @@ def run_memos(
     try:
         with open_db(dsn) as con:
             inputs = read_inputs(con, cfg, today)
-        payloads, build, delete, current = plan(inputs, cfg, today, written, model_columns())
-        tally.n_chosen, tally.n_current = len(payloads), len(current)
+        payloads, build, delete, current, waiting = plan(inputs, cfg, today, written,
+                                                         model_columns())  # fmt: skip
+        tally.n_chosen, tally.n_current = len(payloads) + len(waiting), len(current)
+        tally.n_waiting = len(waiting)
         with open_db(dsn) as con, con.transaction():
             for nct, day in current.items():
                 con.execute("UPDATE serving.trial_memos SET valid_as_of = %s WHERE nct_id = %s",
@@ -275,7 +286,7 @@ def dry_run(dsn: str, cfg: MemoConfig, today: dt.date, n: int,
     open_db = connect or (lambda d: psycopg.connect(d, autocommit=True, connect_timeout=30))
     with open_db(dsn) as con:
         inputs = read_inputs(con, cfg, today)
-    payloads, build, _, _ = plan(inputs, cfg, today, version(cfg), model_columns())
+    payloads, build, _, _, _ = plan(inputs, cfg, today, version(cfg), model_columns())
     out: list[dict[str, Any]] = []
     for nct in build[:n]:
         result = checks.check(template.memo(payloads[nct]), payloads[nct], inputs.names)
@@ -328,7 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                "current": tally.n_current, "called": tally.n_called, "stored": tally.n_stored,
                "rejected": tally.n_rejected, "rejections": tally.rejections,
                "deleted": tally.n_deleted, "over_cap": tally.n_over_cap,
-               "stopped": tally.stopped_reason,
+               "waiting": tally.n_waiting, "stopped": tally.stopped_reason,
                "rejection_alert": alert}  # fmt: skip
     print(json.dumps(summary, indent=1))
     return 0

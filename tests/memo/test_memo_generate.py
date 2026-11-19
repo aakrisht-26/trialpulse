@@ -11,6 +11,7 @@ import psycopg
 import pytest
 
 from trialpulse.config import REPO_ROOT, load_project_config
+from trialpulse.features.registry import model_columns
 from trialpulse.memo import check as checks
 from trialpulse.memo import generate as g
 from trialpulse.memo import template
@@ -85,8 +86,8 @@ def test_a_run_stores_template_memos_and_a_second_run_builds_nothing(seeded: str
             "SELECT DISTINCT model, prompt_version FROM serving.trial_memos"
         ).fetchall()
         rows = con.execute("SELECT paragraphs, payload FROM serving.trial_memos").fetchall()
-    assert row == ("succeeded", 3, 3, 0, "test", "template", "memo_v4")
-    assert written == [("template", "memo_v4")]
+    assert row == ("succeeded", 3, 3, 0, "test", "template", "memo_v5")
+    assert written == [("template", "memo_v5")]
     for paragraphs, payload in rows:  # every paragraph is the template's, exactly
         assert list(paragraphs) == template.memo(payload)
 
@@ -227,7 +228,7 @@ def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
     assert "banned_language" in text
     assert text.count("Reasons: ") == 3
     assert "```json" in text
-    assert "by template (memo_v4)" in text
+    assert "by template (memo_v5)" in text
     for name in ("Acme Pharma", "Northern University Hospital", "Hand-placed trial"):
         assert name not in text
 
@@ -261,7 +262,7 @@ def test_the_stored_memo_is_the_normalized_text_that_was_checked(
 def test_a_memo_of_another_version_is_deleted_and_written_again(seeded: str) -> None:
     run(seeded, cfg())
     with psycopg.connect(seeded) as con:
-        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v3', "
+        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v4', "
                     "model = 'openai/gpt-oss-120b'")  # fmt: skip
         con.commit()
     _, tally = run(seeded, cfg())
@@ -270,7 +271,51 @@ def test_a_memo_of_another_version_is_deleted_and_written_again(seeded: str) -> 
         written = con.execute(
             "SELECT DISTINCT prompt_version, model FROM serving.trial_memos"
         ).fetchall()
-    assert written == [("memo_v4", "template")]
+    assert written == [("memo_v5", "template")]
+
+
+def test_a_chosen_trial_without_the_rates_inputs_waits_for_them(seeded: str) -> None:
+    """memo_v5: a trial whose drivers include the sponsor rate gets its memo once the daily job
+    has stored the rate's inputs with its score (migration 0010)."""
+    rate = model_columns().index("sponsor_stop_rate")
+    with psycopg.connect(seeded) as con:
+        (top,) = con.execute("""SELECT nct_id FROM serving.trial_scores_latest WHERE NOT flagged
+                                ORDER BY risk_12m DESC, nct_id LIMIT 1""").fetchone()  # fmt: skip
+        con.execute("""UPDATE serving.trial_scores_latest SET driver_features[1] = %s,
+                         driver_values[1] = '0.241' WHERE nct_id = %s""", (rate, top))  # fmt: skip
+        con.commit()
+    _, tally = run(seeded, cfg())
+    assert (tally.n_chosen, tally.n_waiting, tally.n_stored) == (3, 1, 2)
+    assert top not in {m[0] for m in memos(seeded)}
+    with psycopg.connect(seeded) as con:
+        con.execute("""UPDATE serving.trial_scores_latest SET sponsor_has_record = true,
+                         sponsor_other_ended = 1, sponsor_class_rate = 0.16522
+                       WHERE nct_id = %s""", (top,))  # fmt: skip
+        con.commit()
+    _, again = run(seeded, cfg())
+    assert (again.n_waiting, again.n_stored) == (0, 1)
+    with psycopg.connect(seeded) as con:
+        (paragraphs,) = con.execute("SELECT paragraphs FROM serving.trial_memos WHERE nct_id = %s",
+                                    (top,)).fetchone()  # fmt: skip
+    assert "from 1 other ended trial of the sponsor, smoothed toward" in paragraphs[1]
+
+
+def test_the_review_command_never_overwrites_a_file(seeded: str, tmp_path: Path) -> None:
+    """A second review on one day keeps the first: <day>.md, then <day>-2.md, <day>-3.md."""
+    from trialpulse.memo import review
+
+    run(seeded, cfg())
+    (tmp_path / "keep.txt").write_text("x", encoding="utf-8")
+    for _ in range(3):
+        assert review.main(["--target", "local", "--out-dir", str(tmp_path)]) == 0
+    names = sorted(p.name for p in tmp_path.glob("*.md"))
+    day = names[0][:10]
+    assert names == [f"{day}-2.md", f"{day}-3.md", f"{day}.md"]
+    first = (tmp_path / f"{day}.md").read_text(encoding="utf-8")
+    first_stat = (tmp_path / f"{day}.md").stat().st_mtime_ns
+    assert review.free_path(tmp_path, dt.date.fromisoformat(day)).name == f"{day}-4.md"
+    assert (tmp_path / f"{day}.md").read_text(encoding="utf-8") == first
+    assert (tmp_path / f"{day}.md").stat().st_mtime_ns == first_stat
 
 
 def test_a_dry_run_reports_the_check_and_writes_nothing(seeded: str) -> None:

@@ -21,12 +21,14 @@ says how a stored value (the text `explain.drivers.shown` made of it) is display
 - `years`: "N years" (an age limit);
 - `year`: a calendar year as it is;
 - `percent`: a ratio as a percent with one decimal;
-- `rate`: the early-stop rate used for the sponsor as a percent with one decimal, with how it
-  is made: the sponsor's other ended trials smoothed toward the class rate, or the class rate
-  alone for a sponsor without a track record (an individual or a placeholder name);
-- `stage`: the landmark the score is computed at, as "stage 4 of 6, a stage every 6 months
-  after the first posting" (never as months, which a reader could take for the 24-month
-  horizon);
+- `rate`: the early-stop rate used for the sponsor as a percent with one decimal and exactly
+  how it was made, from the inputs the daily job stores with the score (memo_v5,
+  `RateInputs`): "24.1%, from 1 other ended trial of the sponsor, smoothed toward the other
+  (mostly universities and hospitals) class rate of 16.5%", or "16.0%, the industry class
+  rate, as the sponsor has no track record";
+- `stage`: the landmark the score is computed at, as "stage 4 (stages run 0 to 6, a stage
+  every 6 months after the first posting)" (never as months, which a reader could take for
+  the 24-month horizon);
 - `recent`: the versions of the recent window, "124 in the last 6 months".
 
 A missing value ("not given" as stored) is shown as "not stated in the record" for every kind,
@@ -70,11 +72,41 @@ YEAR = "year"
 PERCENT = "percent"
 RATE = "rate"
 STAGE = "stage"
+# The classes as the rate's display names them ("the industry class rate").
+RATE_CLASS_WORDS: dict[str, str] = {
+    "INDUSTRY": "industry",
+    "NIH": "NIH",
+    "FED": "US federal",
+    "OTHER_GOV": "other government",
+    "NETWORK": "network",
+    "INDIV": "individual",
+    "OTHER": "other (mostly universities and hospitals)",
+    "UNKNOWN": "unknown",
+    "AMBIG": "ambiguous",
+}
 RECENT = "recent"
 DATE = "date"  # a field's date, as stored (ISO)
 MONTH = "month"  # a field's month, for the status verified date (YYYY-MM)
 TYPES = "types"  # a field's intervention types
 SPONSOR_ID = "sponsor_id"  # the lead sponsor's id: its change is stated, its values never
+
+
+@dataclass(frozen=True)
+class RateInputs:
+    """What a served sponsor rate is made of (migration 0010): whether the sponsor has a track
+    record, the other ended trials behind the rate, the sponsor class and its class rate."""
+
+    has_record: bool
+    other_ended: int | None
+    sponsor_class: str | None
+    class_rate: float
+
+    @classmethod
+    def from_payload(cls, block: Mapping[str, object]) -> "RateInputs":
+        ended = block.get("other_ended")
+        return cls(bool(block["has_record"]), None if ended in (None, "none") else int(str(ended)),
+                   None if block.get("class") in (None, "none") else str(block["class"]),
+                   float(str(block["class_rate_percent"])) / 100)  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -198,7 +230,7 @@ FEATURES: dict[str, Label] = {
         "number enrolled as a share of the target in the first version", PERCENT),
     "ever_suspended": Label("past or current suspension", FLAG, yes="recorded",
                             no="not recorded"),
-    "currently_suspended": Label("suspension status", FLAG, yes="suspended now",
+    "currently_suspended": Label("state of the trial", FLAG, yes="suspended now",
                                  no="not suspended now"),
     "start_overdue": Label("start timing", FLAG,
                            yes="overdue, still not recruiting after the planned start month",
@@ -316,10 +348,26 @@ def _month(text: str) -> str:
         return text
 
 
+def rate_display(rate: float, inputs: RateInputs) -> str:
+    """The sponsor rate and exactly how it was made (memo_v5): from the sponsor's other ended
+    trials smoothed toward its class rate, or the class rate alone without a track record."""
+    words = RATE_CLASS_WORDS.get(str(inputs.sponsor_class))
+    toward = f"the {words} class rate" if words else "the overall rate"
+    if not inputs.has_record:
+        return f"{inputs.class_rate * 100:.1f}%, {toward}, as the sponsor has no track record"
+    n = int(inputs.other_ended or 0)
+    trials = "trial" if n == 1 else "trials"
+    return (
+        f"{rate * 100:.1f}%, from {_plain(n)} other ended {trials} of the sponsor, "
+        f"smoothed toward {toward} of {inputs.class_rate * 100:.1f}%"
+    )
+
+
 def show(entry: Label, value: str, enrollment_type: str | None = None,
-         precision: str | None = None) -> str:  # fmt: skip
+         precision: str | None = None, rate: RateInputs | None = None) -> str:  # fmt: skip
     """A stored value (text, as the scores store it) displayed by its entry's kind; a date
-    at its recorded precision when one is given ("2027-01" for a month)."""
+    at its recorded precision when one is given ("2027-01" for a month); the sponsor rate with
+    its inputs when given (memo_v5), else as a bare percent."""
     text = str(value).strip()
     if text in MISSING:
         return entry.missing or NOT_STATED
@@ -369,15 +417,12 @@ def show(entry: Label, value: str, enrollment_type: str | None = None,
     if kind == PERCENT:
         return f"{x * 100:.1f}%"
     if kind == RATE:
-        return (
-            f"{x * 100:.1f}%, from the other ended trials listed under the sponsor smoothed "
-            "toward the class rate (the class rate alone without a track record)"
-        )
+        return rate_display(x, rate) if rate is not None else f"{x * 100:.1f}%"
     if kind == STAGE:
-        stage = f"stage {_plain(x)} of {last_stage()}"
-        if x == 0:
-            return f"{stage}, the first posting itself"
-        return f"{stage}, a stage every {spacing_months()} months after the first posting"
+        return (
+            f"stage {_plain(x)} (stages run 0 to {last_stage()}, a stage every "
+            f"{spacing_months()} months after the first posting)"
+        )
     if kind == RECENT:
         return f"{_plain(x)} in the last {spacing_months()} months"
     raise ValueError(f"unknown kind {kind}")
@@ -387,10 +432,11 @@ def feature_label(name: str) -> str:
     return FEATURES[name].label
 
 
-def feature_display(name: str, value: str, enrollment_type: str | None = None) -> str:
+def feature_display(name: str, value: str, enrollment_type: str | None = None,
+                    rate: RateInputs | None = None) -> str:  # fmt: skip
     """A feature's stored value as the memo shows it; the enrollment count reads the latest
-    record's enrollment type."""
-    return show(FEATURES[name], value, enrollment_type)
+    record's enrollment type, and the sponsor rate its inputs (memo_v5)."""
+    return show(FEATURES[name], value, enrollment_type, rate=rate)
 
 
 def field_label(name: str) -> str:

@@ -302,7 +302,7 @@ def test_a_marker_that_is_not_the_first_posting_keeps_its_change(stub_api: StubA
     first posting, so it reads as a change, never as "First posted" (ADR 0043)."""
     at = app("trial", nct="NCT00000002")
     update = next(t for t in chart(at)["data"] if t["name"] == "Registry update")
-    assert (update["x"], update["text"]) == (["2025-06-02"], ["Changed: status"])
+    assert (update["x"], update["text"]) == (["2025-06-02"], ["Changed: recruitment status"])
 
 
 def test_a_trial_without_a_score_shows_its_reason_and_no_risk(stub_api: StubApi) -> None:

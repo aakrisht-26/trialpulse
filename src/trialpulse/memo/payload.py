@@ -5,17 +5,21 @@ risks as whole percents and their date, the five drivers per horizon (feature, v
 direction, and a plain-English label and display value from `memo.labels`), its record
 changes, the date from which before and after values are held, its sponsor class, status, the
 phase stated in its title and the month its status was last verified, and why it was chosen.
-It never holds a title, a sponsor name, a sponsor id or any free text: the builder takes only
-the columns listed here, and a test checks that what it is given beyond them never reaches
-the payload. The SHA-256 of its canonical JSON is the payload hash; a memo is regenerated only
-when it changes.
+Since memo_v5 it also holds the inputs of the served sponsor rate (`sponsor_rate`: whether the
+sponsor has a track record, the other ended trials behind the rate, the class and the class
+rate), which the daily job stores with each score (migration 0010); a trial whose drivers
+include the rate but whose score row lacks them gets no payload until it is next scored
+(`RateInputsMissingError`). It never holds a title, a sponsor name, a sponsor id or any free
+text: the builder takes only the columns listed here, and a test checks that what it is
+given beyond them never reaches the payload. The SHA-256 of its canonical JSON is the payload
+hash; a memo is regenerated only when it changes.
 
-The record changes (payload version 3, memo_v3) are read through `trialpulse.markers`: the
-marker on the trial's first-post date (from the live state) is its first posting, kept apart
-as `first_posted_on` and counted nowhere; every other marker is a change to the fields the
-model reads, named by its groups. The dates group is named "dates" or "status verified" only
-where two versions held since go-live show which changed, and "dates or status verification"
-elsewhere. For each change since go-live, `since_go_live` says whether it could be compared
+The record changes (since memo_v3) are read through `trialpulse.markers`: the marker on the
+trial's first-post date (from the live state) is its first posting, kept apart as
+`first_posted_on` and counted nowhere; every other marker is a change to the fields the model
+reads, named by its groups, each group always by its one name ("dates or status verification";
+memo_v5 dropped the exact names "dates" and "status verified", since one list held both forms).
+For each change since go-live, `since_go_live` says whether it could be compared
 with an earlier held version and, if so, which shown fields moved from what to what; a
 trial's first version held since go-live has no earlier value to compare.
 
@@ -32,7 +36,7 @@ from typing import Any
 from trialpulse import markers as mk
 from trialpulse.memo import labels
 
-PAYLOAD_VERSION = 4  # memo_v4: the labels and displays of ADR 0085
+PAYLOAD_VERSION = 5  # memo_v5: the sponsor rate's inputs (ADR 0085, amended 2026-11-19)
 HORIZONS = (12, 24)
 DRIVERS_PER_HORIZON = 5
 TOP = "top_100"
@@ -41,20 +45,30 @@ MOVED = "moved"
 # marker's groups (live.contract.MARKER_GROUPS), values only (a sponsor's change is stated
 # without them).
 CHANGE_FIELDS: tuple[str, ...] = tuple(labels.FIELDS)
-# The dates group: the schedule's dates, with their precision and type, and the status
-# verified date, which the memo names apart (memo_v3).
-SCHEDULE_FIELDS: tuple[str, ...] = (
-    "start_date", "primary_completion_date", "primary_completion_date_precision",
-    "primary_completion_date_type", "completion_date", "completion_date_precision",
-)  # fmt: skip
-VERIFIED_FIELD = "status_verified_date"
-DATES_NAME = mk.NAMES[mk.DATES]
-SCHEDULE_NAME = "dates"
-VERIFIED_NAME = "status verified"
+RATE_FEATURE = "sponsor_stop_rate"
 COMPARED = "compared"  # an earlier held version shows the values before
 FIRST_HELD = "first_held"  # the first version held since go-live: nothing to compare with
 EARLIER_NOT_HELD = "earlier_not_held"  # no earlier version is still held (retention ran)
 NOT_HELD = "not_held"  # no version of that date is held any more
+
+
+class RateInputsMissingError(ValueError):
+    """A trial's drivers include the sponsor rate, but its score row does not hold the rate's
+    inputs yet (a row scored before migration 0010): it waits for its next scoring."""
+
+
+def rate_inputs(score: Mapping[str, Any], sponsor_class: Any) -> dict[str, Any] | None:
+    """The `sponsor_rate` block of a payload from the score row (migration 0010), or None
+    when the row does not hold the inputs."""
+    has = score.get("sponsor_has_record")
+    rate = score.get("sponsor_class_rate")
+    if has is None or rate is None or (isinstance(rate, float) and math.isnan(rate)):
+        return None
+    ended = score.get("sponsor_other_ended")
+    return {"has_record": bool(has),
+            "other_ended": int(ended) if has and ended is not None else "none",
+            "class": as_shown(sponsor_class),
+            "class_rate_percent": f"{float(rate) * 100:.1f}"}  # fmt: skip
 
 
 def percent(risk: float) -> int:
@@ -102,20 +116,26 @@ def _date(value: Any) -> dt.date | None:
 
 
 def drivers(row: Mapping[str, Any], names: Sequence[str],
-            state: Mapping[str, Any] | None = None) -> dict[str, list[dict[str, str]]]:  # fmt: skip
+            state: Mapping[str, Any] | None = None,
+            rate: Mapping[str, Any] | None = None) -> dict[str, list[dict[str, str]]]:  # fmt: skip
     """The stored drivers of a score row (serving.trial_scores_latest), per horizon, each with
     its label and display value (`memo.labels`) beside the feature and value as stored; the
-    enrollment count's display reads the latest record's enrollment type."""
+    enrollment count's display reads the latest record's enrollment type, and the sponsor
+    rate's its inputs (`rate`, the payload's `sponsor_rate`; memo_v5), without which a rate
+    driver raises `RateInputsMissingError`."""
     enrollment_type = (state or {}).get("enrollment_type")
+    inputs = labels.RateInputs.from_payload(rate) if rate else None
     out: dict[str, list[dict[str, str]]] = {str(h): [] for h in HORIZONS}
     for months, feature, value, contribution in zip(
         row["driver_months"], row["driver_features"], row["driver_values"],
         row["driver_contributions"], strict=True,
     ):  # fmt: skip
         name = names[int(feature)]
+        if name == RATE_FEATURE and inputs is None:
+            raise RateInputsMissingError(str(row.get("nct_id")))
         out.setdefault(str(months), []).append(
             {"feature": name, "label": labels.feature_label(name), "value": as_shown(value),
-             "display": labels.feature_display(name, str(value), enrollment_type),
+             "display": labels.feature_display(name, str(value), enrollment_type, inputs),
              "direction": "raises" if float(contribution) > 0 else "lowers"}
         )  # fmt: skip
     return out
@@ -153,20 +173,6 @@ def _comparison(day: dt.date, held: Held, none_deleted: bool) -> Comparison:
         return (FIRST_HELD if none_deleted else EARLIER_NOT_HELD), [], None, None
     before, after = held[earlier[-1]], held[day]
     return COMPARED, _diff(before, after), before, after
-
-
-def _kinds(marker: mk.Marker, moved: Sequence[str] | None) -> list[str]:
-    """The groups of a change in words; the dates group exactly where the held versions show
-    which of its fields moved (`moved`, None when they cannot)."""
-    words = marker.changed()
-    if DATES_NAME not in words or moved is None:
-        return words
-    exact = ([SCHEDULE_NAME] if any(f in SCHEDULE_FIELDS for f in moved) else []) + (
-        [VERIFIED_NAME] if VERIFIED_FIELD in moved else [])  # fmt: skip
-    if not exact:
-        return words
-    i = words.index(DATES_NAME)
-    return [*words[:i], *exact, *words[i + 1 :]]
 
 
 def _value_change(name: str, before: Mapping[str, Any], after: Mapping[str, Any]
@@ -207,9 +213,8 @@ def record_changes(
         state, moved, before, after = (_comparison(marker.post_date, held, none_deleted)
                                        if marker.post_date >= values_held_from
                                        else (NOT_HELD, [], None, None))  # fmt: skip
-        exact = moved if state == COMPARED else None
         listed.append({"post_date": as_shown(marker.post_date),
-                       "changed": _kinds(marker, exact)})  # fmt: skip
+                       "changed": marker.changed()})  # fmt: skip
         if marker.post_date < values_held_from:
             continue
         entry: dict[str, Any] = {"post_date": as_shown(marker.post_date), "held": state}
@@ -247,6 +252,8 @@ def build(
     version (the run's date less `live.version_retention_months`)."""
     reasons = sorted(set(chosen))
     sponsor_class = (display or {}).get("sponsor_class") or state.get("lead_sponsor_class")
+    # the class the served rate was smoothed toward: the scored record's, else the display's
+    rate = rate_inputs(score, state.get("lead_sponsor_class") or sponsor_class)
     verified = _date(state.get("status_verified_date"))
     payload: dict[str, Any] = {
         "payload_version": PAYLOAD_VERSION,
@@ -260,11 +267,13 @@ def build(
         "sponsor_class": as_shown(sponsor_class),
         "status_verified_month": verified.strftime("%Y-%m") if verified else "none",
         "drivers_per_horizon": DRIVERS_PER_HORIZON,
-        "drivers": drivers(score, names, state),
+        "drivers": drivers(score, names, state, rate),
         **record_changes(markers, versions, _date(state.get("study_first_post_date")),
                          values_held_from, max_changes, versions_kept_from),
         "values_held_from": as_shown(values_held_from),
     }  # fmt: skip
+    if rate is not None:
+        payload["sponsor_rate"] = rate
     if TOP in reasons:
         payload["top_n"] = int(top_n)
     if MOVED in reasons and move is not None:

@@ -42,6 +42,18 @@ VERSIONS = [
 ]  # fmt: skip
 
 
+RATE = NAMES.index("sponsor_stop_rate")
+
+
+def with_rate(inputs: dict[str, Any] | None) -> dict[str, Any]:
+    """A score row whose first 12-month driver is the sponsor rate, with its stored inputs
+    (migration 0010) or without them."""
+    row = score()
+    row["driver_features"] = [RATE, *row["driver_features"][1:]]
+    row["driver_values"] = ["0.241", *row["driver_values"][1:]]
+    return {**row, **(inputs or {})}
+
+
 def build(**over: Any) -> dict[str, Any]:
     args: dict[str, Any] = {
         "score": score(), "state": STATE, "display": DISPLAY, "markers": MARKERS,
@@ -54,7 +66,7 @@ def build(**over: Any) -> dict[str, Any]:
 
 def test_the_payload_holds_the_stored_values_as_shown() -> None:
     out = build()
-    assert out["payload_version"] == 4  # memo_v4 (ADR 0085)
+    assert out["payload_version"] == 5  # memo_v5 (ADR 0085, amended 2026-11-19)
     assert out["risk_percent"] == {"12": 14, "24": 26}
     assert out["score_date"] == "2026-11-16"
     first = {"feature": "masking", "label": "number of masked roles", "value": "DOUBLE",
@@ -71,8 +83,8 @@ def test_the_payload_holds_the_stored_values_as_shown() -> None:
     assert out["first_posted_on"] == "2024-03-04"
     assert out["record_changes_total"] == 2  # the first posting is not a change
     assert out["record_changes"] == [
-        {"post_date": "2026-11-10", "changed": ["dates", "enrollment"]},
-        {"post_date": "2025-01-02", "changed": ["status"]},
+        {"post_date": "2026-11-10", "changed": [DATES, "enrollment"]},
+        {"post_date": "2025-01-02", "changed": ["recruitment status"]},
     ]
     assert out["since_go_live"] == [{"post_date": "2026-11-10", "held": p.COMPARED, "values": [
         {"field": "primary_completion_date", "label": "primary completion date",
@@ -91,7 +103,8 @@ def test_the_first_posting_is_named_only_on_the_first_post_date() -> None:
     for out in (trimmed, unknown):
         assert out["first_posted_on"] == "none"
         assert out["record_changes_total"] == 3
-        assert out["record_changes"][-1] == {"post_date": "2024-03-04", "changed": ["status"]}
+        assert out["record_changes"][-1] == {"post_date": "2024-03-04",
+                                             "changed": ["recruitment status"]}  # fmt: skip
 
 
 def held(day: dt.date, **values: Any) -> dict[str, Any]:
@@ -100,7 +113,9 @@ def held(day: dt.date, **values: Any) -> dict[str, Any]:
     return {"effective_date": day, **base, **values}
 
 
-def test_the_dates_group_is_named_exactly_only_where_two_held_versions_show_it() -> None:
+def test_the_dates_group_always_has_one_name() -> None:
+    """memo_v5: one name for the dates group, never "dates" and "dates or status verification"
+    in one memo (the v4 audit, memo 12); the values since go-live say which field moved."""
     markers = {"post_dates": [D(2026, 11, 9), D(2026, 11, 12), D(2026, 11, 14), D(2026, 1, 5)],
                "kinds": [2, 2, 2 | 4, 2]}  # fmt: skip
     versions = [held(D(2026, 11, 9)),
@@ -109,11 +124,7 @@ def test_the_dates_group_is_named_exactly_only_where_two_held_versions_show_it()
                      start_date=D(2027, 3, 1), enrollment_count=90)]  # fmt: skip
     out = build(markers=markers, versions=versions)
     assert [c["changed"] for c in out["record_changes"]] == [
-        ["dates", "enrollment"],  # the start date moved
-        ["status verified"],  # only the status verified date moved
-        [DATES],  # the first version held since go-live: nothing to compare with
-        [DATES],  # before go-live: the stored code only
-    ]
+        [DATES, "enrollment"], [DATES], [DATES], [DATES]]  # fmt: skip
     assert [e["held"] for e in out["since_go_live"]] == [p.COMPARED, p.COMPARED, p.FIRST_HELD]
     verified = out["since_go_live"][1]["values"]
     assert verified == [{"field": "status_verified_date", "label": "status verified month",
@@ -124,7 +135,7 @@ def test_a_change_since_go_live_without_its_version_is_not_held() -> None:
     markers = {"post_dates": [D(2026, 11, 12)], "kinds": [1]}
     out = build(markers=markers, versions=[held(D(2026, 11, 9))])
     assert out["since_go_live"] == [{"post_date": "2026-11-12", "held": p.NOT_HELD}]
-    assert out["record_changes"] == [{"post_date": "2026-11-12", "changed": ["status"]}]
+    assert out["record_changes"] == [{"post_date": "2026-11-12", "changed": ["recruitment status"]}]
 
 
 def test_after_retention_a_change_without_an_earlier_version_says_so() -> None:
@@ -256,3 +267,38 @@ def test_a_move_reaches_the_payload() -> None:
     assert out["move"] == {"previous_risk_percent_12": 9, "previous_score_date": "2026-11-09",
                            "direction": "rose", "change_points": 5}  # fmt: skip
     assert "top_n" not in out
+
+
+def test_the_payload_carries_the_rates_inputs_and_shows_one_form() -> None:
+    """memo_v5: whether the sponsor has a track record, the other ended trials behind the rate
+    and the class rate, from the score row (migration 0010)."""
+    from trialpulse.memo import check as c
+    from trialpulse.memo import template as t
+
+    out = build(score=with_rate({"sponsor_has_record": True, "sponsor_other_ended": 1,
+                                 "sponsor_class_rate": 0.16522}))  # fmt: skip
+    assert out["sponsor_rate"] == {"has_record": True, "other_ended": 1, "class": "INDUSTRY",
+                                   "class_rate_percent": "16.5"}  # fmt: skip
+    assert out["drivers"]["12"][0]["display"] == (
+        "24.1%, from 1 other ended trial of the sponsor, smoothed toward the industry class rate "
+        "of 16.5%"
+    )
+    assert c.check(t.memo(out), out, ["Acme Pharma Inc."]).passed
+    none = build(score=with_rate({"sponsor_has_record": False, "sponsor_other_ended": None,
+                                  "sponsor_class_rate": 0.15990}))  # fmt: skip
+    assert none["sponsor_rate"]["other_ended"] == "none"
+    assert none["drivers"]["12"][0]["display"] == (
+        "16.0%, the industry class rate, as the sponsor has no track record"
+    )
+    assert c.check(t.memo(none), none, ["Acme Pharma Inc."]).passed
+
+
+def test_a_rate_driver_without_its_inputs_waits() -> None:
+    import pytest
+
+    with pytest.raises(p.RateInputsMissingError):
+        build(score=with_rate(None))
+    with pytest.raises(p.RateInputsMissingError):
+        build(score=with_rate({"sponsor_has_record": None, "sponsor_other_ended": None,
+                               "sponsor_class_rate": None}))  # fmt: skip
+    assert "sponsor_rate" not in build()  # no rate driver, no inputs: built as before

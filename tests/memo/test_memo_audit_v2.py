@@ -51,7 +51,10 @@ def payload_of(
     score = {"nct_id": "NCT09999999", "as_of_date": D(2026, 11, 13), "risk_12m": 0.55,
              "risk_24m": 0.63, "driver_months": [12] * len(drivers) + [24] * len(drivers),
              "driver_features": feats, "driver_values": [v for _, v, _ in drivers] * 2,
-             "driver_contributions": [w for _, _, w in drivers] * 2}  # fmt: skip
+             "driver_contributions": [w for _, _, w in drivers] * 2,
+             # the sponsor rate's stored inputs (migration 0010, memo_v5)
+             "sponsor_has_record": True, "sponsor_other_ended": 1,
+             "sponsor_class_rate": 0.16522}  # fmt: skip
     rows = {"post_dates": [d for d, _ in markers], "kinds": [k for _, k in markers]}
     return p.build(score, {"study_first_post_date": first_post, **(state or {})}, None, rows,
                    versions, chosen, move, NAMES, 100, 10, GO_LIVE)  # fmt: skip
@@ -159,7 +162,8 @@ def dates_group_names_verification() -> None:
     )  # fmt: skip
     third = t.paragraph_three(payload)
     assert "2026-10-13: dates or status verification." in third
-    assert "2026-11-12: status verified." in third
+    # memo_v5: one name for the group; the moved value below says it was the verification
+    assert "2026-11-12: dates or status verification." in third
     assert "(dates)" not in third
     assert "Status verified month moved from 2026-10 to 2026-11 on 2026-11-12." in third
 
@@ -176,10 +180,11 @@ def count_leaves_out_the_first_posting() -> None:
 
 
 def smoothing_is_named(value: str, old: str) -> None:
-    # memo_v4: the smoothing is named in the display, since a comma in the label opened a
-    # clause ("its class rate is 24.1%") that read the class rate as the sponsor's
-    assert lab.feature_display("sponsor_stop_rate", value).endswith(
-        "smoothed toward the class rate (the class rate alone without a track record)"
+    # memo_v5: the display says exactly how the rate was made, from its stored inputs
+    inputs = lab.RateInputs(True, 1, "OTHER", 0.165)
+    assert lab.feature_display("sponsor_stop_rate", value, rate=inputs).endswith(
+        "other ended trial of the sponsor, smoothed toward the other (mostly universities and "
+        "hospitals) class rate of 16.5%"
     )
     refused_sentence("sponsor_stop_rate", value, old)
 
@@ -240,7 +245,7 @@ def checkpoint_is_plain() -> None:
     assert "landmark" not in label
     assert "step" not in label
     assert lab.feature_display("landmark_index", "4") == (  # memo_v4: never in months
-        "stage 4 of 6, a stage every 6 months after the first posting"
+        "stage 4 (stages run 0 to 6, a stage every 6 months after the first posting)"
     )
     refused_sentence(
         "landmark_index", "4", "Landmark step since registration is step 4, which raises the risk."
@@ -261,7 +266,7 @@ def count_labels_take_is(feature: str, value: str, old: str) -> None:
 
 
 def suspension_status_is_no_tautology() -> None:
-    assert lab.feature_label("currently_suspended") == "suspension status"
+    assert lab.feature_label("currently_suspended") == "state of the trial"  # memo_v5
     refused_sentence(
         "currently_suspended", "yes", "Current suspension is suspended now, which raises the risk."
     )

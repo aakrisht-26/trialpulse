@@ -103,6 +103,17 @@ def render(memos: Sequence[dict[str, Any]], samples: Sequence[dict[str, Any]],
     return "\n".join(lines)
 
 
+def free_path(out_dir: Path, day: dt.date) -> Path:
+    """The review file of `day` in `out_dir`, never an existing file: <day>.md, else
+    <day>-2.md, <day>-3.md and so on (a second review of a day keeps the first)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path, n = out_dir / f"{day.isoformat()}.md", 1
+    while path.exists():
+        n += 1
+        path = out_dir / f"{day.isoformat()}-{n}.md"
+    return path
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     import psycopg
 
@@ -115,8 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     day = dt.datetime.now(dt.UTC).date()
     with psycopg.connect(_dsn(args.target), connect_timeout=30) as con:
         memos, samples, names = read(con, version(load_project_config().memo))
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    path = args.out_dir / f"{day.isoformat()}.md"
+    path = free_path(args.out_dir, day)
     path.write_text(render(memos, samples, names, day), encoding="utf-8")
     print(json.dumps({"file": str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT)
                       else path.name, "memos": len(memos), "rejected": len(samples)}))  # fmt: skip

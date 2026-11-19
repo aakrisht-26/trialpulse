@@ -145,7 +145,7 @@ def test_trimmed_markers_keep_their_stored_names(make_client: Make) -> None:
     client, _, _ = make_client()
     body = client.get("/v1/trials/NCT00000002/timeline").json()
     assert body["markers"] == [
-        {"post_date": "2025-06-02", "changed": ["status"], "first_posted": False}
+        {"post_date": "2025-06-02", "changed": ["recruitment status"], "first_posted": False}
     ]
 
 
@@ -158,7 +158,7 @@ def test_without_a_live_state_row_markers_are_named_by_their_codes(
     body = client.get("/v1/trials/NCT00000001/timeline").json()
     # null: the live state holds no first-post date for the trial
     assert [(m["changed"], m["first_posted"]) for m in body["markers"]] == [
-        (["status"], None), (["dates or status verification", "enrollment"], None)
+        (["recruitment status"], None), (["dates or status verification", "enrollment"], None)
     ]  # fmt: skip
 
 
