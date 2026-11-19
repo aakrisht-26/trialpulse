@@ -84,7 +84,7 @@ def paragraph_two(payload: Mapping[str, Any]) -> str:
 
 def _changes(payload: Mapping[str, Any]) -> list[str]:
     """The first posting, the count of change dates and the latest changes, one sentence per
-    date with its kinds apart ("2026-05-20: status; dates or status verification.")."""
+    date with its kinds apart ("2026-05-20: recruitment status; dates or status verification.")."""
     if not payload.get("stored_markers", True):
         return ["No record changes are stored for this trial."]
     changes = payload.get("record_changes") or []

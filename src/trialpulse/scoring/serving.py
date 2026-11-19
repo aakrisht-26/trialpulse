@@ -21,8 +21,8 @@ arrays: the horizon in months, the feature's number (its position in
 `registry.model_columns()`), its value as text and its contribution to 3 decimals, whose sign
 is the direction. Content hashes are stored as their 32 bytes. Each row also carries the
 inputs of its sponsor rate (whether the sponsor has a track record, the other ended trials
-behind the rate and the class rate it is smoothed toward), so the memo can say how the served
-rate was made (migration 0010).
+behind the rate, the rate it is smoothed toward and the class whose prior that is), so the
+memo can say how the served rate was made (migration 0010).
 
 **A scope** (ADR 0045). A live run rescores only some trials. With `scope`, every row it
 writes and every row it removes is of a trial in the scope; an empty scope writes nothing.
@@ -56,7 +56,7 @@ DRIVER_COLUMNS: tuple[str, ...] = (
 )  # fmt: skip
 # The inputs of the served sponsor rate (migration 0010), for the memo (ADR 0085, amended).
 SPONSOR_RATE_COLUMNS: tuple[str, ...] = (
-    "sponsor_has_record", "sponsor_other_ended", "sponsor_class_rate",
+    "sponsor_has_record", "sponsor_other_ended", "sponsor_class_rate", "sponsor_rate_class",
 )  # fmt: skip
 LATEST_COLUMNS: tuple[str, ...] = (
     "nct_id", "as_of_date", "landmark_index", "true_landmark_index", "flagged",

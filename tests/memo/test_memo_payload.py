@@ -276,7 +276,8 @@ def test_the_payload_carries_the_rates_inputs_and_shows_one_form() -> None:
     from trialpulse.memo import template as t
 
     out = build(score=with_rate({"sponsor_has_record": True, "sponsor_other_ended": 1,
-                                 "sponsor_class_rate": 0.16522}))  # fmt: skip
+                                 "sponsor_class_rate": 0.16522,
+                                 "sponsor_rate_class": "INDUSTRY"}))  # fmt: skip
     assert out["sponsor_rate"] == {"has_record": True, "other_ended": 1, "class": "INDUSTRY",
                                    "class_rate_percent": "16.5"}  # fmt: skip
     assert out["drivers"]["12"][0]["display"] == (
@@ -285,7 +286,8 @@ def test_the_payload_carries_the_rates_inputs_and_shows_one_form() -> None:
     )
     assert c.check(t.memo(out), out, ["Acme Pharma Inc."]).passed
     none = build(score=with_rate({"sponsor_has_record": False, "sponsor_other_ended": None,
-                                  "sponsor_class_rate": 0.15990}))  # fmt: skip
+                                  "sponsor_class_rate": 0.15990,
+                                  "sponsor_rate_class": "INDUSTRY"}))  # fmt: skip
     assert none["sponsor_rate"]["other_ended"] == "none"
     assert none["drivers"]["12"][0]["display"] == (
         "16.0%, the industry class rate, as the sponsor has no track record"
@@ -302,3 +304,17 @@ def test_a_rate_driver_without_its_inputs_waits() -> None:
         build(score=with_rate({"sponsor_has_record": None, "sponsor_other_ended": None,
                                "sponsor_class_rate": None}))  # fmt: skip
     assert "sponsor_rate" not in build()  # no rate driver, no inputs: built as before
+
+
+def test_the_rates_class_is_the_one_whose_prior_the_score_used() -> None:
+    """The memo_v5 review: a class the priors hold no rate for (AMBIG), or a missing class,
+    was smoothed toward the overall rate; the memo names the stored class only, never the
+    display's or the live state's."""
+    out = build(score=with_rate({"sponsor_has_record": False, "sponsor_other_ended": None,
+                                 "sponsor_class_rate": 0.16241,
+                                 "sponsor_rate_class": None}),
+                state={**STATE, "lead_sponsor_class": "AMBIG"})  # fmt: skip
+    assert out["sponsor_rate"]["class"] == "none"
+    assert out["drivers"]["12"][0]["display"] == (
+        "16.2%, the overall rate, as the sponsor has no track record"
+    )

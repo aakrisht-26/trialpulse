@@ -54,7 +54,7 @@ def payload_of(
              "driver_contributions": [w for _, _, w in drivers] * 2,
              # the sponsor rate's stored inputs (migration 0010, memo_v5)
              "sponsor_has_record": True, "sponsor_other_ended": 1,
-             "sponsor_class_rate": 0.16522}  # fmt: skip
+             "sponsor_class_rate": 0.16522, "sponsor_rate_class": "OTHER"}  # fmt: skip
     rows = {"post_dates": [d for d, _ in markers], "kinds": [k for _, k in markers]}
     return p.build(score, {"study_first_post_date": first_post, **(state or {})}, None, rows,
                    versions, chosen, move, NAMES, 100, 10, GO_LIVE)  # fmt: skip

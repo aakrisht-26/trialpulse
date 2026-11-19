@@ -119,20 +119,23 @@ def test_the_rate_inputs_are_the_features_and_the_class_prior() -> None:
     """Migration 0010: each score carries what its sponsor rate is made of, for the memo."""
     from trialpulse.scoring.predict import sponsor_rate_inputs
 
-    frame = pd.DataFrame({"sponsor_class": ["INDUSTRY", "OTHER", None],
-                          "sponsor_has_identity": [True, False, True],
-                          "sponsor_prior_ended": [20.0, np.nan, 0.0]})  # fmt: skip
+    frame = pd.DataFrame({"sponsor_class": ["INDUSTRY", "OTHER", None, "AMBIG"],
+                          "sponsor_has_identity": [True, False, True, True],
+                          "sponsor_prior_ended": [20.0, np.nan, 0.0, 3.0]})  # fmt: skip
     out = sponsor_rate_inputs(frame, PRIORS)
-    assert out["sponsor_has_record"].tolist() == [True, False, True]
-    assert list(out["sponsor_other_ended"]) == [20, None, 0]
+    assert out["sponsor_has_record"].tolist() == [True, False, True, True]
+    assert list(out["sponsor_other_ended"]) == [20, None, 0, 3]
     assert all(v is None or type(v) is int for v in out["sponsor_other_ended"])  # never NaN
-    assert out["sponsor_class_rate"].tolist() == pytest.approx([0.21, 0.04, 0.08])
+    assert out["sponsor_class_rate"].tolist() == pytest.approx([0.21, 0.04, 0.08, 0.08])
+    # the class whose prior was used; None where the priors fell back to the overall rate
+    assert list(out["sponsor_rate_class"]) == ["INDUSTRY", "OTHER", None, None]
 
 
 def test_a_score_carries_its_rate_inputs(small_m4: DiscreteTimeBoosting) -> None:
     scored, features = _inputs(6)
     out, _ = score.predict(scored, features, _bundle(small_m4), DAY, with_drivers=False)
-    assert {"sponsor_has_record", "sponsor_other_ended", "sponsor_class_rate"} <= set(out.columns)
+    assert {"sponsor_has_record", "sponsor_other_ended", "sponsor_class_rate",
+            "sponsor_rate_class"} <= set(out.columns)  # fmt: skip
     assert len(out["sponsor_class_rate"]) == len(scored)
 
 

@@ -3,7 +3,8 @@
 
     uv run python -m trialpulse.memo.review --target neon
 
-Writes data/memo_review/<date>.md (gitignored): the first 20 stored memos of the current memo
+Writes data/memo_review/<date>.md (gitignored; <date>-2.md and so on when that file exists,
+so a review is never overwritten): the first 20 stored memos of the current memo
 version (oldest first), each with its payload and the result of the fabrication check run
 again on it, and up to 5 rejected memos of the latest runs of that version with their reasons
 and payloads. It reads Neon only and writes

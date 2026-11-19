@@ -213,8 +213,8 @@ RATE_FORMS = [  # memo_v5: exactly one of the two forms, from the stored inputs
     (
         lab.RateInputs(True, 0, "NIH", 0.15010),
         "0.150",
-        "15.0%, from 0 other ended trials of the sponsor, smoothed toward the NIH class rate of "
-        "15.0%",
+        "15.0%, from 0 other ended trials of the sponsor, smoothed toward the US national "
+        "research institutes class rate of 15.0%",
     ),
     (
         lab.RateInputs(False, None, "INDUSTRY", 0.15990),

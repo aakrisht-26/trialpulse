@@ -289,7 +289,8 @@ def test_a_chosen_trial_without_the_rates_inputs_waits_for_them(seeded: str) -> 
     assert top not in {m[0] for m in memos(seeded)}
     with psycopg.connect(seeded) as con:
         con.execute("""UPDATE serving.trial_scores_latest SET sponsor_has_record = true,
-                         sponsor_other_ended = 1, sponsor_class_rate = 0.16522
+                         sponsor_other_ended = 1, sponsor_class_rate = 0.16522,
+                         sponsor_rate_class = 'OTHER'
                        WHERE nct_id = %s""", (top,))  # fmt: skip
         con.commit()
     _, again = run(seeded, cfg())

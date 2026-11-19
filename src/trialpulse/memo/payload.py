@@ -57,9 +57,10 @@ class RateInputsMissingError(ValueError):
     inputs yet (a row scored before migration 0010): it waits for its next scoring."""
 
 
-def rate_inputs(score: Mapping[str, Any], sponsor_class: Any) -> dict[str, Any] | None:
+def rate_inputs(score: Mapping[str, Any]) -> dict[str, Any] | None:
     """The `sponsor_rate` block of a payload from the score row (migration 0010), or None
-    when the row does not hold the inputs."""
+    when the row does not hold the inputs. The class is the one whose prior the score used
+    ("none" for the overall rate), never the display's or the live state's."""
     has = score.get("sponsor_has_record")
     rate = score.get("sponsor_class_rate")
     if has is None or rate is None or (isinstance(rate, float) and math.isnan(rate)):
@@ -67,7 +68,7 @@ def rate_inputs(score: Mapping[str, Any], sponsor_class: Any) -> dict[str, Any] 
     ended = score.get("sponsor_other_ended")
     return {"has_record": bool(has),
             "other_ended": int(ended) if has and ended is not None else "none",
-            "class": as_shown(sponsor_class),
+            "class": as_shown(score.get("sponsor_rate_class")),
             "class_rate_percent": f"{float(rate) * 100:.1f}"}  # fmt: skip
 
 
@@ -252,8 +253,7 @@ def build(
     version (the run's date less `live.version_retention_months`)."""
     reasons = sorted(set(chosen))
     sponsor_class = (display or {}).get("sponsor_class") or state.get("lead_sponsor_class")
-    # the class the served rate was smoothed toward: the scored record's, else the display's
-    rate = rate_inputs(score, state.get("lead_sponsor_class") or sponsor_class)
+    rate = rate_inputs(score)
     verified = _date(state.get("status_verified_date"))
     payload: dict[str, Any] = {
         "payload_version": PAYLOAD_VERSION,

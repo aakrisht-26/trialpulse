@@ -3,11 +3,12 @@
 
 - serving.trial_scores_latest gains `sponsor_has_record` (whether the sponsor has a track
   record of its own), `sponsor_other_ended` (the other ended trials behind the rate, NULL
-  without a track record) and `sponsor_class_rate` (the class rate the sponsor's rate is
-  smoothed toward, from the champion's priors). The daily job writes them with every score,
-  so the memo can say exactly how the served rate was made. They are NULL on a row until its
-  trial is next scored (every trial at the next full run). No other table changes; the API's
-  role reads them through its existing grant on the table.
+  without a track record), `sponsor_class_rate` (the rate the sponsor's rate is smoothed
+  toward, from the champion's priors) and `sponsor_rate_class` (the class whose prior that is,
+  NULL when the priors hold no rate for the class and the overall rate was used). The daily
+  job writes them with every score, so the memo can say exactly how the served rate was made.
+  They are NULL on a row until its trial is next scored (every trial at the next full run).
+  No other table changes; the API's role reads them through its existing grant on the table.
 
 Revision ID: 0010
 Revises: 0009
@@ -29,6 +30,7 @@ COLUMNS = (
     ("sponsor_has_record", sa.Boolean()),
     ("sponsor_other_ended", sa.BigInteger()),
     ("sponsor_class_rate", postgresql.DOUBLE_PRECISION()),
+    ("sponsor_rate_class", sa.Text()),
 )
 
 

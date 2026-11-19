@@ -105,7 +105,8 @@ def version(cfg: MemoConfig) -> str:
 
 SCORES_SQL = """SELECT nct_id, as_of_date, risk_12m, risk_24m, flagged, driver_months,
     driver_features, driver_values, driver_contributions, sponsor_has_record,
-    sponsor_other_ended, sponsor_class_rate FROM serving.trial_scores_latest"""
+    sponsor_other_ended, sponsor_class_rate, sponsor_rate_class
+    FROM serving.trial_scores_latest"""
 HISTORY_SQL = """SELECT nct_id, as_of_date, risk_12m FROM (
       SELECT nct_id, as_of_date, risk_12m, row_number() OVER (
         PARTITION BY nct_id ORDER BY as_of_date DESC, history_id DESC) AS rn
@@ -179,7 +180,7 @@ def plan(inputs: Inputs, cfg: MemoConfig, today: dt.date, written: str,
                                      inputs.versions.get(nct, []), reasons, move, features,
                                      cfg.top_n, cfg.max_record_changes,
                                      cfg.values_held_from, kept_from)  # fmt: skip
-        except pl.RateInputsMissingError:  # its stored memo stays until it can be rebuilt
+        except pl.RateInputsMissingError:  # waits for its inputs; its memo is deleted below
             waiting.append(nct)
     current: dict[str, dt.date] = {}
     delete: list[str] = []

@@ -79,6 +79,7 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
         ("sponsor_has_record", "BOOLEAN"),
         ("sponsor_other_ended", "BIGINT"),
         ("sponsor_class_rate", "DOUBLE PRECISION"),
+        ("sponsor_rate_class", "TEXT"),
     ):  # migration 0010
         assert f"ALTER TABLE serving.trial_scores_latest ADD COLUMN {column} {kind};" in sql
         assert f"ALTER TABLE serving.trial_scores_latest DROP COLUMN {column};" in down

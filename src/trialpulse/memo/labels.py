@@ -72,18 +72,9 @@ YEAR = "year"
 PERCENT = "percent"
 RATE = "rate"
 STAGE = "stage"
-# The classes as the rate's display names them ("the industry class rate").
-RATE_CLASS_WORDS: dict[str, str] = {
-    "INDUSTRY": "industry",
-    "NIH": "NIH",
-    "FED": "US federal",
-    "OTHER_GOV": "other government",
-    "NETWORK": "network",
-    "INDIV": "individual",
-    "OTHER": "other (mostly universities and hospitals)",
-    "UNKNOWN": "unknown",
-    "AMBIG": "ambiguous",
-}
+# The classes as the rate's display names them ("the industry class rate"): the words of the
+# sponsor class driver, set after the class words below.
+RATE_CLASS_WORDS: dict[str, str] = {}
 RECENT = "recent"
 DATE = "date"  # a field's date, as stored (ISO)
 MONTH = "month"  # a field's month, for the status verified date (YYYY-MM)
@@ -148,6 +139,8 @@ CLASS_WORDS: dict[str, str] = {
     "UNKNOWN": "unknown",
     "AMBIG": "ambiguous",
 }
+RATE_CLASS_WORDS.update({k: v.replace(", ", " (") + ")" if ", " in v else v
+                         for k, v in CLASS_WORDS.items()})  # fmt: skip
 PHASE_WORDS: dict[str, str] = {
     "NONE": "none",
     "EARLY_PHASE1": "early phase 1",

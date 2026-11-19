@@ -20,8 +20,9 @@ Laptop only (ADR 0040: it reads the dataset's rows), and read-only on Neon. In o
    written in the serving tables' compact form (`scoring.serving.latest_frame`).
 4. **The comparison,** on the trials Neon served on D (a daily run rescores only the trials
    it touched, so the other served rows keep an earlier date and are not compared): every
-   column of the served rows (risks, flags, indexes, model, the four driver arrays) and of
-   the unscored rows (index, reason). Equal on every column is the bar, as at the reference
+   compared column of the served rows (risks, flags, indexes, model, the four driver arrays;
+   not the sponsor rate's inputs of migration 0010, which only the memo reads) and of the
+   unscored rows (index, reason). Equal on every column is the bar, as at the reference
    check. A trial on one side only is counted by which side. Content hashes are counted
    apart: the live rows' are feature hashes, the offline rows' canonical hashes (ADR 0037).
 
