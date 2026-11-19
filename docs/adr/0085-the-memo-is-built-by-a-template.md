@@ -1,6 +1,6 @@
 # 0085. The memo is built by a template; the language model is retired
 
-- Status: **Accepted.** Decided by Aakrisht on 2026-11-19, after the audit of the memo_v3 memos. Amends ADR 0084 and deviates from CLAUDE.md's Stretch item 2, which asks for a memo "written by an LLM".
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-19, after the audit of the memo_v3 memos. Amends ADR 0084 and deviates from CLAUDE.md's Stretch item 2, which asks for a memo "written by an LLM". **Amended 2026-11-19** (memo_v5, below): the sponsor rate says exactly how it was made, from inputs the daily job stores with each score (migration 0010), and the memo flag is turned on only if the audit of the regenerated memos finds no high or medium problem.
 
 ## Context
 
@@ -51,3 +51,32 @@ With the memo_v3 check, the only text the model could store was the text a templ
 - Stretch item 2's "written by an LLM" is not met. The deviation is recorded in CLAUDE.md's Amendments, with this history as the reason.
 - The memo can say no more than the label table and the template say. Its wording is now entirely the table's, and the tests hold the table.
 - One known limit stays. Some of the model's drivers state one fact twice (the past or current suspension beside the suspension status; the start as now recorded beside the start date's move; the enrollment count beside its ratio to the first target). The memo states each driver as the model ranked it, and the lead-in says the drivers are not reasons.
+
+## Amendment of 2026-11-19: memo_v5
+
+Decided by Aakrisht on 2026-11-19, after the read-only audit of the memo_v4 memos (data/memo_review/2026-11-19-v4-audit.md: 13 findings, 0 high, 1 medium, 12 low).
+
+### What the audit found
+
+The medium finding: the sponsor rate's display named both ways a rate can be made ("from the other ended trials ... (the class rate alone without a track record)") without saying which applied or giving the class rate, so beside "0 other interventional trials first posted under the sponsor" a reader took 24.1% for the class rate. It was the sponsor's own 1 of 1 ended trials smoothed toward the class rate of 16.5%. The display could not say which form applied, because nothing the memo reads held the rate's inputs: the daily job computes all 54 features but stores only the five drivers of each horizon, and the class rates sit in the champion's bundle.
+
+### Decision
+
+1. **The sponsor rate (the medium finding).** The payload carries whether the sponsor has a track record, the class rate and the number of other ended trials behind the rate (`sponsor_rate`), and the display says exactly one of: "<rate>, from <N> other ended trials of the sponsor, smoothed toward the <class> class rate of <class rate>" (with "trial" for N = 1), or "<class rate>, the <class> class rate, as the sponsor has no track record". Every number in it is in the payload. Asked during the build (Aakrisht's choice of 2026-11-19): the daily job stores the three inputs with every score it writes (migration 0010: `serving.trial_scores_latest` gains `sponsor_has_record`, `sponsor_other_ended` and `sponsor_class_rate`), so the memo states the values behind the served score; every trial has them after the next full run (data date 2026-11-20). The rejected alternatives: the memo job fetching the bundle and asking the sponsor pass as of its own date (no schema change, but for a score of an earlier date its N would not be the one behind the rate shown), and a rate shown without its inputs (not the decision's forms).
+2. **The cheap low findings:** the current suspension reads "The state of the trial is suspended now"; the stage reads "stage k (stages run 0 to 6, ...)"; the dates group has one name, "dates or status verification", in the memo as on the timeline (the exact names "dates" and "status verified" of memo_v3 are dropped, and the values since go-live still say which field moved); the status group is "recruitment status" in the memo and the API (ADR 0043's table of words, `trialpulse.markers`), and the dashboard's stubs are recorded again. Left as they are: two drivers that reflect one fact, a maximum age of 99 years, and a move from a score dated before go-live.
+3. **The review command never overwrites a file:** a second review of a day is written as <day>-2.md, then <day>-3.md (tested).
+4. **The flag.** After the fixes are deployed and the memos regenerated, the review file is written and the light audit runs (one auditor, one adversarial verifier). If it confirms 0 high and 0 medium findings, `api.memo_public` is set to true in the same run (commit, full suite, push, CI, Render); otherwise it stays off.
+
+### Implementation details decided while building (flagged for review)
+
+- **The stage keeps its spacing:** "stage 4 (stages run 0 to 6, a stage every 6 months after the first posting)", since "stage" alone does not say what a stage is; the decision named only "stage k (stages run 0 to 6)".
+- **The current suspension's label is "state of the trial"** ("The state of the trial is suspended now" or "not suspended now").
+- **The class in the rate's display** is the live state's lead sponsor class (the class the scored record had), in words of its own (`RATE_CLASS_WORDS`: "industry", "NIH", "US federal", "other government", "network", "individual", "other (mostly universities and hospitals)", "unknown", "ambiguous"); a missing class reads "the overall rate", which is what the priors use for it.
+- **A chosen trial whose drivers include the rate but whose score row lacks its inputs waits:** it gets no memo, its stored memo is deleted (never left beside a newer score), and the run's summary counts it as waiting (not stored in `monitoring.memo_runs`, so no migration there). Until the full run of data date 2026-11-20, only the trials rescored since the deploy have the inputs.
+- **Scores made without the inputs** (a frame from a test or an older path) write NULL in the three columns; parity layer 5a keeps its compared columns, since the three inputs follow from features it already compares.
+- Payload version 5 and memo version memo_v5, so every stored memo is rebuilt.
+
+### Consequences
+
+- The daily job's score rows are about 17 bytes wider each (about 1.5 MB for 85,000 rows), well inside Neon's headroom.
+- Neon must be migrated to 0010 before the push, since the daily job refuses a database not at its head.

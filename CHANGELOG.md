@@ -8,6 +8,7 @@ One entry per roadmap step (CLAUDE.md, Section 18), newest first. Dates are the 
 - memo_v1 to memo_v3: a language model on Groq wrote the memo, then only one sentence per driver, under a check that ended up allowing only the text a template would write (three reviews and audits, in docs/progress.md).
 - memo_v4: the language model is retired; a template builds every paragraph, the check tests the template at every generation, and no workflow reads `GROQ_API_KEY` (ADR 0085). This deviates from the roadmap's "written by an LLM", and the ADR says why.
 - The Trial detail timeline names a trial's first posting "First posted" instead of a status change (ADR 0043, amended 2026-11-18; migration 0009).
+- memo_v5: the daily job stores the inputs of each served sponsor rate (migration 0010), so the memo says exactly how the rate was made; one name per marker group ("recruitment status", "dates or status verification") in the memo and the API; review files are never overwritten (ADR 0085, amended 2026-11-19).
 
 ## Step 18: Documentation and polish (approved 2026-11-17, in progress)
 
