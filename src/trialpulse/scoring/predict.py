@@ -124,6 +124,7 @@ def predict(
             "content_hash": scored["content_hash"].astype(str).to_numpy(),
             "model_name": bundle.name,
             "model_version": bundle.version,
+            **sponsor_rate_inputs(frame, bundle.priors),
         }
     )
     if with_drivers:
@@ -132,6 +133,22 @@ def predict(
         out["drivers"] = [_drivers_json(explanations, values, i) for i in range(len(out))]
         seconds["drivers"] = clock.perf_counter() - tick
     return out, seconds
+
+
+def sponsor_rate_inputs(frame: pd.DataFrame, priors: SponsorPriors) -> dict[str, Any]:
+    """What the served sponsor rate of each row is made of (migration 0010): whether the
+    sponsor has a track record, the other ended trials behind the rate (None without one) and
+    the class rate it is smoothed toward."""
+    record = frame["sponsor_has_identity"].fillna(False).astype(bool).to_numpy()
+    ended = frame["sponsor_prior_ended"].to_numpy(dtype=np.float64, na_value=np.nan)
+    return {
+        "sponsor_has_record": record,
+        "sponsor_other_ended": pd.Series(  # Python ints and None, never NaN in a BIGINT column
+            [int(e) if r and not np.isnan(e) else None for r, e in zip(record, ended, strict=True)],
+            dtype=object),
+        "sponsor_class_rate": np.array([priors.prior(c) for c in
+                                        frame["sponsor_class"].to_numpy(dtype=object)]),
+    }  # fmt: skip
 
 
 def with_priors(frame: pd.DataFrame, priors: SponsorPriors) -> pd.DataFrame:

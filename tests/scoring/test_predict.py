@@ -115,6 +115,27 @@ def test_the_sponsor_rate_is_smoothed_with_the_given_priors() -> None:
     assert frame["sponsor_stop_rate"].tolist() == [0.5, 0.5]  # the input is left as it was
 
 
+def test_the_rate_inputs_are_the_features_and_the_class_prior() -> None:
+    """Migration 0010: each score carries what its sponsor rate is made of, for the memo."""
+    from trialpulse.scoring.predict import sponsor_rate_inputs
+
+    frame = pd.DataFrame({"sponsor_class": ["INDUSTRY", "OTHER", None],
+                          "sponsor_has_identity": [True, False, True],
+                          "sponsor_prior_ended": [20.0, np.nan, 0.0]})  # fmt: skip
+    out = sponsor_rate_inputs(frame, PRIORS)
+    assert out["sponsor_has_record"].tolist() == [True, False, True]
+    assert list(out["sponsor_other_ended"]) == [20, None, 0]
+    assert all(v is None or type(v) is int for v in out["sponsor_other_ended"])  # never NaN
+    assert out["sponsor_class_rate"].tolist() == pytest.approx([0.21, 0.04, 0.08])
+
+
+def test_a_score_carries_its_rate_inputs(small_m4: DiscreteTimeBoosting) -> None:
+    scored, features = _inputs(6)
+    out, _ = score.predict(scored, features, _bundle(small_m4), DAY, with_drivers=False)
+    assert {"sponsor_has_record", "sponsor_other_ended", "sponsor_class_rate"} <= set(out.columns)
+    assert len(out["sponsor_class_rate"]) == len(scored)
+
+
 def test_served_keys_slide_the_gap_of_the_capped_index() -> None:
     t0 = np.array(["2014-08-31"] * 4, dtype="datetime64[D]")
     index = np.array([3, 6, 7, 15])

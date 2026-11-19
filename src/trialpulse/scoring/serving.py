@@ -19,7 +19,10 @@ tables move forward in time: a run dated before the latest published date is ref
 **Compact rows** (ADR 0037 decision 6). The five drivers of each horizon are stored as four
 arrays: the horizon in months, the feature's number (its position in
 `registry.model_columns()`), its value as text and its contribution to 3 decimals, whose sign
-is the direction. Content hashes are stored as their 32 bytes.
+is the direction. Content hashes are stored as their 32 bytes. Each row also carries the
+inputs of its sponsor rate (whether the sponsor has a track record, the other ended trials
+behind the rate and the class rate it is smoothed toward), so the memo can say how the served
+rate was made (migration 0010).
 
 **A scope** (ADR 0045). A live run rescores only some trials. With `scope`, every row it
 writes and every row it removes is of a trial in the scope; an empty scope writes nothing.
@@ -51,9 +54,14 @@ FIRST, RECORD, LANDMARK, MODEL, CALENDAR = (
 DRIVER_COLUMNS: tuple[str, ...] = (
     "driver_months", "driver_features", "driver_values", "driver_contributions",
 )  # fmt: skip
+# The inputs of the served sponsor rate (migration 0010), for the memo (ADR 0085, amended).
+SPONSOR_RATE_COLUMNS: tuple[str, ...] = (
+    "sponsor_has_record", "sponsor_other_ended", "sponsor_class_rate",
+)  # fmt: skip
 LATEST_COLUMNS: tuple[str, ...] = (
     "nct_id", "as_of_date", "landmark_index", "true_landmark_index", "flagged",
     "model_version", "risk_12m", "risk_24m", *DRIVER_COLUMNS, "content_hash",
+    *SPONSOR_RATE_COLUMNS,
 )  # fmt: skip
 HISTORY_COLUMNS: tuple[str, ...] = (
     "nct_id", "as_of_date", "model_version", "risk_12m", "risk_24m", "reasons",
@@ -180,6 +188,9 @@ def latest_frame(scored: Scored) -> pd.DataFrame:
     for i, column in enumerate(DRIVER_COLUMNS):
         frame[column] = [a[i] for a in arrays]
     frame["content_hash"] = _hash_bytes(frame["content_hash"])
+    for column in SPONSOR_RATE_COLUMNS:  # NULL for scores made without them
+        if column not in frame:
+            frame[column] = None
     return frame
 
 

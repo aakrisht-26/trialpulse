@@ -75,6 +75,13 @@ def test_migration_creates_every_schema_and_table(capsys: pytest.CaptureFixture[
         assert f"DROP VIEW IF EXISTS {view};" in down
     assert "ALTER TABLE live.study_versions DROP COLUMN last_known_status;" in down
     assert "ALTER TABLE serving.trial_score_history DROP COLUMN reasons;" in down
+    for column, kind in (
+        ("sponsor_has_record", "BOOLEAN"),
+        ("sponsor_other_ended", "BIGINT"),
+        ("sponsor_class_rate", "DOUBLE PRECISION"),
+    ):  # migration 0010
+        assert f"ALTER TABLE serving.trial_scores_latest ADD COLUMN {column} {kind};" in sql
+        assert f"ALTER TABLE serving.trial_scores_latest DROP COLUMN {column};" in down
 
 
 def _after(sql: str, revision: str) -> str:
