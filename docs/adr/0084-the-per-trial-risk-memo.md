@@ -1,7 +1,7 @@
 # 0084. The per-trial risk memo (Stretch item 2)
 
 - Date: 2026-11-17
-- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences. **Amended again 2026-11-18** (memo_v3, below): the audit of the memo_v2 memos found statements the template and the labels got wrong. Two details flagged while building memo_v3 were approved the same day; whether a model keeps writing paragraph 2 is decided after the review of the memo_v3 memos.
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-17: all nine recommendations of [memo_plan.md](../memo_plan.md) accepted, with changes A to D below. **Amended 2026-11-18** (memo_v2, below): the review of the first memos failed, so paragraphs 1 and 3 are built by a template and the model writes only the driver sentences. **Amended again 2026-11-18** (memo_v3, below): the audit of the memo_v2 memos found statements the template and the labels got wrong. Two details flagged while building memo_v3 were approved the same day; whether a model keeps writing paragraph 2 is decided after the review of the memo_v3 memos. **Superseded in part on 2026-11-19 by [ADR 0085](0085-the-memo-is-built-by-a-template.md):** no model writes any part of the memo; the template builds every paragraph (memo_v4).
 
 ## Context
 

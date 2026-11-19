@@ -2,6 +2,8 @@
 
 Status: **a plan for review, nothing built.** Written 2026-11-17 for Aakrisht's decisions; each decision below is numbered, with 2 or 3 options and a recommendation. The accepted decisions become an ADR before any code.
 
+**Update of 2026-11-19:** the plan was built as ADR 0084, and its model (decision 3) was retired by [ADR 0085](adr/0085-the-memo-is-built-by-a-template.md): a template now builds every paragraph, and no workflow reads `GROQ_API_KEY`. The plan below is kept as written.
+
 CLAUDE.md's Stretch item 2: a per-trial risk memo written by an LLM strictly from stored SHAP drivers and version diffs, with an automated fabrication check: every number and date in the memo must appear in the source payload. Section 2 still holds: operational early-stop risk only, "elevated early-stop risk", never "will fail", nothing about whether a treatment works, no advice to patients, no personal data.
 
 ## What already exists

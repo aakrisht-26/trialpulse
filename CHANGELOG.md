@@ -2,6 +2,13 @@
 
 One entry per roadmap step (CLAUDE.md, Section 18), newest first. Dates are the dates a step was approved or, for the live system, went live. The evidence for each entry is in [docs/progress.md](docs/progress.md), and every decision has an ADR in [docs/adr/](docs/adr/).
 
+## Stretch item 2: the per-trial risk memo (built 2026-11-17, memo_v4 2026-11-19)
+
+- A memo for the top 100 trials by 12-month risk and the trials whose risk moved, built after each daily run by `memo.yml` from a payload of stored values only, and stored only if a deterministic fabrication check passes. It stays off the API (`api.memo_public` false) until the owner's review (ADR 0084).
+- memo_v1 to memo_v3: a language model on Groq wrote the memo, then only one sentence per driver, under a check that ended up allowing only the text a template would write (three reviews and audits, in docs/progress.md).
+- memo_v4: the language model is retired; a template builds every paragraph, the check tests the template at every generation, and no workflow reads `GROQ_API_KEY` (ADR 0085). This deviates from the roadmap's "written by an LLM", and the ADR says why.
+- The Trial detail timeline names a trial's first posting "First posted" instead of a status change (ADR 0043, amended 2026-11-18; migration 0009).
+
 ## Step 18: Documentation and polish (approved 2026-11-17, in progress)
 
 - README brought up to date with the live system, Step 17's monitoring and the current limitations; this changelog.

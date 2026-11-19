@@ -26,7 +26,7 @@ Then I made it live: a daily GitHub Actions job pulls changed records from the o
 
 6. **Monitoring and the honest gate (1 minute).** A monthly workflow grades served predictions (matured or partial-horizon); a replay of 2023 and 2024, scored by a model fitted as of 2023-01-01, gives monitoring history; a weekly drift step compares features and risks with the trials served on 2026-11-03, and was checked on deliberate shifts before being relied on; alerts open GitHub issues. The quarterly retrain trains a challenger but promotes nothing until 12-month outcomes have matured after the champion's training data, about November 2027, and the comparison then uses a challenger that has not seen the window it is judged on.
 
-## The 25 most likely questions
+## The 26 most likely questions
 
 1. **Why is an AUC around 0.72 useful?** Early stops are rare (a few percent within 12 months), so ranking is what a portfolio team needs: the top tenth of predicted risk held about three times the average early-stop rate (lift at 10% of 3.23 and 3.06 on the locked origins). It is a triage tool for operations, not a decision rule, and the documents say so.
 
@@ -77,6 +77,8 @@ Then I made it live: a daily GitHub Actions job pulls changed records from the o
 24. **What is the biggest limitation?** Registry metadata cannot anticipate scientific stops, the data are self-reported and US-centric, and live outcomes take a year to mature.
 
 25. **What did you learn?** That most of the work in a credible model is deciding what is known when, and that publishing what failed makes the rest believable.
+
+26. **You built an LLM memo and then removed the LLM. Why?** The roadmap asked for a per-trial memo written by an LLM, with a check that every number and date came from the stored values. The first version passed that check on every memo and still failed review: four of 20 memos related true facts wrongly, such as a first posting called a status change. A number check cannot catch that. Each fix moved a statement from the model to a template, and each audit (40 findings, then 20, with no high ones left) narrowed the model further, until the check allowed exactly one sentence per driver: the sentence a template writes. The model then added nothing but a secret, a daily token limit and an outside dependency, so I retired it, recorded the deviation from the roadmap in a decision record, and kept the check as the template's test. The lesson: an LLM earns its place when the output needs judgment the data does not hold, and this memo needs exact statements about data the system already has.
 
 ## Numbers sheet
 
