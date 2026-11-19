@@ -1,5 +1,6 @@
-"""The table of plain-English labels and display values (ADR 0084, memo_v3): complete for the
-served features, deterministic, readable, and safe under the fabrication check."""
+"""The table of plain-English labels and display values (ADR 0084; memo_v4, ADR 0085):
+complete for the served features, deterministic, readable, and safe under the fabrication
+check; and the template's driver paragraph built from it, exactly."""
 
 from typing import Any
 
@@ -22,7 +23,8 @@ SAMPLES: dict[str, tuple[str, ...]] = {
     lab.YEARS: ("1", "18", "65.5", "not given"),
     lab.YEAR: ("2019", "not given"),
     lab.PERCENT: ("0.0672", "0.241", "1.5", "0", "not given"),
-    lab.CHECKPOINT: ("0", "1", "4", "6", "not given"),
+    lab.RATE: ("0.241", "0", "1", "not given"),
+    lab.STAGE: ("0", "1", "4", "6", "not given"),
     lab.RECENT: ("0", "3", "124", "not given"),
     lab.FLAG: ("yes", "no", "not given"),
 }
@@ -75,7 +77,7 @@ def test_a_category_covers_the_registrys_levels() -> None:
     [
         ("enrolled_to_first_target_ratio", "0.0672", "6.7%"),
         ("enrollment_target_ratio", "1.5", "150.0%"),
-        ("sponsor_stop_rate", "0.241", "24.1%"),
+        ("sponsor_stop_rate", "0.241", "24.1% after smoothing toward the class rate"),
         ("completion_slip_months", "-33", "33 months earlier than in the first version"),
         ("start_slip_months", "1", "1 month later than in the first version"),
         ("primary_completion_slip_months", "0", "in the same month as in the first version"),
@@ -86,19 +88,24 @@ def test_a_category_covers_the_registrys_levels() -> None:
         ("registration_lag_months", "0", "in the month of the first posting"),
         ("months_since_t0", "36", "36 months"),
         ("minimum_age_years", "18", "18 years"),
+        ("maximum_age_years", "99", "99 years"),  # a value the sponsor entered, shown as such
+        ("maximum_age_years", "not given", "no upper limit"),  # the registry's N/A (No limit)
+        ("minimum_age_years", "not given", "no lower limit"),
         ("registration_year", "2019", "2019"),
         ("sponsor_prior_registrations", "1730", "1,730"),
         ("open_interventional_trials", "88,123", "88,123"),
-        ("landmark_index", "4", "the 24-month checkpoint"),
-        ("landmark_index", "0", "the first posting itself"),
+        ("landmark_index", "4", "stage 4 of 6, a stage every 6 months after the first posting"),
+        ("landmark_index", "0", "stage 0 of 6, the first posting itself"),
         ("n_versions_recent", "124", "124 in the last 6 months"),
         ("currently_suspended", "yes", "suspended now"),
-        ("ever_suspended", "yes", "suspended at some point, now or earlier"),
+        ("ever_suspended", "yes", "recorded"),
+        ("ever_suspended", "no", "not recorded"),
         ("healthy_volunteers", "no", "not allowed"),
         ("status", "ACTIVE_NOT_RECRUITING", "active and not recruiting"),
         ("masking", "DOUBLE", "2"),
         ("masking", "NONE", "none (open label)"),
         ("title_phase", "PHASE1_PHASE2", "phase 1/2"),
+        ("title_phase", "NONE", "none"),
         ("sponsor_class", "OTHER", "other, mostly universities and hospitals"),
         ("allocation", "SOMETHING_NEW", "something new"),
         ("enrollment_count", "not given", "not stated in the record"),
@@ -163,6 +170,34 @@ def test_a_display_holds_no_refused_word(name: str) -> None:
             assert not pattern.search(shown), (shown, pattern.pattern)
 
 
+def test_no_label_holds_a_comma() -> None:
+    """The memo_v3 audit: "smoothed toward its class rate is 24.1%" read the class rate as
+    24.1%, since a comma inside a label opens a clause the sentence never closes (memo_v4)."""
+    for name, entry in [*lab.FEATURES.items(), *lab.FIELDS.items()]:
+        assert "," not in entry.label, name
+
+
+def test_the_sponsor_counts_say_what_each_counts() -> None:
+    """features/sponsor.py: a registration is an interventional trial first posted under the
+    sponsor, while ended and stopped trials include trials first posted under another sponsor,
+    so a rate of its own beside no registration is not a contradiction (memo_v4)."""
+    assert "first posted under the sponsor" in lab.feature_label("sponsor_prior_registrations")
+    for name in ("sponsor_prior_ended", "sponsor_prior_stopped"):
+        assert "first posted under another sponsor included" in lab.feature_label(name)
+    assert lab.feature_label("sponsor_stop_rate") == (
+        "early-stop rate of the ended trials listed under the sponsor"
+    )
+
+
+def test_the_stage_is_never_shown_in_months() -> None:
+    """The memo_v3 audit: "the 24-month checkpoint" beside the 24-month risk horizon."""
+    for value in SAMPLES[lab.STAGE]:
+        shown = lab.feature_display("landmark_index", value)
+        assert "-month" not in shown
+        assert "checkpoint" not in shown
+    assert "checkpoint" not in lab.feature_label("landmark_index")
+
+
 def test_a_count_label_is_a_number_so_it_takes_is() -> None:
     """The v2 review's grammar: plural count labels took "is" in some memos and "are" in
     others; every count is now "the number of ..." (memo_v3)."""
@@ -202,7 +237,7 @@ def one_driver(name: str, value: str, direction: str, kind: str | None = None) -
               "display": lab.feature_display(name, value, kind),
               "direction": direction}  # fmt: skip
     return {
-        "payload_version": 3, "nct_id": "NCT01234567", "score_date": "2026-11-16",
+        "payload_version": p.PAYLOAD_VERSION, "nct_id": "NCT01234567", "score_date": "2026-11-16",
         "horizons_months": [12, 24], "risk_percent": {"12": 14, "24": 26},
         "chosen_as": [p.TOP], "top_n": 100, "drivers_per_horizon": 5,
         "status_verified_month": "none", "drivers": {"12": [driver], "24": []},
@@ -212,16 +247,19 @@ def one_driver(name: str, value: str, direction: str, kind: str | None = None) -
 
 
 @pytest.mark.parametrize("name", sorted(lab.FEATURES))
-def test_a_faithful_sentence_about_every_value_passes_the_check(name: str) -> None:
-    """Every label and display value of the table, in the sentence the prompt asks for."""
+def test_the_template_writes_every_value_exactly_and_passes_the_check(name: str) -> None:
+    """memo_v4: for every feature, every value kind and both effects, the second paragraph is
+    exactly "The <label> is <value>, which <effect>." and the whole memo passes the check."""
     kinds = ENROLLMENT_TYPES if lab.FEATURES[name].kind == lab.ENROLLMENT else (None,)
     for value in values(name):
         for kind in kinds:
             for direction in ("raises", "lowers"):
                 payload = one_driver(name, value, direction, kind)
-                d = payload["drivers"]["12"][0]
-                sentence = f"The {d['label']} is {d['display']}, which {direction} the risk."
-                result = c.check(t.memo(payload, [sentence]), payload, ["Acme Pharma Inc."])
+                shown = lab.feature_display(name, value, kind)
+                sentence = f"The {lab.feature_label(name)} is {shown}, which {direction} the risk."
+                paragraphs = t.memo(payload)
+                assert paragraphs[1] == sentence
+                result = c.check(paragraphs, payload, ["Acme Pharma Inc."])
                 assert result.passed, (sentence, result.details)
 
 

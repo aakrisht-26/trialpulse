@@ -1,4 +1,5 @@
-"""Plain-English labels and display values of the served features (ADR 0084, memo_v3).
+"""Plain-English labels and display values of the served features (ADR 0084; memo_v4, ADR
+0085).
 
 The memo names a driver by a short label and shows its value as a reader would say it, never
 by its column name or raw value. This table covers the 54 features of the served champion
@@ -19,16 +20,23 @@ says how a stored value (the text `explain.drivers.shown` made of it) is display
   registration by design;
 - `years`: "N years" (an age limit);
 - `year`: a calendar year as it is;
-- `percent`: a ratio or rate as a percent with one decimal;
-- `checkpoint`: the landmark the score is computed at, as "the 24-month checkpoint";
+- `percent`: a ratio as a percent with one decimal;
+- `rate`: the sponsor's early-stop rate as a percent with one decimal, "after smoothing toward
+  the class rate";
+- `stage`: the landmark the score is computed at, as "stage 4 of 6, a stage every 6 months
+  after the first posting" (never as months, which a reader could take for the 24-month
+  horizon);
 - `recent`: the versions of the recent window, "124 in the last 6 months".
 
 A missing value ("not given" as stored) is shown as "not stated in the record" for every kind,
-so a missing flag never reads as its "no". The display is a pure
-function of the feature, its stored text and, for the enrollment count, the latest record's
-enrollment type, so it is deterministic. Every label is a singular noun phrase, so "The
-<label> is <value>" reads as English; labels hold no digit, no apostrophe, no number word and
-no word the fabrication check refuses; and no label appears in another feature's label or
+so a missing flag never reads as its "no", except where the registry's own meaning of a
+missing value is known: a missing age limit is the registry's "N/A (No limit)", so it is shown
+as "no upper limit" or "no lower limit" (`Label.missing`). The display is a pure function of
+the feature, its stored text and, for the enrollment count, the latest record's enrollment
+type, so it is deterministic. Every label is a singular noun phrase without a comma, so "The
+<label> is <value>" reads as English and no clause of a label can be read as a sentence of its
+own (memo_v4); labels hold no digit, no apostrophe, no number word and no word the
+fabrication check refuses; and no label appears in another feature's label or
 displayed value (tests hold all of this), so the check can find each driver's sentence by its
 label and hold it to its value word for word.
 
@@ -59,7 +67,8 @@ START = "start"
 YEARS = "years"
 YEAR = "year"
 PERCENT = "percent"
-CHECKPOINT = "checkpoint"
+RATE = "rate"
+STAGE = "stage"
 RECENT = "recent"
 DATE = "date"  # a field's date, as stored (ISO)
 MONTH = "month"  # a field's month, for the status verified date (YYYY-MM)
@@ -76,6 +85,7 @@ class Label:
     levels: Mapping[str, str] = field(default_factory=dict)  # category: stored level to words
     yes: str = ""  # flag: the phrase for yes
     no: str = ""  # flag: the phrase for no
+    missing: str = ""  # a missing value whose meaning the registry fixes (an age limit)
 
 
 OPEN_STATUS_WORDS: dict[str, str] = {
@@ -106,7 +116,7 @@ CLASS_WORDS: dict[str, str] = {
     "AMBIG": "ambiguous",
 }
 PHASE_WORDS: dict[str, str] = {
-    "NONE": "no phase stated",
+    "NONE": "none",
     "EARLY_PHASE1": "early phase 1",
     "PHASE1": "phase 1",
     "PHASE1_PHASE2": "phase 1/2",
@@ -155,8 +165,8 @@ FEATURES: dict[str, Label] = {
     "healthy_volunteers": Label("admission of healthy volunteers", FLAG, yes="allowed",
                                 no="not allowed"),
     "sex": Label("sex eligibility", CATEGORY, SEX_WORDS),
-    "minimum_age_years": Label("minimum age", YEARS),
-    "maximum_age_years": Label("maximum age", YEARS),
+    "minimum_age_years": Label("minimum age", YEARS, missing="no lower limit"),
+    "maximum_age_years": Label("maximum age", YEARS, missing="no upper limit"),
     "enrollment_count": Label("enrollment count", ENROLLMENT),
     "planned_duration_months": Label("planned time from start to primary completion", MONTHS),
     "start_anticipated": Label("start of the trial as recorded", FLAG, yes="still ahead",
@@ -166,7 +176,7 @@ FEATURES: dict[str, Label] = {
                                     no="not after the recorded start month"),
     "registration_lag_months": Label("start as now recorded", START),
     "registration_year": Label("year of the first posting", YEAR),
-    "title_phase": Label("phase stated in the title", CATEGORY, PHASE_WORDS),
+    "title_phase": Label("phase named in the title", CATEGORY, PHASE_WORDS),
     "n_interventions": Label("number of interventions listed", COUNT),
     "n_intervention_types": Label("number of intervention types listed", COUNT),
     **{f"intervention_{kind.lower()}": _type_flag(kind) for kind in INTERVENTION_TYPES},
@@ -185,8 +195,8 @@ FEATURES: dict[str, Label] = {
         "current enrollment target as a share of the target in the first version", PERCENT),
     "enrolled_to_first_target_ratio": Label(
         "number enrolled as a share of the target in the first version", PERCENT),
-    "ever_suspended": Label("suspension history", FLAG,
-                            yes="suspended at some point, now or earlier", no="never suspended"),
+    "ever_suspended": Label("past or current suspension", FLAG, yes="recorded",
+                            no="not recorded"),
     "currently_suspended": Label("suspension status", FLAG, yes="suspended now",
                                  no="not suspended now"),
     "start_overdue": Label("start timing", FLAG,
@@ -204,19 +214,26 @@ FEATURES: dict[str, Label] = {
     "organization_class": Label("class of the registering organization", CATEGORY, CLASS_WORDS),
     "sponsor_has_identity": Label("track record of the sponsor", FLAG, yes="available",
                                   no="not available, so the class rate is used"),
-    "sponsor_prior_registrations": Label("number of earlier registrations by the sponsor", COUNT),
+    # features/sponsor.py: a registration is an interventional trial first posted under the
+    # sponsor; the ended and stopped trials are those shown as ended under the sponsor, which
+    # includes trials first posted under another sponsor, so a sponsor can have ended trials
+    # and a rate of its own with no registration.
+    "sponsor_prior_registrations": Label(
+        "number of interventional trials first posted under the sponsor", COUNT),
     "sponsor_prior_ended": Label(
-        "number of earlier trials of the sponsor that ended, by completion or early stop", COUNT),
-    "sponsor_prior_stopped": Label("number of earlier trials of the sponsor that stopped early",
-                                   COUNT),
-    "sponsor_stop_rate": Label("early-stop rate of the sponsor, smoothed toward its class rate",
-                               PERCENT),
+        "number of trials listed under the sponsor that ended by completion or early stop "
+        "(trials first posted under another sponsor included)", COUNT),
+    "sponsor_prior_stopped": Label(
+        "number of trials listed under the sponsor that stopped early (trials first posted "
+        "under another sponsor included)", COUNT),
+    "sponsor_stop_rate": Label("early-stop rate of the ended trials listed under the sponsor",
+                               RATE),
     # competition
     "open_interventional_trials": Label("number of open interventional trials in the registry",
                                         COUNT),
     # time (served at the last landmark passed, ADR 0034)
-    "landmark_index": Label("registration checkpoint used by the score", CHECKPOINT),
-    "months_since_t0": Label("time since the first posting, as the score counts it", MONTHS),
+    "landmark_index": Label("stage of the trial used by the score", STAGE),
+    "months_since_t0": Label("time since the first posting used by the score", MONTHS),
 }  # fmt: skip
 
 # The fields whose before and after values the memo shows: every field of an amendment
@@ -263,6 +280,12 @@ def spacing_months() -> int:
     return int(load_project_config().landmarks.spacing_months)
 
 
+@functools.cache
+def last_stage() -> int:
+    """The last landmark index (Section 6, k = 0 to 6), from config/project.yaml."""
+    return int(load_project_config().landmarks.max_index)
+
+
 def _number(text: str) -> float | None:
     try:
         x = float(text.replace(",", "").strip())
@@ -297,7 +320,7 @@ def show(entry: Label, value: str, enrollment_type: str | None = None,
     at its recorded precision when one is given ("2027-01" for a month)."""
     text = str(value).strip()
     if text in MISSING:
-        return NOT_STATED
+        return entry.missing or NOT_STATED
     kind = entry.kind
     if kind == CATEGORY:
         return entry.levels.get(text, text.lower().replace("_", " "))
@@ -343,10 +366,13 @@ def show(entry: Label, value: str, enrollment_type: str | None = None,
         return str(int(x)) if x.is_integer() else text
     if kind == PERCENT:
         return f"{x * 100:.1f}%"
-    if kind == CHECKPOINT:
+    if kind == RATE:
+        return f"{x * 100:.1f}% after smoothing toward the class rate"
+    if kind == STAGE:
+        stage = f"stage {_plain(x)} of {last_stage()}"
         if x == 0:
-            return "the first posting itself"
-        return f"the {_plain(x * spacing_months())}-month checkpoint"
+            return f"{stage}, the first posting itself"
+        return f"{stage}, a stage every {spacing_months()} months after the first posting"
     if kind == RECENT:
         return f"{_plain(x)} in the last {spacing_months()} months"
     raise ValueError(f"unknown kind {kind}")

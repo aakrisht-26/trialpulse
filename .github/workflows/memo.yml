@@ -1,10 +1,11 @@
 name: Risk memos
 
-# ADR 0084: after each successful daily run (and by hand), writes the per-trial risk memos of
-# the top 100 unflagged trials and the trials whose risk moved, from stored values only, and
-# keeps a memo only if the fabrication check passes. It reads and writes Neon and calls Groq;
-# no Hugging Face token, no dataset and no dataset module reach this runner (ADR 0040, held
-# by tests/test_workflows.py). daily.yml is unchanged: this workflow only follows it.
+# ADRs 0084 and 0085: after each successful daily run (and by hand), builds the per-trial risk
+# memos of the top 100 unflagged trials and the trials whose risk moved, from stored values
+# only, with a fixed template (no language model since memo_v4), and keeps a memo only if the
+# fabrication check passes. It reads and writes Neon; no Hugging Face token, no dataset and no
+# dataset module reach this runner (ADR 0040, held by tests/test_workflows.py). daily.yml is
+# unchanged: this workflow only follows it.
 on:
   workflow_run:
     workflows: ["Daily live run"]
@@ -30,7 +31,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60  # about 4 memos a minute under Groq's free per-minute limit
+    timeout-minutes: 30  # a template run builds a memo in milliseconds
     outputs:
       error_class: ${{ steps.run.outputs.error_class }}
       memo_alert: ${{ steps.run.outputs.memo_alert }}
@@ -51,7 +52,6 @@ jobs:
         id: run
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           TRIGGER: ${{ github.event_name }}
         run: |
           uv run python -m trialpulse.memo.generate --target neon --trigger "${TRIGGER}" || {
@@ -75,7 +75,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           title="Memo rejections over 20%"
-          body="Run ${RUN_URL}: the fabrication check refused over 20% of the run's memos (ADR 0084); monitoring.memo_runs has the reasons."
+          body="Run ${RUN_URL}: the fabrication check refused over 20% of the run's memos (ADR 0084), which is a template bug (ADR 0085); monitoring.memo_runs has the reasons."
           number=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')
           if [ -n "${number}" ]; then
             gh issue comment "${number}" --body "${body}"

@@ -1,5 +1,8 @@
 """The fabrication check of a risk memo (ADR 0084): deterministic, and a memo that fails is
-never stored.
+never stored. Since memo_v4 (ADR 0085) a template builds every paragraph, and the check is the
+test of that template at every generation: its rules are written apart from the template, so a
+memo that fails is a template bug. The rules were written for model-written sentences (memo_v1
+to memo_v3) and are kept whole.
 
 A memo passes only if all of these hold (the reason codes in brackets):
 
@@ -13,8 +16,8 @@ A memo passes only if all of these hold (the reason codes in brackets):
   hold (memo_v3), [driver_direction] its effect appears as "raises the risk" or
   "lowers the risk" and the other effect does not, [other_label] no label of another served
   feature appears, [driver_words] beyond its label, display value and effect the sentence
-  holds only connective words ("the", "is", "which" and the like; memo_v3), since the model
-  is sent nothing else, so a negation, another fact or an outcome would be invented, and
+  holds only connective words ("the", "is", "which" and the like; memo_v3), since a driver
+  carries nothing else, so a negation, another fact or an outcome would be invented, and
   [driver_number] every number is driver i's display value in an allowed rendering;
 - [registry_id] no registry id but the trial's own;
 - [date] every ISO date (YYYY-MM-DD) is a date of the payload; [date_format] no date in any
@@ -99,7 +102,7 @@ RISE = re.compile(r"\b(?:rose|risen|rising|increased|increase)\b", re.IGNORECASE
 FALL = re.compile(r"\b(?:fell|fallen|falling|decreased|decrease|dropped|declined)\b",
                   re.IGNORECASE)  # fmt: skip
 ELEVATED = re.compile(r"\belevated\b", re.IGNORECASE)
-MAX_PARAGRAPH = 1000  # the model's paragraph; the template's are not limited
+MAX_PARAGRAPH = 1000  # the driver paragraph; the others are not limited
 # memo_v2: every Unicode hyphen, dash and minus to "-", and special spaces to a plain space.
 HYPHENS = "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d"
 SPACES = "\u00a0\u202f\u2009\u2007"
@@ -107,7 +110,7 @@ NORMAL = str.maketrans({**dict.fromkeys(HYPHENS, "-"), **dict.fromkeys(SPACES, "
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 EFFECTS = {"raises": "raises the risk", "lowers": "lowers the risk"}
 # memo_v3: besides its driver's label, value and effect, a sentence holds only these words,
-# which carry no fact of their own; the model is sent nothing else, so any other word (a
+# which carry no fact of their own; a driver carries nothing else, so any other word (a
 # negation, another feature, an outcome) would be invented.
 CONNECTIVES = frozenset({"the", "a", "an", "is", "which", "and", "this", "that", "it", "its",
                          "of", "at", "with", "being", "here"})  # fmt: skip

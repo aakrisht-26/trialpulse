@@ -20,6 +20,14 @@ from trialpulse.memo import labels as lab
 from trialpulse.memo import payload as p
 from trialpulse.memo import template as t
 
+
+def compose(payload: Any, sentences: Any) -> list[str]:
+    """The template's first and third paragraphs around a hand-written second paragraph (the
+    check's adversarial cases; memo_v4 itself builds every paragraph, ADR 0085)."""
+    second = " ".join(s.strip() for s in sentences or ()) if t.drivers_12(payload) else t.NO_DRIVERS
+    return [t.paragraph_one(payload), second, t.paragraph_three(payload)]
+
+
 NAMES = model_columns()
 INDEX = {name: i for i, name in enumerate(NAMES)}
 D = dt.date
@@ -55,7 +63,7 @@ def faithful(payload: dict[str, Any]) -> list[str]:
 
 
 def memo(payload: dict[str, Any], sentences: list[str] | None = None) -> list[str]:
-    return t.memo(payload, faithful(payload) if sentences is None else sentences)
+    return compose(payload, faithful(payload) if sentences is None else sentences)
 
 
 def passes(payload: dict[str, Any], paragraphs: list[str]) -> c.CheckResult:
@@ -124,7 +132,8 @@ def first_held_is_named(chosen: tuple[str, ...], move: dict[str, Any] | None) ->
                          versions=[{"effective_date": D(2026, 11, 12), "status": "RECRUITING"}],
                          chosen=chosen, move=move)  # fmt: skip
     third = t.paragraph_three(payload)
-    assert "2026-11-12: first version held since go-live; no earlier value to compare." in third
+    # memo_v4 (ADR 0085): no earlier value is held, with no claim about go-live as the cause
+    assert "For the change of 2026-11-12, no earlier value is held for this trial." in third
     assert "no change in them is held" not in third
     assert "has been posted since then" not in third
     refused_third(payload, "Before and after values are held only from go-live (2026-11-08) "
@@ -167,7 +176,11 @@ def count_leaves_out_the_first_posting() -> None:
 
 
 def smoothing_is_named(value: str, old: str) -> None:
-    assert "smoothed toward its class rate" in lab.feature_label("sponsor_stop_rate")
+    # memo_v4: the smoothing is named in the display, since a comma in the label opened a
+    # clause ("its class rate is 24.1%") that read the class rate as the sponsor's
+    assert lab.feature_display("sponsor_stop_rate", value).endswith(
+        "after smoothing toward the class rate"
+    )
     refused_sentence("sponsor_stop_rate", value, old)
 
 
@@ -205,7 +218,8 @@ def moved_date_reads_plainly(value: str, old: str) -> None:
 def suspension_history_claims_no_earlier_one() -> None:
     entry = lab.FEATURES["ever_suspended"]
     assert "earlier suspension" not in entry.label
-    assert entry.yes.endswith("now or earlier")
+    assert entry.label == "past or current suspension"  # memo_v4: no "earlier" claim
+    assert entry.yes == "recorded"
     refused_sentence(
         "ever_suspended",
         "yes",
@@ -225,7 +239,9 @@ def checkpoint_is_plain() -> None:
     label = lab.feature_label("landmark_index")
     assert "landmark" not in label
     assert "step" not in label
-    assert lab.feature_display("landmark_index", "4") == "the 24-month checkpoint"
+    assert lab.feature_display("landmark_index", "4") == (  # memo_v4: never in months
+        "stage 4 of 6, a stage every 6 months after the first posting"
+    )
     refused_sentence(
         "landmark_index", "4", "Landmark step since registration is step 4, which raises the risk."
     )

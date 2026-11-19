@@ -1,30 +1,33 @@
-"""The fixed paragraphs of a risk memo (ADR 0084, memo_v3): built from the payload alone.
+"""The three paragraphs of a risk memo (ADR 0084; memo_v4, ADR 0085): built from the payload
+alone, with no model.
 
 Paragraph 1 states the risks, the score date and why the trial was chosen, and says that the
-sentences after it give what moved the model's 12-month score, which is not a reason why a
-trial stops. Paragraph 3 states the record changes: the trial's first posting apart from its
-changes, the count of dates with changes to the fields the model reads (so it never
-contradicts a count of versions), the latest changes newest first with their exact kinds,
-when the status was last verified, and, for each change since go-live, the values before and
-after, or that it is the first version held since go-live with no earlier value to compare.
-The model writes only paragraph 2 (one sentence per 12-month driver). Both fixed paragraphs
-are pure functions of the payload, and the fabrication check requires a memo's paragraphs 1
-and 3 to equal them, so a memo can never call a first posting a change, say that no change is
-held while it lists one, attach the wrong kinds of change to a date, or garble a before and
-after value.
+sentences after it name the features that contributed most to the model's 12-month score,
+which are not reasons why a trial stops; for a trial chosen because its risk moved, it adds
+that they explain the current level of the score, not its change. Paragraph 2 has one
+sentence per 12-month driver, in the payload's order: "The <label> is <value>, which raises
+the risk." (memo_v3's model was held to exactly this form, so memo_v4 writes it directly).
+Paragraph 3 states the record changes: the trial's first posting apart from its changes, the
+count of dates with changes to the fields the model reads (so it never contradicts a count of
+versions), the latest changes newest first with their exact kinds, when the status was last
+verified, and, for each change since go-live, the values before and after, or that no earlier
+value is held for the trial. Every paragraph is a pure function of the payload, and every
+memo still goes through the fabrication check (`memo.check`), whose rules are written apart
+from this module, as a test of the template.
 
 "elevated early-stop risk" appears only for a trial in the top 100. A trial chosen for a move
 states its risk, the direction ("rose" or "fell"), and its previous risk and score date.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from trialpulse.memo.payload import COMPARED, EARLIER_NOT_HELD, FIRST_HELD, MOVED, TOP
 
 NO_DRIVERS = "No driver is stored for this score."
-LEAD_IN = ("The sentences below give what moved the model's 12-month score; a driver is not "
-           "a reason why a trial stops.")  # fmt: skip
+LEAD_IN = ("The sentences below name the features that contributed most to the model's "
+           "12-month score; a driver is not a reason why a trial stops.")  # fmt: skip
+MOVE_NOTE = "They explain the current level of the 12-month score, not its change."
 NOT_COUNTED = "Versions that changed only other fields are not counted."
 
 
@@ -61,7 +64,21 @@ def paragraph_one(payload: Mapping[str, Any]) -> str:
     else:
         text = (f"{nct} has a 12-month early-stop risk of {r12}% and a 24-month risk of "
                 f"{r24}%, scored on {day}.")  # fmt: skip
-    return f"{text} {LEAD_IN}" if drivers_12(payload) else text
+    if not drivers_12(payload):
+        return text
+    return f"{text} {LEAD_IN} {MOVE_NOTE}" if move else f"{text} {LEAD_IN}"
+
+
+def driver_sentence(driver: Mapping[str, Any]) -> str:
+    """One driver as a sentence: "The <label> is <value>, which <raises|lowers> the risk."."""
+    return f"The {driver['label']} is {driver['display']}, which {driver['direction']} the risk."
+
+
+def paragraph_two(payload: Mapping[str, Any]) -> str:
+    """One sentence per 12-month driver, in the payload's order, or the fixed sentence of a
+    payload without one."""
+    found = drivers_12(payload)
+    return " ".join(driver_sentence(d) for d in found) if found else NO_DRIVERS
 
 
 def _changes(payload: Mapping[str, Any]) -> list[str]:
@@ -86,11 +103,11 @@ def _since_go_live(payload: Mapping[str, Any]) -> list[str]:
     """The values before and after of each change since go-live, or why there are none."""
     held = payload["values_held_from"]
     entries = payload.get("since_go_live") or []
-    opening = (f"Before and after values are held from go-live ({held}), when TrialPulse's "
-               "live system started")  # fmt: skip
+    opening = (f"Before and after values are held only for changes posted since {held}, when "
+               "TrialPulse's live system started")  # fmt: skip
     if not entries:
         return [f"{opening}; no change to fields the model reads has been posted since then."]
-    parts = [f"{opening}:"]
+    parts = [f"{opening}."]
     for entry in entries:
         day = entry["post_date"]
         if entry["held"] == COMPARED:
@@ -99,13 +116,11 @@ def _since_go_live(payload: Mapping[str, Any]) -> list[str]:
                 f"The {v['label']} changed on {day}." if "before" not in v
                 else f"{_capital(v['label'])} moved from {v['before']} to {v['after']} on {day}."
                 for v in values
-            ] or [f"{day}: no shown value changed."]  # fmt: skip
-        elif entry["held"] == FIRST_HELD:
-            parts.append(f"{day}: first version held since go-live; no earlier value to compare.")
-        elif entry["held"] == EARLIER_NOT_HELD:
-            parts.append(f"{day}: no earlier version is still held; no earlier value to compare.")
+            ] or [f"For the change of {day}, no value shown here changed."]  # fmt: skip
+        elif entry["held"] in (FIRST_HELD, EARLIER_NOT_HELD):
+            parts.append(f"For the change of {day}, no earlier value is held for this trial.")
         else:
-            parts.append(f"{day}: its version is no longer held; no earlier value to compare.")
+            parts.append(f"For the change of {day}, its version is no longer held.")
     return parts
 
 
@@ -121,17 +136,6 @@ def paragraph_three(payload: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
-def model_request(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """What the model is sent: the 12-month drivers only, each with its label, its displayed
-    value and its effect, in the payload's order."""
-    return {"drivers": [
-        {"label": d["label"], "value": d["display"], "effect": f"{d['direction']} the risk"}
-        for d in drivers_12(payload)
-    ]}  # fmt: skip
-
-
-def memo(payload: Mapping[str, Any], sentences: Sequence[str] | None) -> list[str]:
-    """The three paragraphs: the template's first, the model's sentences, the template's third.
-    A payload without 12-month drivers has a fixed second paragraph and needs no model."""
-    second = " ".join(s.strip() for s in sentences or ()) if drivers_12(payload) else NO_DRIVERS
-    return [paragraph_one(payload), second, paragraph_three(payload)]
+def memo(payload: Mapping[str, Any]) -> list[str]:
+    """The three paragraphs of the memo."""
+    return [paragraph_one(payload), paragraph_two(payload), paragraph_three(payload)]

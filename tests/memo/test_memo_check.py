@@ -12,17 +12,26 @@ from trialpulse.memo import labels as lab
 from trialpulse.memo import payload as p
 from trialpulse.memo import template as t
 
-RATE = "early-stop rate of the sponsor, smoothed toward its class rate"
-TIME = "time since the first posting, as the score counts it"
+
+def compose(payload: Any, sentences: Any) -> list[str]:
+    """The template's first and third paragraphs around a hand-written second paragraph (the
+    check's adversarial cases; memo_v4 itself builds every paragraph, ADR 0085)."""
+    second = " ".join(s.strip() for s in sentences or ()) if t.drivers_12(payload) else t.NO_DRIVERS
+    return [t.paragraph_one(payload), second, t.paragraph_three(payload)]
+
+
+RATE = "early-stop rate of the ended trials listed under the sponsor"
+RATE_SHOWN = "44.6% after smoothing toward the class rate"
+TIME = "time since the first posting used by the score"
 PAYLOAD: dict[str, Any] = {
-    "payload_version": 3, "nct_id": "NCT01234567", "score_date": "2026-11-16",
+    "payload_version": p.PAYLOAD_VERSION, "nct_id": "NCT01234567", "score_date": "2026-11-16",
     "horizons_months": [12, 24], "risk_percent": {"12": 14, "24": 26}, "chosen_as": [p.TOP],
     "status": "RECRUITING", "phase_in_title": "PHASE2", "sponsor_class": "INDUSTRY",
     "status_verified_month": "2026-10", "drivers_per_horizon": 5, "top_n": 100,
     "drivers": {"12": [
         {"feature": "enrollment_count", "label": "enrollment count", "value": "1704",
          "display": "1,704, the estimated target", "direction": "lowers"},
-        {"feature": "sponsor_stop_rate", "label": RATE, "value": "0.446", "display": "44.6%",
+        {"feature": "sponsor_stop_rate", "label": RATE, "value": "0.446", "display": RATE_SHOWN,
          "direction": "raises"},
         {"feature": "months_since_t0", "label": TIME, "value": "36", "display": "36 months",
          "direction": "raises"}],
@@ -41,10 +50,10 @@ PAYLOAD: dict[str, Any] = {
 NAMES = ("Acme Pharma Inc.", "Northwind University")
 SENTENCES = [
     "The enrollment count is 1,704, the estimated target, which lowers the risk.",
-    f"The {RATE} is 44.6%, which raises the risk.",
+    f"The {RATE} is {RATE_SHOWN}, which raises the risk.",
     f"The {TIME} is 36 months, which raises the risk.",
 ]
-GOOD = t.memo(PAYLOAD, SENTENCES)
+GOOD = compose(PAYLOAD, SENTENCES)
 
 
 def with_sentences(*replace: tuple[int, str], payload: dict[str, Any] = PAYLOAD) -> list[str]:
@@ -52,7 +61,7 @@ def with_sentences(*replace: tuple[int, str], payload: dict[str, Any] = PAYLOAD)
     found = list(SENTENCES)
     for i, sentence in replace:
         found[i] = sentence
-    return t.memo(payload, found)
+    return compose(payload, found)
 
 
 def test_a_faithful_memo_passes() -> None:
@@ -174,9 +183,9 @@ def test_another_drivers_number_in_a_sentence_is_refused() -> None:
 
 
 def test_a_sentence_per_driver_exactly() -> None:
-    fewer = t.memo(PAYLOAD, SENTENCES[:2])
+    fewer = compose(PAYLOAD, SENTENCES[:2])
     assert c.check(fewer, PAYLOAD, NAMES).reasons == ["sentence_count"]
-    more = t.memo(PAYLOAD, [*SENTENCES, "A driver is not a reason."])
+    more = compose(PAYLOAD, [*SENTENCES, "A driver is not a reason."])
     assert c.check(more, PAYLOAD, NAMES).reasons == ["sentence_count"]
 
 
@@ -188,14 +197,14 @@ def test_raw_feature_names_are_refused() -> None:
 
 
 def test_the_label_matches_case_aside_and_a_decimal_point_never_splits_a_sentence() -> None:
-    capital = "Early-stop rate of the sponsor, smoothed toward its class rate: 44.6%, which raises the risk."  # noqa: E501
+    capital = f"{RATE[:1].upper()}{RATE[1:]}: {RATE_SHOWN}, which raises the risk."
     assert c.check(with_sentences((1, capital)), PAYLOAD, NAMES).passed
     assert c.sentences("A 44.6% rate. Then 3 more.") == ["A 44.6% rate.", "Then 3 more."]
 
 
 def test_a_payload_without_12_month_drivers_has_a_fixed_second_paragraph() -> None:
     bare = {**PAYLOAD, "drivers": {"12": [], "24": []}}
-    assert c.check(t.memo(bare, None), bare, NAMES).passed
+    assert c.check(compose(bare, None), bare, NAMES).passed
     wrong = [t.paragraph_one(bare), "The score has no drivers.", t.paragraph_three(bare)]
     assert c.check(wrong, bare, NAMES).reasons == ["sentence_count"]
 
@@ -227,10 +236,10 @@ def test_a_sentence_must_hold_its_display_value_word_for_word(
     payload = one_driver(name, value)
     d = payload["drivers"]["12"][0]
     good = f"The {d['label']} is {d['display']}, which raises the risk."
-    assert c.check(t.memo(payload, [good]), payload, NAMES).passed
+    assert c.check(compose(payload, [good]), payload, NAMES).passed
     wrong = good.replace(flipped[0], flipped[1], 1)
     assert wrong != good
-    result = c.check(t.memo(payload, [wrong]), payload, NAMES)
+    result = c.check(compose(payload, [wrong]), payload, NAMES)
     assert "driver_value" in result.reasons, result.details
     assert set(result.reasons) <= {"driver_value", "driver_words"}, result.details
 
@@ -254,7 +263,7 @@ def test_a_dropped_part_of_a_display_is_refused() -> None:
 def test_a_negated_value_or_effect_is_refused(sentence: str) -> None:
     """The memo_v3 review: a sentence held the display and still negated it."""
     payload = one_driver("status", "RECRUITING")
-    result = c.check(t.memo(payload, [sentence]), payload, NAMES)
+    result = c.check(compose(payload, [sentence]), payload, NAMES)
     assert "driver_words" in result.reasons, result.details
 
 
@@ -328,7 +337,7 @@ def test_wrong_change_kinds_on_a_date_are_refused() -> None:
     third = ("The latest record changes are: status, dates on 2025-09-04; dates on 2025-12-16; "
              "status, dates on 2026-02-23; status, dates on 2026-05-20; dates on 2026-08-12; "
              "interventions or phase in the title on 2026-08-18.")  # fmt: skip
-    good = t.memo(MEMO_6, SENTENCES)
+    good = compose(MEMO_6, SENTENCES)
     assert c.check(good, MEMO_6, NAMES).passed
     assert c.check([good[0], good[1], third], MEMO_6, NAMES).reasons == ["template"]
 
@@ -352,7 +361,7 @@ def test_a_garbled_before_and_after_is_refused() -> None:
     third = ("Record changes include start_date after 2026-11-19 before 2026-11-18 "
              "post_date 2026-11-16; start_date after 2026-11-18 before 2026-11-17 "
              "post_date 2026-11-13.")  # fmt: skip
-    good = t.memo(MEMO_19, SENTENCES)
+    good = compose(MEMO_19, SENTENCES)
     assert c.check(good, MEMO_19, NAMES).passed
     assert c.check([good[0], good[1], third], MEMO_19, NAMES).reasons == ["template"]
 
@@ -366,7 +375,7 @@ SPACES = (0x00A0, 0x202F, 0x2009, 0x2007)
 @pytest.mark.parametrize("code", HYPHENS, ids=hex)
 def test_every_unicode_hyphen_dash_and_minus_is_a_hyphen(code: int) -> None:
     """The first run refused 12 memos that wrote "early-stop" with U+2011."""
-    sentence = f"The {RATE.replace('-', chr(code))} is 44.6%, which raises the risk."
+    sentence = f"The {RATE.replace('-', chr(code))} is {RATE_SHOWN}, which raises the risk."
     result = c.check(with_sentences((1, sentence)), PAYLOAD, NAMES)
     assert result.passed, result.details
     assert result.paragraphs[1] == GOOD[1]
@@ -411,7 +420,7 @@ def test_a_movers_template_passes_and_says_elevated_only_in_the_top_100(
     direction: str, top: bool
 ) -> None:
     payload = moved(direction, top)
-    good = t.memo(payload, SENTENCES)
+    good = compose(payload, SENTENCES)
     assert c.check(good, payload, NAMES).passed
     assert (c.REQUIRED in good[0]) is top
     assert direction in good[0]

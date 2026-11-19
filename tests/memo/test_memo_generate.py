@@ -1,23 +1,20 @@
-"""The memo run (ADR 0084) on a seeded scratch database: answers in Groq's format through
-Step 6's client (respx, no network), the payload-hash skip, rejections, the cap, the daily
-limit, deletions and the step output."""
+"""The memo run (ADRs 0084 and 0085) on a seeded scratch database: every paragraph from the
+template, the payload-hash skip, the check as a test of the template, the cap, deletions and
+the step output. No model and no network: memo_v4 calls nothing outside the database."""
 
 import datetime as dt
 import importlib.util
-import json
 from pathlib import Path
 from typing import Any
 
-import httpx
 import psycopg
 import pytest
-import respx
 
 from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.memo import check as checks
 from trialpulse.memo import generate as g
+from trialpulse.memo import template
 
-URL = "https://api.groq.com/openai/v1/chat/completions"
 spec = importlib.util.spec_from_file_location("api_seed", REPO_ROOT / "tests/api/seed.py")
 assert spec is not None
 assert spec.loader is not None
@@ -34,41 +31,6 @@ def cfg(**over: Any) -> Any:
     return load_project_config().memo.model_copy(update={"top_n": 3, "cap_per_run": 10, **over})
 
 
-def faithful(request: dict[str, Any]) -> list[str]:
-    """The driver sentences the prompt asks for, from what the model is sent (memo_v3)."""
-    return [f"The {d['label']} is {d['value']}, which {d['effect']}."
-            for d in request["drivers"]]  # fmt: skip
-
-
-def envelope(sentences: list[str] | None, content: str | None = None) -> dict[str, Any]:
-    """A chat completion in Groq's response format."""
-    text = content if content is not None else json.dumps({"sentences": sentences})
-    return {
-        "id": "chatcmpl-test", "object": "chat.completion", "created": 1794900000,
-        "model": "openai/gpt-oss-120b",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
-                     "logprobs": None, "finish_reason": "stop"}],
-        "usage": {"queue_time": 0.1, "prompt_tokens": 1200, "prompt_time": 0.01,
-                  "completion_tokens": 300, "completion_time": 0.2, "total_tokens": 1500,
-                  "total_time": 0.21, "completion_tokens_details": {"reasoning_tokens": 90}},
-        "system_fingerprint": "fp_test", "x_groq": {"id": "req_test"},
-    }  # fmt: skip
-
-
-HEADERS = {"x-ratelimit-remaining-tokens": "7000", "x-ratelimit-reset-tokens": "1s",
-           "x-ratelimit-remaining-requests": "900"}  # fmt: skip
-
-
-def answering(write: Any) -> Any:
-    """A respx side effect: the sentences `write` makes of the drivers the request carries."""
-
-    def reply(request: httpx.Request) -> httpx.Response:
-        sent = json.loads(json.loads(request.content)["messages"][1]["content"])
-        return httpx.Response(200, json=envelope(write(sent)), headers=HEADERS)
-
-    return reply
-
-
 # Five distinct served features per horizon, as the champion's drivers always are (the shared
 # seed draws random indexes, text features and repeats among them, for the API's tests):
 # enrollment_count, status, sponsor_class, open_interventional_trials, planned_duration_months.
@@ -76,21 +38,16 @@ SERVED_DRIVERS = [8, 28, 44, 51, 9] * 2
 
 
 @pytest.fixture
-def seeded(scratch: str, monkeypatch: pytest.MonkeyPatch) -> str:
+def seeded(scratch: str) -> str:
     seeding.seed(_plain(scratch))
     with psycopg.connect(_plain(scratch)) as con:
         con.execute("UPDATE serving.trial_scores_latest SET driver_features = %s",
                     (SERVED_DRIVERS,))  # fmt: skip
-    monkeypatch.setenv("GROQ_API_KEY", "gsk_test_key_not_real")
     return _plain(scratch)
 
 
 def run(dsn: str, c: Any) -> tuple[int, g.Tally]:
-    complete, close = g.groq_complete(c)
-    try:
-        return g.run_memos(dsn, c, complete, DAY, "test")
-    finally:
-        close()
+    return g.run_memos(dsn, c, DAY, "test")
 
 
 def memos(dsn: str) -> list[tuple[Any, ...]]:
@@ -101,50 +58,52 @@ def memos(dsn: str) -> list[tuple[Any, ...]]:
         ).fetchall()
 
 
-@respx.mock
-def test_a_run_stores_checked_memos_and_a_second_run_asks_nothing(seeded: str) -> None:
-    route = respx.post(URL).mock(side_effect=answering(faithful))
+def broken_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A template bug: the driver paragraph invents a number, an outcome and a comparison."""
+    real = template.paragraph_two
+
+    def bad(payload: Any) -> str:
+        text = real(payload).replace(", which", " by 7777, which", 1)
+        return text[:-1] + "; the trial will fail, doubled over twelve months."
+
+    monkeypatch.setattr(template, "paragraph_two", bad)
+
+
+def test_a_run_stores_template_memos_and_a_second_run_builds_nothing(seeded: str) -> None:
     run_id, tally = run(seeded, cfg())
     assert (tally.status, tally.n_chosen, tally.n_called, tally.n_stored) == ("succeeded", 3, 3, 3)
-    assert (tally.prompt_tokens, tally.completion_tokens, tally.total_tokens) == (3600, 900, 4500)
+    assert (tally.n_rejected, tally.total_tokens) == (0, 0)
     stored = memos(seeded)
     assert [(m[1], m[2], m[3], m[4]) for m in stored] == [(DAY, ["top_100"], 3, True)] * 3
-    body = json.loads(route.calls[0].request.content)
-    assert body["model"] == "openai/gpt-oss-120b"
-    assert body["temperature"] == 0.0
-    assert body["response_format"]["json_schema"]["schema"] == g.RESPONSE_SCHEMA
-    assert body["messages"][0]["content"] == g.load_prompt(cfg())
-    sent = json.loads(body["messages"][1]["content"])
-    assert set(sent) == {"drivers"}  # the 12-month drivers only, no id, date or risk
-    assert "NCT" not in body["messages"][1]["content"]
-    assert all(set(d) == {"label", "value", "effect"} for d in sent["drivers"])
     with psycopg.connect(seeded) as con:
         row = con.execute(
-            """SELECT status, n_called, n_stored, total_tokens, trigger
+            """SELECT status, n_called, n_stored, total_tokens, trigger, model, prompt_version
                FROM monitoring.memo_runs WHERE run_id = %s""",
             (run_id,),
         ).fetchone()
-    assert row == ("succeeded", 3, 3, 4500, "test")
+        written = con.execute(
+            "SELECT DISTINCT model, prompt_version FROM serving.trial_memos"
+        ).fetchall()
+        rows = con.execute("SELECT paragraphs, payload FROM serving.trial_memos").fetchall()
+    assert row == ("succeeded", 3, 3, 0, "test", "template", "memo_v4")
+    assert written == [("template", "memo_v4")]
+    for paragraphs, payload in rows:  # every paragraph is the template's, exactly
+        assert list(paragraphs) == template.memo(payload)
 
     _, again = run(seeded, cfg())  # the same day: every payload hash unchanged
     assert (again.n_called, again.n_current, again.n_stored) == (0, 3, 0)
-    assert route.call_count == 3
 
 
-@respx.mock
-def test_fabricated_memos_are_never_stored_and_counted_by_reason(seeded: str) -> None:
-    def invented(request: dict[str, Any]) -> list[str]:
-        good = faithful(request)
-        good[0] = good[0].replace(", which", " by 7777, which", 1)
-        good[-1] = good[-1].replace(".", "; the trial will fail, doubled over twelve months.")
-        return good
-
-    respx.post(URL).mock(side_effect=answering(invented))
+def test_a_template_bug_is_never_stored_and_counted_by_reason(
+    seeded: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check stays as the test of the template at every generation (ADR 0085)."""
+    broken_template(monkeypatch)
     run_id, tally = run(seeded, cfg(rejected_samples=2))
     assert (tally.n_called, tally.n_stored, tally.n_rejected) == (3, 0, 3)
     assert memos(seeded) == []
     for reason in ("number", "driver_number", "banned_language", "comparison",
-                   "number_word"):  # fmt: skip
+                   "number_word", "driver_words"):  # fmt: skip
         assert tally.rejections[reason] == 3, reason
     assert tally.alert(0.2)
     with psycopg.connect(seeded) as con:
@@ -156,45 +115,20 @@ def test_fabricated_memos_are_never_stored_and_counted_by_reason(seeded: str) ->
     assert rejections["number"] == 3
 
 
-@respx.mock
-def test_an_answer_that_is_not_the_expected_json_is_a_rejection(seeded: str) -> None:
-    respx.post(URL).mock(return_value=httpx.Response(200, json=envelope(None, "not json"),
-                                                     headers=HEADERS))  # fmt: skip
-    _, tally = run(seeded, cfg())
-    assert tally.rejections == {"invalid_json": 3}
-    assert tally.n_stored == 0
-
-
-@respx.mock
-def test_the_cap_limits_the_calls_of_a_run(seeded: str) -> None:
-    respx.post(URL).mock(side_effect=answering(faithful))
+def test_the_cap_limits_the_memos_of_a_run(seeded: str) -> None:
     _, tally = run(seeded, cfg(cap_per_run=2))
     assert (tally.n_called, tally.n_stored, tally.n_over_cap) == (2, 2, 1)
 
 
-@respx.mock
-def test_a_daily_limit_stops_the_run_cleanly(seeded: str) -> None:
-    limited = httpx.Response(429, json={"error": {
-        "message": "Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD): "
-                   "Limit 200000, Used 199000, Requested 2000. Please try again in 7m12s.",
-        "type": "tokens", "code": "rate_limit_exceeded"}})  # fmt: skip
-    respx.post(URL).mock(side_effect=[httpx.Response(200, json=envelope(None, "{}"),
-                                                     headers=HEADERS), limited])  # fmt: skip
-    run_id, tally = run(seeded, cfg())
-    assert tally.status == "stopped"
-    assert tally.stopped_reason is not None
-    assert "TPD" in tally.stopped_reason
-    assert tally.n_called == 1
-    with psycopg.connect(seeded) as con:
-        assert con.execute("SELECT status FROM monitoring.memo_runs WHERE run_id = %s",
-                           (run_id,)).fetchone() == ("stopped",)  # fmt: skip
+def test_the_configured_cap_covers_every_chosen_trial() -> None:
+    """ADR 0085: with no token limit, one run covers the top 100 and the movers."""
+    memo = load_project_config().memo
+    assert memo.cap_per_run >= 10 * memo.top_n
 
 
-@respx.mock
 def test_a_changed_payload_regenerates_and_a_trial_no_longer_chosen_is_deleted(
     seeded: str,
 ) -> None:
-    respx.post(URL).mock(side_effect=answering(faithful))
     run(seeded, cfg())
     before = {m[0] for m in memos(seeded)}
     with psycopg.connect(seeded) as con:
@@ -215,24 +149,22 @@ def test_a_changed_payload_regenerates_and_a_trial_no_longer_chosen_is_deleted(
     assert tally.n_current == 1
 
 
-def test_a_provider_failure_ends_the_run_as_failed(seeded: str) -> None:
-    from trialpulse.nlp.llm_labeler import ProviderError
+def test_a_failure_ends_the_run_as_failed(seeded: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(payload: Any) -> list[str]:
+        raise RuntimeError("a template that raises")
 
-    def broken(body: dict[str, Any]) -> dict[str, Any]:
-        raise ProviderError("HTTP 401 (invalid_api_key)", retry_later=False)
-
-    with pytest.raises(ProviderError):
-        g.run_memos(seeded, cfg(), broken, DAY, "test")
+    monkeypatch.setattr(template, "memo", broken)
+    with pytest.raises(RuntimeError):
+        run(seeded, cfg())
     with psycopg.connect(seeded) as con:
         row = con.execute("SELECT status, stopped_reason FROM monitoring.memo_runs").fetchone()
-    assert row == ("failed", "ProviderError")
+    assert row == ("failed", "RuntimeError")
 
 
-@respx.mock
 def test_the_command_writes_the_rejection_alert_for_the_workflow(
     seeded: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    respx.post(URL).mock(side_effect=answering(lambda p: ["x", "y"]))  # all refused
+    broken_template(monkeypatch)  # all refused
     output = tmp_path / "github_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     small = load_project_config().model_copy(update={"memo": cfg()})
@@ -251,15 +183,41 @@ def test_the_command_writes_the_rejection_alert_for_the_workflow(
     assert output.read_text(encoding="utf-8").strip() == "memo_alert=rejections"
 
 
-@respx.mock
+def test_the_command_needs_no_provider_key(
+    seeded: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0085: the memo path reads no GROQ_API_KEY and writes no alert for a clean run."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    small = load_project_config().model_copy(update={"memo": cfg()})
+    monkeypatch.setattr(g, "load_project_config", lambda: small)
+    import trialpulse.memo.generate as module
+
+    real_now = dt.datetime
+
+    class Frozen(real_now):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            return real_now.combine(DAY, dt.time(12), tzinfo=tz)
+
+    monkeypatch.setattr(module.dt, "datetime", Frozen)
+    assert g.main(["--target", "local"]) == 0
+    assert output.read_text(encoding="utf-8").strip() == "memo_alert="
+    assert len(memos(seeded)) == 3
+    source = Path(g.__file__).read_text(encoding="utf-8")
+    for word in ("groq", "llm_labeler", "httpx", "GROQ_API_KEY"):
+        assert word.lower() not in source.lower(), word
+
+
 def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
-    seeded: str, tmp_path: Path
+    seeded: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from trialpulse.memo import review
 
-    respx.post(URL).mock(side_effect=answering(lambda r: [*faithful(r)[:-1], "It will fail."]))
-    run(seeded, cfg())  # every memo refused
-    respx.post(URL).mock(side_effect=answering(faithful))
+    with monkeypatch.context() as patch:
+        broken_template(patch)
+        run(seeded, cfg())  # every memo refused
     run(seeded, cfg())  # then stored
     assert review.main(["--target", "local", "--out-dir", str(tmp_path)]) == 0
     (path,) = tmp_path.glob("*.md")
@@ -269,20 +227,26 @@ def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
     assert "banned_language" in text
     assert text.count("Reasons: ") == 3
     assert "```json" in text
+    assert "by template (memo_v4)" in text
     for name in ("Acme Pharma", "Northern University Hospital", "Hand-placed trial"):
         assert name not in text
 
 
-@respx.mock
-def test_the_stored_memo_is_the_normalized_text_that_was_checked(seeded: str) -> None:
+def test_the_stored_memo_is_the_normalized_text_that_was_checked(
+    seeded: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """memo_v2: a non-breaking hyphen and a narrow space are stored as plain characters."""
+    real = template.paragraph_two
 
-    def special(request: dict[str, Any]) -> list[str]:
-        found = faithful(request)
-        found[0] = found[0].replace(" which ", "\u202fwhich ").replace("the risk", "the\u00a0risk")
-        return [s.replace("-", "\u2011") for s in found]
+    def special(payload: Any) -> str:
+        text = (
+            real(payload)
+            .replace(" which ", "\u202fwhich ", 1)
+            .replace("the risk", "the\u00a0risk", 1)
+        )
+        return text.replace("-", "\u2011")
 
-    respx.post(URL).mock(side_effect=answering(special))
+    monkeypatch.setattr(template, "paragraph_two", special)
     _, tally = run(seeded, cfg())
     assert tally.n_stored == 3
     with psycopg.connect(seeded) as con:
@@ -294,34 +258,24 @@ def test_the_stored_memo_is_the_normalized_text_that_was_checked(seeded: str) ->
         assert checks.check(paragraphs, payload, names).paragraphs == list(paragraphs)
 
 
-@respx.mock
-def test_a_memo_of_another_prompt_version_is_deleted_and_written_again(seeded: str) -> None:
-    respx.post(URL).mock(side_effect=answering(faithful))
+def test_a_memo_of_another_version_is_deleted_and_written_again(seeded: str) -> None:
     run(seeded, cfg())
     with psycopg.connect(seeded) as con:
-        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v2'")
+        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v3', "
+                    "model = 'openai/gpt-oss-120b'")  # fmt: skip
         con.commit()
-    respx.post(URL).mock(side_effect=answering(lambda r: ["It will fail."]))  # all refused
     _, tally = run(seeded, cfg())
-    assert (tally.n_deleted, tally.n_called, tally.n_stored) == (3, 3, 0)
-    assert memos(seeded) == []  # never left beside a newer score
-    respx.post(URL).mock(side_effect=answering(faithful))
-    _, again = run(seeded, cfg())
-    assert (again.n_called, again.n_stored) == (3, 3)
+    assert (tally.n_deleted, tally.n_called, tally.n_stored) == (3, 3, 3)
     with psycopg.connect(seeded) as con:
-        versions = {r[0] for r in con.execute("SELECT prompt_version FROM serving.trial_memos")}
-    assert versions == {"memo_v3"}
+        written = con.execute(
+            "SELECT DISTINCT prompt_version, model FROM serving.trial_memos"
+        ).fetchall()
+    assert written == [("memo_v4", "template")]
 
 
-@respx.mock
-def test_a_dry_run_reports_tokens_and_writes_nothing(seeded: str) -> None:
-    respx.post(URL).mock(side_effect=answering(faithful))
-    complete, close = g.groq_complete(cfg())
-    try:
-        found = g.dry_run(seeded, cfg(), complete, DAY, 2)
-    finally:
-        close()
-    assert [(f["total_tokens"], f["passed"]) for f in found] == [(1500, True)] * 2
+def test_a_dry_run_reports_the_check_and_writes_nothing(seeded: str) -> None:
+    found = g.dry_run(seeded, cfg(), DAY, 2)
+    assert [(f["passed"], f["reasons"]) for f in found] == [(True, [])] * 2
     assert memos(seeded) == []
     with psycopg.connect(seeded) as con:
         assert con.execute("SELECT count(*) FROM monitoring.memo_runs").fetchone() == (0,)

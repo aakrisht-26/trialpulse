@@ -133,10 +133,10 @@ def test_the_laptop_tasks_wait_out_the_daily_crons() -> None:
         assert "21:30" not in path.read_text(encoding="utf-8"), path.name
 
 
-def test_the_memo_workflow_follows_a_successful_daily_run_and_holds_the_groq_key() -> None:
-    """ADR 0084: memo.yml starts after a successful daily run on main (or by hand), has its
-    own failure issue and rejection issue, and is the only workflow that reads GROQ_API_KEY;
-    daily.yml knows nothing of it."""
+def test_the_memo_workflow_follows_a_successful_daily_run() -> None:
+    """ADR 0084: memo.yml starts after a successful daily run on main (or by hand) and has its
+    own failure issue and rejection issue; daily.yml knows nothing of it. Since ADR 0085 it
+    reads Neon only."""
     daily = _load(REPO_ROOT / ".github" / "workflows" / "daily.yml")
     memo = _load(REPO_ROOT / ".github" / "workflows" / "memo.yml")
     on = memo[True] if True in memo else memo["on"]
@@ -149,17 +149,23 @@ def test_the_memo_workflow_follows_a_successful_daily_run_and_holds_the_groq_key
     assert "github.event.workflow_run.conclusion == 'success'" in jobs["memo"]["if"]
     assert "permissions" not in jobs["memo"]
     steps = {s.get("name"): s for s in jobs["memo"]["steps"]}
-    assert set(steps["Memos"]["env"]) == {"NEON_DATABASE_URL", "GROQ_API_KEY", "TRIGGER"}
+    assert set(steps["Memos"]["env"]) == {"NEON_DATABASE_URL", "TRIGGER"}
     assert "python -m trialpulse.memo.generate --target neon" in steps["Memos"]["run"]
     for name in ("rejections", "notify"):
         assert jobs[name]["needs"] == "memo"
         assert jobs[name]["permissions"] == {"contents": "read", "issues": "write"}
     assert "needs.memo.outputs.memo_alert == 'rejections'" in jobs["rejections"]["if"]
     assert "needs.memo.result == 'failure'" in jobs["notify"]["if"]
+    assert "memo" not in (REPO_ROOT / ".github" / "workflows" / "daily.yml").read_text("utf-8")
+
+
+def test_no_workflow_references_the_groq_key() -> None:
+    """ADR 0085: the memo is built by a template, so no workflow reads GROQ_API_KEY (Step 6's
+    labeler uses it on the laptop only, from .env)."""
+    assert WORKFLOWS
     for path in WORKFLOWS:
         text = path.read_text(encoding="utf-8")
-        assert ("GROQ_API_KEY" in text) == (path.name == "memo.yml"), path.name
-    assert "memo" not in (REPO_ROOT / ".github" / "workflows" / "daily.yml").read_text("utf-8")
+        assert "GROQ" not in text.upper(), path.name
 
 
 def test_ci_requires_postgres_for_the_database_tests() -> None:

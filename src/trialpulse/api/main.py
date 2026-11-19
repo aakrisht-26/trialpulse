@@ -100,13 +100,12 @@ def _envelope(api: Api | None, status: int, detail: str,
     return JSONResponse(body.model_dump(mode="json"), status_code=status, headers=headers)
 
 
-MEMO_LABEL = "AI-written summary of the stored drivers and record changes"
+MEMO_LABEL = "Summary of the stored drivers and record changes, built by a fixed template"
 MEMO_NOTE = (
-    "The first and third paragraphs are built from this trial's stored values by a fixed "
-    "template; the second, one sentence per driver, is written by a language model and checked "
-    "sentence by sentence against the stored drivers. Every number and date was checked against "
-    "the stored values, and a memo that failed the check is never shown. A driver says what "
-    "moved the model's score, not why a trial stops (ADR 0033)."
+    "Every paragraph is built from this trial's stored values by a fixed template; no language "
+    "model writes any part of it (ADR 0085). Every number and date was checked against the "
+    "stored values, and a memo that failed the check is never shown. A driver names a feature "
+    "that moved the model's score, not why a trial stops (ADR 0033)."
 )
 
 

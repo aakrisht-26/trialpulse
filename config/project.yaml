@@ -134,15 +134,12 @@ retraining:                       # Section 14's promotion gate (ADR 0080)
   horizon_months: 12              # the gate reads the 12-month horizon only (ADR 0080)
   window_dates: 3                 # the window's latest monthly prediction dates graded (ADR 0080)
 
-memo:                             # the per-trial risk memo (ADR 0084)
-  model: openai/gpt-oss-120b
-  reasoning_effort: low           # the memo is short; fewer reasoning tokens than Step 6
-  max_completion_tokens: 2048
-  prompt: memo_v3.md              # src/trialpulse/memo/prompts/ (memo_v3, ADR 0084 amended)
+memo:                             # the per-trial risk memo (ADRs 0084 and 0085)
+  version: memo_v4                # every paragraph from the template, no model (ADR 0085)
   top_n: 100                      # the top unflagged trials by 12-month risk
   move_threshold: 0.05            # a 12-month risk move that chooses a trial
   move_window_days: 7             # the move's latest score row is at most this old
-  cap_per_run: 100                # memo calls a run makes at most
+  cap_per_run: 2000               # memos a run builds at most: every chosen trial (ADR 0085)
   max_record_changes: 10          # record changes in a payload, the latest first
   values_held_from: 2026-11-08    # go-live: before and after values are held from here
   rejection_alert_share: 0.20     # rejections over this share of a run's calls: an issue

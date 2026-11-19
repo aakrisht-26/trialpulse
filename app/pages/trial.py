@@ -65,7 +65,7 @@ def main(page: ui.Page) -> None:
                 for paragraph in memo["paragraphs"]:
                     st.markdown(paragraph)
                 st.caption(
-                    f"Written on {memo['generated_date']} by {memo['model']} "
+                    f"Built on {memo['generated_date']} by the {memo['model']} "
                     f"({memo['prompt_version']}) for the score of {memo['as_of_date']}. "
                     f"{memo['note']}"
                 )

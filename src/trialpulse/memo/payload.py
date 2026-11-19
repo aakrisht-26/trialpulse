@@ -32,7 +32,7 @@ from typing import Any
 from trialpulse import markers as mk
 from trialpulse.memo import labels
 
-PAYLOAD_VERSION = 3
+PAYLOAD_VERSION = 4  # memo_v4: the labels and displays of ADR 0085
 HORIZONS = (12, 24)
 DRIVERS_PER_HORIZON = 5
 TOP = "top_100"

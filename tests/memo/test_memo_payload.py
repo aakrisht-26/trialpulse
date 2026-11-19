@@ -54,7 +54,7 @@ def build(**over: Any) -> dict[str, Any]:
 
 def test_the_payload_holds_the_stored_values_as_shown() -> None:
     out = build()
-    assert out["payload_version"] == 3
+    assert out["payload_version"] == 4  # memo_v4 (ADR 0085)
     assert out["risk_percent"] == {"12": 14, "24": 26}
     assert out["score_date"] == "2026-11-16"
     first = {"feature": "masking", "label": "number of masked roles", "value": "DOUBLE",

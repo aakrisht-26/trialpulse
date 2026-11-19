@@ -62,14 +62,15 @@ class NotScored(BaseModel):
 
 
 class Memo(BaseModel):
-    """An AI-written summary of a trial's stored drivers and record changes (ADR 0084)."""
+    """A summary of a trial's stored drivers and record changes, built by a fixed template
+    (ADRs 0084 and 0085)."""
 
     label: str
     note: str
     as_of_date: dt.date = Field(description="The score date the memo was checked against")
     generated_date: dt.date
-    model: str
-    prompt_version: str
+    model: str = Field(description='"template" since memo_v4 (ADR 0085)')
+    prompt_version: str = Field(description="The memo version, such as memo_v4")
     paragraphs: list[str]
 
 

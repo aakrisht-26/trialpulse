@@ -19,7 +19,7 @@ def _store(dsn: str, nct: str, valid_as_of: Any) -> None:
         con.execute(
             """INSERT INTO serving.trial_memos (nct_id, payload_hash, payload_version, payload,
                prompt_version, model, chosen_as, paragraphs, valid_as_of)
-               VALUES (%s, %s, 1, %s, 'memo_v1', 'openai/gpt-oss-120b', %s, %s, %s)""",
+               VALUES (%s, %s, 4, %s, 'memo_v4', 'template', %s, %s, %s)""",
             (nct, b"\x01" * 32, json.dumps({"nct_id": nct}), ["top_100"], PARAGRAPHS,
              valid_as_of),
         )  # fmt: skip
@@ -44,10 +44,12 @@ def test_a_public_memo_is_shown_beside_the_score_it_was_checked_against(
     assert memo["label"] == MEMO_LABEL
     assert memo["paragraphs"] == PARAGRAPHS
     assert memo["as_of_date"] == seeding.DAY.isoformat()
-    assert (memo["model"], memo["prompt_version"]) == ("openai/gpt-oss-120b", "memo_v1")
+    assert (memo["model"], memo["prompt_version"]) == ("template", "memo_v4")
     assert "checked against the stored values" in memo["note"]
     assert "fixed template" in memo["note"]
     assert "not why a trial stops" in memo["note"]
+    assert "no language model" in memo["note"]  # ADR 0085
+    assert "AI" not in memo["label"]
 
 
 def test_a_memo_of_another_score_date_or_an_unscored_trial_is_never_shown(

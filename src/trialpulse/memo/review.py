@@ -3,12 +3,12 @@
 
     uv run python -m trialpulse.memo.review --target neon
 
-Writes data/memo_review/<date>.md (gitignored): the first 20 stored memos of the current prompt
+Writes data/memo_review/<date>.md (gitignored): the first 20 stored memos of the current memo
 version (oldest first), each with its payload and the result of the fabrication check run
 again on it, and up to 5 rejected memos of the latest runs of that version with their reasons
 and payloads. It reads Neon only and writes
 nothing there. The file holds no names: payloads hold none, and rejected memos are quoted as
-the model wrote them, so the reasons say what each broke.
+they were built, so the reasons say what each broke.
 """
 
 import argparse
@@ -21,7 +21,7 @@ from typing import Any
 from trialpulse.cli import run
 from trialpulse.config import REPO_ROOT, load_project_config
 from trialpulse.memo import check as checks
-from trialpulse.memo.generate import prompt_version
+from trialpulse.memo.generate import version
 
 OUT_DIR = REPO_ROOT / "data" / "memo_review"
 FIRST = 20
@@ -114,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     day = dt.datetime.now(dt.UTC).date()
     with psycopg.connect(_dsn(args.target), connect_timeout=30) as con:
-        memos, samples, names = read(con, prompt_version(load_project_config().memo))
+        memos, samples, names = read(con, version(load_project_config().memo))
     args.out_dir.mkdir(parents=True, exist_ok=True)
     path = args.out_dir / f"{day.isoformat()}.md"
     path.write_text(render(memos, samples, names, day), encoding="utf-8")

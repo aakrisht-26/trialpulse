@@ -238,12 +238,9 @@ class ApiConfig(_Section):
 
 
 class MemoConfig(_Section):
-    """The per-trial risk memo (ADR 0084)."""
+    """The per-trial risk memo (ADR 0084; built by a template since memo_v4, ADR 0085)."""
 
-    model: str
-    reasoning_effort: str
-    max_completion_tokens: PositiveInt
-    prompt: str
+    version: str  # stored as each memo's prompt_version
     top_n: PositiveInt
     move_threshold: float = Field(gt=0, lt=1)
     move_window_days: PositiveInt
