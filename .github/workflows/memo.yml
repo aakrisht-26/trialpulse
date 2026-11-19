@@ -31,7 +31,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # a template run builds a memo in milliseconds
+    timeout-minutes: 30  # builds take milliseconds; each memo is one insert on Neon
     outputs:
       error_class: ${{ steps.run.outputs.error_class }}
       memo_alert: ${{ steps.run.outputs.memo_alert }}

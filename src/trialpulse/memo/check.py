@@ -1,8 +1,10 @@
 """The fabrication check of a risk memo (ADR 0084): deterministic, and a memo that fails is
 never stored. Since memo_v4 (ADR 0085) a template builds every paragraph, and the check is the
-test of that template at every generation: its rules are written apart from the template, so a
-memo that fails is a template bug. The rules were written for model-written sentences (memo_v1
-to memo_v3) and are kept whole.
+test of that template at every generation, so a memo that fails is a template bug. Its
+[template] rule compares paragraphs 1 and 3 with the template itself, which is a tautology at
+generation; the other rules (the per-sentence driver rules and the general rules below) are
+written apart from the template and are the test. The rules were written for model-written
+sentences (memo_v1 to memo_v3) and are kept whole.
 
 A memo passes only if all of these hold (the reason codes in brackets):
 

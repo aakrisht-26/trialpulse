@@ -80,7 +80,7 @@ def test_the_first_posting_stands_apart_from_the_changes() -> None:
     status change; each date's kinds now stand alone."""
     assert t.paragraph_three(MEMO_6) == (
         "Since its first posting on 2025-09-04, changes to fields the model reads were posted "
-        "on 5 dates, newest first: 2026-08-18: intervention types or title phase. 2026-08-12: "
+        "on 5 dates, newest first. 2026-08-18: intervention types or title phase. 2026-08-12: "
         "dates or status verification. 2026-05-20: status; dates or status verification; "
         "enrollment. 2026-02-23: status; dates or status verification. 2025-12-16: dates or "
         "status verification. Versions that changed only other fields are not counted. "
@@ -89,7 +89,7 @@ def test_the_first_posting_stands_apart_from_the_changes() -> None:
 
 def test_more_changes_than_listed_are_counted_and_named_the_latest() -> None:
     payload = {**MEMO_6, "record_changes_total": 14}
-    assert "posted on 14 dates; the latest, newest first: 2026-08-18:" in t.paragraph_three(
+    assert "posted on 14 dates; the latest follow, newest first. 2026-08-18:" in t.paragraph_three(
         payload)  # fmt: skip
     assert c.check(compose(payload, SENTENCES), payload).passed
 
@@ -98,7 +98,7 @@ def test_one_change_and_none() -> None:
     one = {**MEMO_6, "record_changes": MEMO_6["record_changes"][:1], "record_changes_total": 1}
     assert t.paragraph_three(one).startswith(
         "Since its first posting on 2025-09-04, changes to fields the model reads were posted "
-        "on 1 date: 2026-08-18: intervention types or title phase.")  # fmt: skip
+        "on 1 date. 2026-08-18: intervention types or title phase.")  # fmt: skip
     none = {**MEMO_6, "record_changes": [], "record_changes_total": 0}
     assert t.paragraph_three(none).startswith(
         "Since its first posting on 2025-09-04, no change to fields the model reads has been "
@@ -110,6 +110,17 @@ def test_one_change_and_none() -> None:
     absent = {**unknown, "stored_markers": False}
     assert t.paragraph_three(absent).startswith("No record changes are stored for this trial. ")
     assert "not counted" not in t.paragraph_three(absent)
+
+
+def test_no_sentence_of_paragraph_three_holds_two_colons() -> None:
+    """The memo_v3 audit: "started: 2026-11-12: ..." and "newest first: 2026-08-18: ..."."""
+    import re
+
+    for payload in (MEMO_6, MEMO_19, PAYLOAD, {**MEMO_6, "record_changes_total": 14},
+                    {**MEMO_6, "record_changes": MEMO_6["record_changes"][:1],
+                     "record_changes_total": 1}):  # fmt: skip
+        for sentence in c.sentences(t.paragraph_three(payload)):
+            assert not re.search(r":[^.]*:", sentence), sentence
 
 
 def test_a_before_and_after_value_reads_as_a_move() -> None:

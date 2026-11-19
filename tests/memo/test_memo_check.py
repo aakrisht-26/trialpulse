@@ -20,8 +20,11 @@ def compose(payload: Any, sentences: Any) -> list[str]:
     return [t.paragraph_one(payload), second, t.paragraph_three(payload)]
 
 
-RATE = "early-stop rate of the ended trials listed under the sponsor"
-RATE_SHOWN = "44.6% after smoothing toward the class rate"
+RATE = "early-stop rate used for the sponsor"
+RATE_SHOWN = (
+    "44.6%, from the other ended trials listed under the sponsor smoothed toward the "
+    "class rate (the class rate alone without a track record)"
+)
 TIME = "time since the first posting used by the score"
 PAYLOAD: dict[str, Any] = {
     "payload_version": p.PAYLOAD_VERSION, "nct_id": "NCT01234567", "score_date": "2026-11-16",

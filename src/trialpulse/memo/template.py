@@ -12,8 +12,9 @@ count of dates with changes to the fields the model reads (so it never contradic
 versions), the latest changes newest first with their exact kinds, when the status was last
 verified, and, for each change since go-live, the values before and after, or that no earlier
 value is held for the trial. Every paragraph is a pure function of the payload, and every
-memo still goes through the fabrication check (`memo.check`), whose rules are written apart
-from this module, as a test of the template.
+memo still goes through the fabrication check (`memo.check`) as a test of the template: its
+equality rule for paragraphs 1 and 3 compares them with this module, so at generation only its
+general rules and its per-sentence driver rules, written apart from this module, test it.
 
 "elevated early-stop risk" appears only for a trial in the top 100. A trial chosen for a move
 states its risk, the direction ("rose" or "fell"), and its previous risk and score date.
@@ -93,8 +94,9 @@ def _changes(payload: Mapping[str, Any]) -> list[str]:
     if total == 0:
         return [_capital(f"{lead}no change to fields the model reads has been posted.")]
     dates = "1 date" if total == 1 else f"{total} dates"
-    which = ":" if total == len(changes) == 1 else (
-        "; the latest, newest first:" if total > len(changes) else ", newest first:")  # fmt: skip
+    which = "." if total == len(changes) == 1 else (
+        "; the latest follow, newest first." if total > len(changes)
+        else ", newest first.")  # fmt: skip
     head = _capital(f"{lead}changes to fields the model reads were posted on {dates}{which}")
     return [head, *(f"{c['post_date']}: {'; '.join(c['changed'])}." for c in changes)]
 

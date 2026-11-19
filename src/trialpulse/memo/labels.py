@@ -21,8 +21,9 @@ says how a stored value (the text `explain.drivers.shown` made of it) is display
 - `years`: "N years" (an age limit);
 - `year`: a calendar year as it is;
 - `percent`: a ratio as a percent with one decimal;
-- `rate`: the sponsor's early-stop rate as a percent with one decimal, "after smoothing toward
-  the class rate";
+- `rate`: the early-stop rate used for the sponsor as a percent with one decimal, with how it
+  is made: the sponsor's other ended trials smoothed toward the class rate, or the class rate
+  alone for a sponsor without a track record (an individual or a placeholder name);
 - `stage`: the landmark the score is computed at, as "stage 4 of 6, a stage every 6 months
   after the first posting" (never as months, which a reader could take for the 24-month
   horizon);
@@ -214,20 +215,21 @@ FEATURES: dict[str, Label] = {
     "organization_class": Label("class of the registering organization", CATEGORY, CLASS_WORDS),
     "sponsor_has_identity": Label("track record of the sponsor", FLAG, yes="available",
                                   no="not available, so the class rate is used"),
-    # features/sponsor.py: a registration is an interventional trial first posted under the
-    # sponsor; the ended and stopped trials are those shown as ended under the sponsor, which
-    # includes trials first posted under another sponsor, so a sponsor can have ended trials
-    # and a rate of its own with no registration.
+    # features/sponsor.py (SponsorPass.answer): every count leaves the trial itself out; a
+    # registration is an interventional trial first posted under the sponsor; the ended and
+    # stopped trials are those shown as ended under the sponsor, which includes trials first
+    # posted under another sponsor, so a sponsor can have ended trials and a rate of its own
+    # with no registration. A sponsor without a track record gets the class rate alone
+    # (features/transforms.py, SponsorPriors.rate), so the rate's label and display hold both.
     "sponsor_prior_registrations": Label(
-        "number of interventional trials first posted under the sponsor", COUNT),
+        "number of other interventional trials first posted under the sponsor", COUNT),
     "sponsor_prior_ended": Label(
-        "number of trials listed under the sponsor that ended by completion or early stop "
-        "(trials first posted under another sponsor included)", COUNT),
+        "number of other trials listed under the sponsor that ended by completion or early "
+        "stop (trials first posted under another sponsor included)", COUNT),
     "sponsor_prior_stopped": Label(
-        "number of trials listed under the sponsor that stopped early (trials first posted "
-        "under another sponsor included)", COUNT),
-    "sponsor_stop_rate": Label("early-stop rate of the ended trials listed under the sponsor",
-                               RATE),
+        "number of other trials listed under the sponsor that stopped early (trials first "
+        "posted under another sponsor included)", COUNT),
+    "sponsor_stop_rate": Label("early-stop rate used for the sponsor", RATE),
     # competition
     "open_interventional_trials": Label("number of open interventional trials in the registry",
                                         COUNT),
@@ -367,7 +369,10 @@ def show(entry: Label, value: str, enrollment_type: str | None = None,
     if kind == PERCENT:
         return f"{x * 100:.1f}%"
     if kind == RATE:
-        return f"{x * 100:.1f}% after smoothing toward the class rate"
+        return (
+            f"{x * 100:.1f}%, from the other ended trials listed under the sponsor smoothed "
+            "toward the class rate (the class rate alone without a track record)"
+        )
     if kind == STAGE:
         stage = f"stage {_plain(x)} of {last_stage()}"
         if x == 0:

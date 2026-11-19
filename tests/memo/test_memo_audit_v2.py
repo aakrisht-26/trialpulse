@@ -169,7 +169,7 @@ def count_leaves_out_the_first_posting() -> None:
     later = [(first + dt.timedelta(days=50 * k), 2) for k in range(1, 11)]
     payload = payload_of(markers=[(first, 1), *later], first_post=first)
     assert payload["record_changes_total"] == 10
-    assert "posted on 10 dates, newest first:" in t.paragraph_three(payload)
+    assert "posted on 10 dates, newest first. " in t.paragraph_three(payload)
 
 
 # Paragraph 2 (medium and low): labels and displays ------------------------------------------
@@ -179,7 +179,7 @@ def smoothing_is_named(value: str, old: str) -> None:
     # memo_v4: the smoothing is named in the display, since a comma in the label opened a
     # clause ("its class rate is 24.1%") that read the class rate as the sponsor's
     assert lab.feature_display("sponsor_stop_rate", value).endswith(
-        "after smoothing toward the class rate"
+        "smoothed toward the class rate (the class rate alone without a track record)"
     )
     refused_sentence("sponsor_stop_rate", value, old)
 

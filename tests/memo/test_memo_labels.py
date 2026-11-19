@@ -77,7 +77,8 @@ def test_a_category_covers_the_registrys_levels() -> None:
     [
         ("enrolled_to_first_target_ratio", "0.0672", "6.7%"),
         ("enrollment_target_ratio", "1.5", "150.0%"),
-        ("sponsor_stop_rate", "0.241", "24.1% after smoothing toward the class rate"),
+        ("sponsor_stop_rate", "0.241", "24.1%, from the other ended trials listed under the "
+         "sponsor smoothed toward the class rate (the class rate alone without a track record)"),
         ("completion_slip_months", "-33", "33 months earlier than in the first version"),
         ("start_slip_months", "1", "1 month later than in the first version"),
         ("primary_completion_slip_months", "0", "in the same month as in the first version"),
@@ -178,15 +179,26 @@ def test_no_label_holds_a_comma() -> None:
 
 
 def test_the_sponsor_counts_say_what_each_counts() -> None:
-    """features/sponsor.py: a registration is an interventional trial first posted under the
-    sponsor, while ended and stopped trials include trials first posted under another sponsor,
-    so a rate of its own beside no registration is not a contradiction (memo_v4)."""
-    assert "first posted under the sponsor" in lab.feature_label("sponsor_prior_registrations")
-    for name in ("sponsor_prior_ended", "sponsor_prior_stopped"):
-        assert "first posted under another sponsor included" in lab.feature_label(name)
-    assert lab.feature_label("sponsor_stop_rate") == (
-        "early-stop rate of the ended trials listed under the sponsor"
+    """features/sponsor.py: every count leaves the trial itself out (SponsorPass.answer); a
+    registration is an interventional trial first posted under the sponsor, while ended and
+    stopped trials include trials first posted under another sponsor, so a rate of its own
+    beside no registration is not a contradiction (memo_v4). For a sponsor without a track
+    record the rate is the class rate alone (features/transforms.py), which the display says,
+    so its wording holds for every sponsor."""
+    assert lab.feature_label("sponsor_prior_registrations") == (
+        "number of other interventional trials first posted under the sponsor"
     )
+    for name in ("sponsor_prior_ended", "sponsor_prior_stopped"):
+        label = lab.feature_label(name)
+        assert label.startswith("number of other trials listed under the sponsor"), name
+        assert "first posted under another sponsor included" in label
+    assert lab.feature_label("sponsor_stop_rate") == ("early-stop rate used for the sponsor")
+
+
+def test_the_rate_says_how_it_is_made_for_every_sponsor() -> None:
+    shown = lab.feature_display("sponsor_stop_rate", "0.182")
+    assert shown.startswith("18.2%, from the other ended trials listed under the sponsor")
+    assert shown.endswith("(the class rate alone without a track record)")
 
 
 def test_the_stage_is_never_shown_in_months() -> None:

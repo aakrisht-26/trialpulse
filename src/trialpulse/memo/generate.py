@@ -18,7 +18,8 @@ One run, in order:
    template (`memo.template`; since memo_v4 no model writes any part, ADR 0085); each memo
    goes through the fabrication check (`check.check`) as a test of the template, and only a
    memo that passes is stored, as the normalized text that was checked, each in its own short
-   transaction (ADR 0058); a memo that fails is a template bug, counted by reason;
+   transaction on one connection (ADR 0058); a memo that fails is a template bug, counted by
+   reason;
 5. ends the run row with its counts, rejections by reason and up to `memo.rejected_samples`
    rejected memos with their reasons (for the review; never served). The token columns stay 0.
 
@@ -222,11 +223,12 @@ def run_memos(
                 con.execute("DELETE FROM serving.trial_memos WHERE nct_id = ANY(%s)", (delete,))
         tally.n_deleted = len(delete)
         tally.n_over_cap = max(0, len(build) - cfg.cap_per_run)
-        for nct in build[: cfg.cap_per_run]:
-            payload = payloads[nct]
-            tally.n_called += 1
-            result = checks.check(template.memo(payload), payload, inputs.names)
-            _store(open_db, dsn, payload, result, written, cfg, run_id, tally)
+        with open_db(dsn) as con:  # one connection; each memo in its own short transaction
+            for nct in build[: cfg.cap_per_run]:
+                payload = payloads[nct]
+                tally.n_called += 1
+                result = checks.check(template.memo(payload), payload, inputs.names)
+                _store(con, payload, result, written, cfg, run_id, tally)
     except Exception as exc:
         tally.status, tally.stopped_reason = "failed", type(exc).__name__
         _finish(open_db, dsn, run_id, tally, today)
@@ -235,9 +237,8 @@ def run_memos(
     return run_id, tally
 
 
-def _store(open_db: Callable[[str], Any], dsn: str, payload: Mapping[str, Any],
-           result: checks.CheckResult, written: str, cfg: MemoConfig, run_id: int,
-           tally: Tally) -> None:  # fmt: skip
+def _store(con: Any, payload: Mapping[str, Any], result: checks.CheckResult, written: str,
+           cfg: MemoConfig, run_id: int, tally: Tally) -> None:  # fmt: skip
     """Store a memo that passed the check, as the normalized text checked; count one that
     did not."""
     nct = payload["nct_id"]
@@ -246,7 +247,7 @@ def _store(open_db: Callable[[str], Any], dsn: str, payload: Mapping[str, Any],
                      "reasons": result.reasons, "details": result.details,
                      "payload": payload}, cfg.rejected_samples)  # fmt: skip
         return
-    with open_db(dsn) as con, con.transaction():
+    with con.transaction():
         con.execute(
             """INSERT INTO serving.trial_memos (nct_id, payload_hash, payload_version,
                  payload, prompt_version, model, chosen_as, paragraphs, valid_as_of,

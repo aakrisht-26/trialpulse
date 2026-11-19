@@ -16,20 +16,22 @@ With the memo_v3 check, the only text the model could store was the text a templ
 
 1. **memo_v4: every paragraph from the template.** Paragraph 2 is one sentence per 12-month driver in the payload's order: "The <label> is <value>, which raises the risk." (or "lowers"). For a trial chosen because its risk moved, paragraph 1 adds after its lead-in: "They explain the current level of the 12-month score, not its change." The lead-in itself says the sentences "name the features that contributed most to the model's 12-month score".
 2. **The fabrication check stays** as the test of the template at every generation: a memo that fails is not stored, the issue for rejections over 20% of a run stays, and every memo should pass. A failure is a template bug to fix.
-3. **Groq leaves the memo path.** `memo.yml` no longer reads `GROQ_API_KEY`, the GitHub secret is deleted, the memo prompt files and the generator's Groq client go, a test fails if any workflow names the key, and every stored memo's `model` reads "template" (`prompt_version` memo_v4). Step 6's labeler is unchanged, and the key stays in .env for it.
+3. **Groq leaves the memo path.** `memo.yml` no longer reads `GROQ_API_KEY`, the GitHub secret is deleted (after the push of this change), the memo prompt files and the generator's Groq client go, a test fails if any workflow names the key, and every stored memo's `model` reads "template" (`prompt_version` memo_v4). Step 6's labeler is unchanged, and the key stays in .env for it.
 4. **Selection is unchanged** (the top 100 unflagged trials by 12-month risk, plus the trials whose risk moved by 0.05). With no token limit, `memo.cap_per_run` is 2,000, so one run covers every chosen trial. The Neon size is recorded after the first run.
 5. **The audit's wording fixes:**
    - no label holds a comma (tested); the three that did are rephrased;
-   - the sponsor counts say what each counts (features/sponsor.py): "number of interventional trials first posted under the sponsor", and the ended and stopped trials "listed under the sponsor", with "trials first posted under another sponsor included"; the rate is the "early-stop rate of the ended trials listed under the sponsor", shown as "24.1% after smoothing toward the class rate". A rate above the class rate next to 0 registrations then reads as what it is;
+   - the sponsor counts say what each counts (features/sponsor.py, where every count leaves the trial itself out): "number of other interventional trials first posted under the sponsor", and the other ended and stopped trials "listed under the sponsor", with "trials first posted under another sponsor included"; the rate is the "early-stop rate used for the sponsor", shown as "24.1%, from the other ended trials listed under the sponsor smoothed toward the class rate (the class rate alone without a track record)". A rate above the class rate next to 0 registrations then reads as what it is;
    - "no earlier value is held for this trial" where a change since go-live has no earlier held version, with no claim that go-live is the cause;
    - "the 24-month checkpoint" becomes "stage 4 of 6, a stage every 6 months after the first posting", labeled "stage of the trial used by the score", so it cannot be read as the 24-month horizon;
    - a missing maximum age, which is the registry's "N/A (No limit)", is shown as "no upper limit";
-   - "the phase named in the title is none", "the past or current suspension is recorded" (or "not recorded"), and no double colon in paragraph 3;
+   - "the phase named in the title is none", "the past or current suspension is recorded" (or "not recorded"), and no double colon in paragraph 3 (the head of the change list ends with a full stop);
    - approved: each change date as its own sentence, and the status feature's words limited to the open statuses.
 
 ## Implementation details decided while building (flagged for review)
 
-- **No equality rule for paragraph 2 in the check.** Requiring paragraph 2 to equal the template would be a tautology at generation, where it is the template. The check's own rules, written apart from the template, are the test. The rules written for model text (connective words, other levels, past-tense outcome claims) are kept whole.
+- **No equality rule for paragraph 2 in the check.** Requiring paragraph 2 to equal the template would be a tautology at generation, where it is the template, as the existing equality rule for paragraphs 1 and 3 already is. The check's per-sentence driver rules and its general rules, written apart from the template, are the test.
+- **The rate's wording holds without a track record.** For a sponsor without one (an individual or a placeholder name), the rate is the class rate itself (features/transforms.py), so the display says so in brackets rather than claiming trials that were never counted. This, and "other" in the three counts, came from the adversarial review of the diff before it was pushed.
+- **One connection for a run's inserts,** each memo in its own short transaction (ADR 0058), so a run at the cap of 2,000 does not open 2,000 connections. The rules written for model text (connective words, other levels, past-tense outcome claims) are kept whole.
 - **A missing minimum age is shown as "no lower limit".** It is the same registry convention as the maximum age, so it is applied to both, which goes beyond the decision's wording.
 - **A maximum age of 99 years is shown as 99 years.** The registry encodes "no limit" as a missing age ("N/A"), which `contracts.versions.age_in_years` reads as missing. 99 is a value the sponsor entered, so the memo states what the record says.
 - **The cap is 2,000, not removed:** at least 10 times the top 100, so a day of many movers is covered, with a bound that keeps a runaway run short. A run over it logs the rest as over the cap, as before.
@@ -45,7 +47,7 @@ With the memo_v3 check, the only text the model could store was the text a templ
 
 ## Consequences
 
-- A memo is a pure function of its payload: reproducible, free and not limited per day. A run takes seconds, and no secret or outside service is involved.
+- A memo is a pure function of its payload: reproducible, free and not limited per day. Building takes milliseconds a memo, and each stored memo is one insert on Neon; no secret or outside service is involved.
 - Stretch item 2's "written by an LLM" is not met. The deviation is recorded in CLAUDE.md's Amendments, with this history as the reason.
 - The memo can say no more than the label table and the template say. Its wording is now entirely the table's, and the tests hold the table.
 - One known limit stays. Some of the model's drivers state one fact twice (the past or current suspension beside the suspension status; the start as now recorded beside the start date's move; the enrollment count beside its ratio to the first target). The memo states each driver as the model ranked it, and the lead-in says the drivers are not reasons.
