@@ -10,6 +10,10 @@ TrialPulse is operational risk analytics for clinical trial portfolios. For ever
 
 The dashboard is live at https://trialpulse-demo.streamlit.app and reads only the API; it also runs locally against the live API (Quickstart).
 
+For the top 100 trials by 12-month risk and the trials whose risk moved, the Trial detail page shows a risk memo, a short summary that a fixed template builds from the trial's stored score, drivers and record changes (no language model writes it), and that an automated check verifies before it is shown, so that every number and date in it comes from those stored values ([ADR 0085](docs/adr/0085-the-memo-is-built-by-a-template.md)).
+
+![The risk memo section of one trial's Trial detail page: its risks, its five 12-month drivers in plain words and its record changes, with the note that a template built it](docs/figures/memo_section.png)
+
 ## Results
 
 The champion is a discrete-time LightGBM model (M4) of 54 point-in-time features. Its results come from a locked test on the 2018 and 2019 walk-forward origins. No model scored a landmark of those origins before the hypotheses were registered in [docs/preregistration.md](docs/preregistration.md) (tag `prereg-v1`), but outcomes from those years did inform development: the development rows are scored against outcomes through the data cutoff, and the registration lists every such exposure. Intervals are 95% cluster-bootstrap intervals over trials. Full tables, every model and the calibration figures: [docs/results.md](docs/results.md).
