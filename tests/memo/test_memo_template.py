@@ -80,7 +80,8 @@ def test_the_first_posting_stands_apart_from_the_changes() -> None:
     status change; each date's kinds now stand alone."""
     assert t.paragraph_three(MEMO_6) == (
         "Since its first posting on 2025-09-04, changes to fields the model reads were posted "
-        "on 5 dates, newest first. 2026-08-18: intervention types or title phase. 2026-08-12: "
+        "on 5 dates, newest first. 2026-08-18: interventions or phase named in the title. "
+        "2026-08-12: "
         "dates or status verification. 2026-05-20: status; dates or status verification; "
         "enrollment. 2026-02-23: status; dates or status verification. 2025-12-16: dates or "
         "status verification. Versions that changed only other fields are not counted. "
@@ -98,7 +99,7 @@ def test_one_change_and_none() -> None:
     one = {**MEMO_6, "record_changes": MEMO_6["record_changes"][:1], "record_changes_total": 1}
     assert t.paragraph_three(one).startswith(
         "Since its first posting on 2025-09-04, changes to fields the model reads were posted "
-        "on 1 date. 2026-08-18: intervention types or title phase.")  # fmt: skip
+        "on 1 date. 2026-08-18: interventions or phase named in the title.")  # fmt: skip
     none = {**MEMO_6, "record_changes": [], "record_changes_total": 0}
     assert t.paragraph_three(none).startswith(
         "Since its first posting on 2025-09-04, no change to fields the model reads has been "
@@ -147,8 +148,8 @@ def test_changes_since_go_live_say_what_could_be_compared() -> None:
     third = t.paragraph_three(payload)
     assert third.endswith(
         f"{HELD}. For the change of 2026-11-15, its version is no longer held. The lead sponsor "
-        "changed on 2026-11-14. For the change of 2026-11-12, no earlier value is held for this "
-        "trial.")  # fmt: skip
+        "changed on 2026-11-14. For the change of 2026-11-12, no earlier version of this trial is "
+        "held, so there is nothing to compare it with.")  # fmt: skip
     assert "no change" not in third.lower()
     assert "go-live" not in third
     assert ":" not in third.split(HELD, 1)[1]
@@ -160,8 +161,8 @@ def test_after_retention_the_oldest_held_version_is_not_called_the_first() -> No
     payload = rows.build(markers=markers, versions=[rows.held(D(2027, 6, 1))],
                          versions_kept_from=D(2026, 12, 1))  # fmt: skip
     third = t.paragraph_three(payload)
-    assert third.endswith("For the change of 2027-06-01, no earlier value is held for this "
-                          "trial.")  # fmt: skip
+    assert third.endswith("For the change of 2027-06-01, no earlier version of this trial is "
+                          "held, so there is nothing to compare it with.")  # fmt: skip
     assert "first version held" not in third
 
 
@@ -184,4 +185,4 @@ def test_a_built_payload_makes_a_memo_that_passes() -> None:
     payload = rows.build()
     result = c.check(t.memo(payload), payload, ["Acme Pharma Inc."])
     assert result.passed, result.details
-    assert p.PAYLOAD_VERSION == 5
+    assert p.PAYLOAD_VERSION == 6

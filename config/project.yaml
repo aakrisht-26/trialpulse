@@ -135,7 +135,7 @@ retraining:                       # Section 14's promotion gate (ADR 0080)
   window_dates: 3                 # the window's latest monthly prediction dates graded (ADR 0080)
 
 memo:                             # the per-trial risk memo (ADRs 0084 and 0085)
-  version: memo_v5                # the template, the rate's inputs (ADR 0085, amended)
+  version: memo_v6                # the template, the rate's inputs (ADR 0085, amended)
   top_n: 100                      # the top unflagged trials by 12-month risk
   move_threshold: 0.05            # a 12-month risk move that chooses a trial
   move_window_days: 7             # the move's latest score row is at most this old

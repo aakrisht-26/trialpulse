@@ -86,8 +86,8 @@ def test_a_run_stores_template_memos_and_a_second_run_builds_nothing(seeded: str
             "SELECT DISTINCT model, prompt_version FROM serving.trial_memos"
         ).fetchall()
         rows = con.execute("SELECT paragraphs, payload FROM serving.trial_memos").fetchall()
-    assert row == ("succeeded", 3, 3, 0, "test", "template", "memo_v5")
-    assert written == [("template", "memo_v5")]
+    assert row == ("succeeded", 3, 3, 0, "test", "template", "memo_v6")
+    assert written == [("template", "memo_v6")]
     for paragraphs, payload in rows:  # every paragraph is the template's, exactly
         assert list(paragraphs) == template.memo(payload)
 
@@ -228,7 +228,7 @@ def test_the_review_file_holds_the_stored_memos_and_the_rejected_ones(
     assert "banned_language" in text
     assert text.count("Reasons: ") == 3
     assert "```json" in text
-    assert "by template (memo_v5)" in text
+    assert "by template (memo_v6)" in text
     for name in ("Acme Pharma", "Northern University Hospital", "Hand-placed trial"):
         assert name not in text
 
@@ -262,7 +262,7 @@ def test_the_stored_memo_is_the_normalized_text_that_was_checked(
 def test_a_memo_of_another_version_is_deleted_and_written_again(seeded: str) -> None:
     run(seeded, cfg())
     with psycopg.connect(seeded) as con:
-        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v4', "
+        con.execute("UPDATE serving.trial_memos SET prompt_version = 'memo_v5', "
                     "model = 'openai/gpt-oss-120b'")  # fmt: skip
         con.commit()
     _, tally = run(seeded, cfg())
@@ -271,7 +271,7 @@ def test_a_memo_of_another_version_is_deleted_and_written_again(seeded: str) -> 
         written = con.execute(
             "SELECT DISTINCT prompt_version, model FROM serving.trial_memos"
         ).fetchall()
-    assert written == [("memo_v5", "template")]
+    assert written == [("memo_v6", "template")]
 
 
 def test_a_chosen_trial_without_the_rates_inputs_waits_for_them(seeded: str) -> None:
@@ -298,7 +298,8 @@ def test_a_chosen_trial_without_the_rates_inputs_waits_for_them(seeded: str) -> 
     with psycopg.connect(seeded) as con:
         (paragraphs,) = con.execute("SELECT paragraphs FROM serving.trial_memos WHERE nct_id = %s",
                                     (top,)).fetchone()  # fmt: skip
-    assert "from 1 other ended trial of the sponsor, smoothed toward" in paragraphs[1]
+    assert ("from 1 other ended trial listed under the sponsor, trials first posted under another "
+            "sponsor included, smoothed toward") in paragraphs[1]  # fmt: skip
 
 
 def test_the_review_command_never_overwrites_a_file(seeded: str, tmp_path: Path) -> None:

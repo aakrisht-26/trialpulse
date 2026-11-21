@@ -18,7 +18,7 @@ def test_every_marker_group_has_a_name_and_no_other() -> None:
 def test_a_code_is_named_by_its_groups() -> None:
     assert mk.names(1) == ["recruitment status"]
     assert mk.names(2 | 4) == ["dates or status verification", "enrollment"]
-    assert mk.names(32) == ["intervention types or title phase"]
+    assert mk.names(32) == ["interventions or phase named in the title"]
     assert mk.names(64) == ["record"]
 
 

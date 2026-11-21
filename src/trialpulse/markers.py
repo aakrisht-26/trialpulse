@@ -37,7 +37,7 @@ NAMES: dict[int, str] = {
     ENROLLMENT: "enrollment",
     DESIGN: "design",
     SPONSOR: "sponsor",
-    INTERVENTIONS: "intervention types or title phase",
+    INTERVENTIONS: "interventions or phase named in the title",
 }
 UNKNOWN = "record"  # a code with no known group (never written, kept for safety)
 FIRST_POSTED = "first posted"

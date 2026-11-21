@@ -120,7 +120,10 @@ def _since_go_live(payload: Mapping[str, Any]) -> list[str]:
                 for v in values
             ] or [f"For the change of {day}, no value shown here changed."]  # fmt: skip
         elif entry["held"] in (FIRST_HELD, EARLIER_NOT_HELD):
-            parts.append(f"For the change of {day}, no earlier value is held for this trial.")
+            parts.append(
+                f"For the change of {day}, no earlier version of this trial is held, "
+                "so there is nothing to compare it with."
+            )
         else:
             parts.append(f"For the change of {day}, its version is no longer held.")
     return parts

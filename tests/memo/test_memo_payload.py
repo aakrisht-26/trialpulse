@@ -66,7 +66,7 @@ def build(**over: Any) -> dict[str, Any]:
 
 def test_the_payload_holds_the_stored_values_as_shown() -> None:
     out = build()
-    assert out["payload_version"] == 5  # memo_v5 (ADR 0085, amended 2026-11-19)
+    assert out["payload_version"] == 6  # memo_v6 (ADR 0085, amended 2026-11-21)
     assert out["risk_percent"] == {"12": 14, "24": 26}
     assert out["score_date"] == "2026-11-16"
     first = {"feature": "masking", "label": "number of masked roles", "value": "DOUBLE",
@@ -281,8 +281,8 @@ def test_the_payload_carries_the_rates_inputs_and_shows_one_form() -> None:
     assert out["sponsor_rate"] == {"has_record": True, "other_ended": 1, "class": "INDUSTRY",
                                    "class_rate_percent": "16.5"}  # fmt: skip
     assert out["drivers"]["12"][0]["display"] == (
-        "24.1%, from 1 other ended trial of the sponsor, smoothed toward the industry class rate "
-        "of 16.5%"
+        "24.1%, from 1 other ended trial listed under the sponsor, trials first posted under "
+        "another sponsor included, smoothed toward 16.5%, the class rate for industry sponsors"
     )
     assert c.check(t.memo(out), out, ["Acme Pharma Inc."]).passed
     none = build(score=with_rate({"sponsor_has_record": False, "sponsor_other_ended": None,
@@ -290,7 +290,7 @@ def test_the_payload_carries_the_rates_inputs_and_shows_one_form() -> None:
                                   "sponsor_rate_class": "INDUSTRY"}))  # fmt: skip
     assert none["sponsor_rate"]["other_ended"] == "none"
     assert none["drivers"]["12"][0]["display"] == (
-        "16.0%, the industry class rate, as the sponsor has no track record"
+        "16.0%, the class rate for industry sponsors, as the sponsor has no track record"
     )
     assert c.check(t.memo(none), none, ["Acme Pharma Inc."]).passed
 

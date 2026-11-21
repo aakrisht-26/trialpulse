@@ -326,7 +326,7 @@ DATES = "dates or status verification"
 # first posting, which v1 and v2 called a status change.
 MEMO_6 = {**PAYLOAD, "first_posted_on": "2025-09-04", "status_verified_month": "none",
           "record_changes": [
-              {"post_date": "2026-08-18", "changed": ["intervention types or title phase"]},
+              {"post_date": "2026-08-18", "changed": ["interventions or phase named in the title"]},
               {"post_date": "2026-08-12", "changed": [DATES]},
               {"post_date": "2026-05-20", "changed": ["status", DATES, "enrollment"]},
               {"post_date": "2026-02-23", "changed": ["status", DATES]},

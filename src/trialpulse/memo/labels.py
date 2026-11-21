@@ -22,10 +22,11 @@ says how a stored value (the text `explain.drivers.shown` made of it) is display
 - `year`: a calendar year as it is;
 - `percent`: a ratio as a percent with one decimal;
 - `rate`: the early-stop rate used for the sponsor as a percent with one decimal and exactly
-  how it was made, from the inputs the daily job stores with the score (memo_v5,
-  `RateInputs`): "24.1%, from 1 other ended trial of the sponsor, smoothed toward the other
-  (mostly universities and hospitals) class rate of 16.5%", or "16.0%, the industry class
-  rate, as the sponsor has no track record";
+  how it was made, from the inputs the daily job stores with the score (since memo_v5,
+  `RateInputs`; worded in memo_v6): "24.1%, from 1 other ended trial listed under the
+  sponsor, trials first posted under another sponsor included, smoothed toward 16.5%, the
+  class rate for other sponsors (mostly universities and hospitals)", or "16.0%, the class
+  rate for industry sponsors, as the sponsor has no track record";
 - `stage`: the landmark the score is computed at, as "stage 4 (stages run 0 to 6, a stage
   every 6 months after the first posting)" (never as months, which a reader could take for
   the 24-month horizon);
@@ -72,9 +73,19 @@ YEAR = "year"
 PERCENT = "percent"
 RATE = "rate"
 STAGE = "stage"
-# The classes as the rate's display names them ("the industry class rate"): the words of the
-# sponsor class driver, set after the class words below.
-RATE_CLASS_WORDS: dict[str, str] = {}
+# The sponsors of each class, as the rate's display names them ("the class rate for industry
+# sponsors"; memo_v6).
+RATE_CLASS_WORDS: dict[str, str] = {
+    "INDUSTRY": "industry sponsors",
+    "NIH": "the US national research institutes",
+    "FED": "US federal agencies",
+    "OTHER_GOV": "other government sponsors",
+    "NETWORK": "research networks",
+    "INDIV": "individual sponsors",
+    "OTHER": "other sponsors (mostly universities and hospitals)",
+    "UNKNOWN": "sponsors of unknown class",
+    "AMBIG": "sponsors of ambiguous class",
+}
 RECENT = "recent"
 DATE = "date"  # a field's date, as stored (ISO)
 MONTH = "month"  # a field's month, for the status verified date (YYYY-MM)
@@ -139,8 +150,6 @@ CLASS_WORDS: dict[str, str] = {
     "UNKNOWN": "unknown",
     "AMBIG": "ambiguous",
 }
-RATE_CLASS_WORDS.update({k: v.replace(", ", " (") + ")" if ", " in v else v
-                         for k, v in CLASS_WORDS.items()})  # fmt: skip
 PHASE_WORDS: dict[str, str] = {
     "NONE": "none",
     "EARLY_PHASE1": "early phase 1",
@@ -343,16 +352,19 @@ def _month(text: str) -> str:
 
 def rate_display(rate: float, inputs: RateInputs) -> str:
     """The sponsor rate and exactly how it was made (memo_v5): from the sponsor's other ended
-    trials smoothed toward its class rate, or the class rate alone without a track record."""
-    words = RATE_CLASS_WORDS.get(str(inputs.sponsor_class))
-    toward = f"the {words} class rate" if words else "the overall rate"
+    trials smoothed toward its class rate, or the class rate alone without a track record. The
+    ended trials carry the qualifier of their own driver's label (memo_v6), since a sponsor can
+    have more ended trials listed under it than trials first posted under it."""
+    sponsors = RATE_CLASS_WORDS.get(str(inputs.sponsor_class))
+    base = f"{inputs.class_rate * 100:.1f}%"
+    which = f"the class rate for {sponsors}" if sponsors else "the overall rate"
     if not inputs.has_record:
-        return f"{inputs.class_rate * 100:.1f}%, {toward}, as the sponsor has no track record"
+        return f"{base}, {which}, as the sponsor has no track record"
     n = int(inputs.other_ended or 0)
     trials = "trial" if n == 1 else "trials"
     return (
-        f"{rate * 100:.1f}%, from {_plain(n)} other ended {trials} of the sponsor, "
-        f"smoothed toward {toward} of {inputs.class_rate * 100:.1f}%"
+        f"{rate * 100:.1f}%, from {_plain(n)} other ended {trials} listed under the sponsor, "
+        f"trials first posted under another sponsor included, smoothed toward {base}, {which}"
     )
 
 

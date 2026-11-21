@@ -36,7 +36,7 @@ from typing import Any
 from trialpulse import markers as mk
 from trialpulse.memo import labels
 
-PAYLOAD_VERSION = 5  # memo_v5: the sponsor rate's inputs (ADR 0085, amended 2026-11-19)
+PAYLOAD_VERSION = 6  # memo_v6: the rate's and the changes' words (ADR 0085, amended)
 HORIZONS = (12, 24)
 DRIVERS_PER_HORIZON = 5
 TOP = "top_100"

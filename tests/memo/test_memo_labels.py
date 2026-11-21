@@ -197,36 +197,60 @@ def test_the_sponsor_counts_say_what_each_counts() -> None:
     assert lab.feature_label("sponsor_stop_rate") == ("early-stop rate used for the sponsor")
 
 
-RATE_FORMS = [  # memo_v5: exactly one of the two forms, from the stored inputs
-    (
-        lab.RateInputs(True, 1, "OTHER", 0.16522),
-        "0.241",
-        "24.1%, from 1 other ended trial of the sponsor, smoothed toward the other (mostly "
-        "universities and hospitals) class rate of 16.5%",
-    ),
-    (
-        lab.RateInputs(True, 3090, "INDUSTRY", 0.15990),
-        "0.214",
-        "21.4%, from 3,090 other ended trials of the sponsor, smoothed toward the industry class "
-        "rate of 16.0%",
-    ),
-    (
-        lab.RateInputs(True, 0, "NIH", 0.15010),
-        "0.150",
-        "15.0%, from 0 other ended trials of the sponsor, smoothed toward the US national "
-        "research institutes class rate of 15.0%",
-    ),
-    (
-        lab.RateInputs(False, None, "INDUSTRY", 0.15990),
-        "0.160",
-        "16.0%, the industry class rate, as the sponsor has no track record",
-    ),
-    (
-        lab.RateInputs(False, None, None, 0.16241),
-        "0.162",
-        "16.2%, the overall rate, as the sponsor has no track record",
-    ),
-]
+QUALIFIER = "listed under the sponsor, trials first posted under another sponsor included"
+RATE_FORMS = [  # exactly one of the two forms, from the stored inputs (memo_v5, words memo_v6)
+    (lab.RateInputs(True, 1, "OTHER", 0.16522), "0.241",  # memo 2: 1 ended, 0 first posted
+     f"24.1%, from 1 other ended trial {QUALIFIER}, smoothed toward 16.5%, the class rate for "
+     "other sponsors (mostly universities and hospitals)"),
+    (lab.RateInputs(True, 2075, "INDUSTRY", 0.15990), "0.221",  # memo 5: 2,075 against 1,732
+     f"22.1%, from 2,075 other ended trials {QUALIFIER}, smoothed toward 16.0%, the class rate "
+     "for industry sponsors"),
+    (lab.RateInputs(True, 0, "NIH", 0.15010), "0.150",
+     f"15.0%, from 0 other ended trials {QUALIFIER}, smoothed toward 15.0%, the class rate for "
+     "the US national research institutes"),
+    (lab.RateInputs(False, None, "INDUSTRY", 0.15990), "0.160",
+     "16.0%, the class rate for industry sponsors, as the sponsor has no track record"),
+    (lab.RateInputs(False, None, None, 0.16241), "0.162",
+     "16.2%, the overall rate, as the sponsor has no track record"),
+]  # fmt: skip
+
+# Every class in the same sentence (memo_v6): "the class rate for <its sponsors>".
+CLASS_SPONSORS = {
+    "INDUSTRY": "industry sponsors", "NIH": "the US national research institutes",
+    "FED": "US federal agencies", "OTHER_GOV": "other government sponsors",
+    "NETWORK": "research networks", "INDIV": "individual sponsors",
+    "OTHER": "other sponsors (mostly universities and hospitals)",
+    "UNKNOWN": "sponsors of unknown class", "AMBIG": "sponsors of ambiguous class",
+}  # fmt: skip
+
+
+def test_every_class_is_named_in_the_rate_sentence() -> None:
+    """The memo_v5 audit: "the other (mostly universities and hospitals) class rate" read as
+    "the other class"; every class now reads "the class rate for <its sponsors>"."""
+    assert set(CLASS_SPONSORS) == set(lab.CLASS_WORDS)
+    for code, sponsors in CLASS_SPONSORS.items():
+        for record in (True, False):
+            inputs = lab.RateInputs(record, 3 if record else None, code, 0.16)
+            shown = lab.feature_display("sponsor_stop_rate", "0.2", rate=inputs)
+            assert f"16.0%, the class rate for {sponsors}" in shown, shown
+            payload = one_driver("sponsor_stop_rate", "0.2", "raises", rate=inputs)
+            result = c.check(t.memo(payload), payload, ["Acme Pharma Inc."])
+            assert result.passed, (shown, result.details)
+
+
+def test_the_ended_trials_carry_the_qualifier_of_their_own_label() -> None:
+    """The memo_v5 audit (memos 2 and 5): "from 1 other ended trial of the sponsor" beside "0
+    other interventional trials first posted under the sponsor" read as more ended trials than
+    were posted; the rate now says what its ended count counts, as the count's label does."""
+    assert "trials first posted under another sponsor included" in lab.feature_label(
+        "sponsor_prior_ended"
+    )
+    one = lab.feature_display("sponsor_stop_rate", "0.241",
+                              rate=lab.RateInputs(True, 1, "OTHER", 0.16522))  # fmt: skip
+    assert f"from 1 other ended trial {QUALIFIER}," in one
+    many = lab.feature_display("sponsor_stop_rate", "0.221",
+                               rate=lab.RateInputs(True, 2075, "INDUSTRY", 0.15990))  # fmt: skip
+    assert f"from 2,075 other ended trials {QUALIFIER}," in many
 
 
 @pytest.mark.parametrize(("inputs", "value", "shown"), RATE_FORMS)

@@ -136,7 +136,10 @@ def first_held_is_named(chosen: tuple[str, ...], move: dict[str, Any] | None) ->
                          chosen=chosen, move=move)  # fmt: skip
     third = t.paragraph_three(payload)
     # memo_v4 (ADR 0085): no earlier value is held, with no claim about go-live as the cause
-    assert "For the change of 2026-11-12, no earlier value is held for this trial." in third
+    assert (
+        "For the change of 2026-11-12, no earlier version of this trial is held, so there "
+        "is nothing to compare it with."
+    ) in third  # memo_v6
     assert "no change in them is held" not in third
     assert "has been posted since then" not in third
     refused_third(payload, "Before and after values are held only from go-live (2026-11-08) "
@@ -183,8 +186,8 @@ def smoothing_is_named(value: str, old: str) -> None:
     # memo_v5: the display says exactly how the rate was made, from its stored inputs
     inputs = lab.RateInputs(True, 1, "OTHER", 0.165)
     assert lab.feature_display("sponsor_stop_rate", value, rate=inputs).endswith(
-        "other ended trial of the sponsor, smoothed toward the other (mostly universities and "
-        "hospitals) class rate of 16.5%"
+        "smoothed toward 16.5%, the class rate for other sponsors (mostly universities and "
+        "hospitals)"
     )
     refused_sentence("sponsor_stop_rate", value, old)
 
@@ -306,8 +309,8 @@ def kinds_of_a_date_stand_apart() -> None:
     payload = payload_of(markers=[(D(2023, 9, 1), 1), (D(2024, 10, 2), 2 | 4 | 32)],
                          first_post=D(2023, 9, 1))  # fmt: skip
     third = t.paragraph_three(payload)
-    assert ("2024-10-02: dates or status verification; enrollment; intervention types or title "
-            "phase.") in third  # fmt: skip
+    assert ("2024-10-02: dates or status verification; enrollment; interventions or phase named "
+            "in the title.") in third  # fmt: skip
     assert " and interventions" not in third
 
 
@@ -315,7 +318,7 @@ def api_and_memo_share_the_words() -> None:
     payload = payload_of(markers=[(D(2023, 9, 1), 1), (D(2024, 10, 2), 32)],
                          first_post=D(2023, 9, 1))  # fmt: skip
     assert payload["record_changes"][0]["changed"] == mk.names(32)
-    assert mk.names(32) == ["intervention types or title phase"]
+    assert mk.names(32) == ["interventions or phase named in the title"]  # memo_v6
 
 
 Case = tuple[str, Callable[..., None], tuple[Any, ...]]
