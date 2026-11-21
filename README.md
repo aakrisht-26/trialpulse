@@ -1,14 +1,29 @@
 # TrialPulse
 
-[![CI](https://github.com/aakrisht-26/trialpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/aakrisht-26/trialpulse/actions/workflows/ci.yml)
+[![CI](https://github.com/aakrisht-26/trialpulse/actions/workflows/ci.yml/badge.svg)](https://github.com/aakrisht-26/trialpulse/actions/workflows/ci.yml) [![Python version from pyproject.toml](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Faakrisht-26%2Ftrialpulse%2Fmain%2Fpyproject.toml&query=%24.project%5B%27requires-python%27%5D&label=python&color=blue)](pyproject.toml) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE) [![Dashboard: live](https://img.shields.io/badge/dashboard-live-brightgreen)](https://trialpulse-demo.streamlit.app) [![API docs: live](https://img.shields.io/badge/API%20docs-live-brightgreen)](https://trialpulse-api.onrender.com/docs)
 
 > Research demo. Not medical advice. Not for patient decision-making.
 
-TrialPulse is operational risk analytics for clinical trial portfolios. For every open interventional trial registered on ClinicalTrials.gov, it estimates the probability of an early stop (terminated or withdrawn) within the next 12 and 24 months, names the five features that moved each score, and has updated the estimates every day since 2026-11-08 as sponsors amend their records. It is meant for clinical operations and portfolio teams at sponsors and contract research organizations who want to know which trials to review first. It reads registry metadata only: it holds no patient data, and a high score means elevated early-stop risk for operational planning, not a statement about whether a treatment works.
+**TrialPulse ranks every open interventional trial on ClinicalTrials.gov by its risk of stopping early (terminated or withdrawn) within 12 and 24 months, so that clinical operations and portfolio teams at sponsors and contract research organizations know which trials to review first; a high score means elevated early-stop risk for operational planning, never a statement about whether a treatment works.**
+
+**Headline, from a pre-registered locked test** ([results](docs/results.md)): a 12-month AUC of 0.730 (0.719 to 0.741) at the 2018 test origin and 0.723 (0.712 to 0.734) at 2019; the tenth of trials with the highest predicted risk held 3.23 (3.06 to 3.45) and 3.06 (2.89 to 3.25) times the average early-stop rate. Three of the five registered hypotheses were falsified, and are published as such.
+
+**Live:** the [dashboard](https://trialpulse-demo.streamlit.app) and the [API documentation](https://trialpulse-api.onrender.com/docs), updated every day since 2026-11-08 (both sleep when idle and take about a minute to wake).
 
 ![A walk through the dashboard: Overview, a sponsor's Portfolio, a trial's risk, drivers and timeline, and Model health](docs/figures/demo.gif)
 
-The dashboard is live at https://trialpulse-demo.streamlit.app and reads only the API; it also runs locally against the live API (Quickstart).
+### What makes this different
+
+- **Point-in-time reconstruction:** every trial is rebuilt from its version history as it stood on the prediction date, and a leakage test proves no later version moves a feature ([features](docs/features.md)).
+- **A pre-registered, git-tagged locked test:** hypotheses with numeric ranges were tagged before the test origins could be scored, and the falsified ones are published ([pre-registration](docs/preregistration.md), [ADR 0009](docs/adr/0009-test-lock-requires-published-tag.md)).
+- **Competing risks, censoring-weighted evaluation:** open trials count as censored, completion competes with an early stop, and metrics are IPCW-weighted ([ADR 0017](docs/adr/0017-ipcw-censoring-weights-by-sponsor-class.md)).
+- **Live against offline parity:** the live rows are scored again offline and compared with what was served ([ADR 0038](docs/adr/0038-serving-parity-c.md)).
+- **Monitoring with an honest promotion gate:** no challenger is promoted before outcomes it never saw have matured ([ADR 0080](docs/adr/0080-retrain-on-the-laptop-and-a-gate-that-waits.md)).
+- **A risk memo that went from an LLM to a checked template:** three audits showed the model relating true facts wrongly, so a template now writes it and an automated check verifies every number and date ([ADR 0085](docs/adr/0085-the-memo-is-built-by-a-template.md)).
+
+## What it does
+
+For every open interventional trial, TrialPulse estimates the probability of an early stop within the next 12 and 24 months, names the five features that moved each score, and updates the estimates every day as sponsors amend their records. It reads registry metadata only and holds no patient data. The dashboard reads only the API; it also runs locally against the live API (Quickstart).
 
 For the top 100 trials by 12-month risk and the trials whose risk moved, the Trial detail page shows a risk memo, a short summary that a fixed template builds from the trial's stored score, drivers and record changes (no language model writes it), and that an automated check verifies before it is shown, so that every number and date in it comes from those stored values ([ADR 0085](docs/adr/0085-the-memo-is-built-by-a-template.md)).
 
@@ -47,6 +62,16 @@ What was falsified, and is published as such:
 **A live loop.** Since 2026-11-08 a daily GitHub Actions job pulls changed records from the official ClinicalTrials.gov API v2, turns them into the same features through the same SQL as the offline path, rescores the affected trials and writes compact tables to Postgres on Neon. A read-only FastAPI service and a Streamlit dashboard read only those tables. Parity is checked in layers, from synthetic histories in CI to the live rows themselves, scored again offline on the laptop and compared with what was served ([docs/adr/0038-serving-parity-c.md](docs/adr/0038-serving-parity-c.md)).
 
 **Monitoring and an honest gate.** A monthly workflow grades served predictions against the outcomes that have arrived; a replay of 2023 and 2024, scored by a model fitted as of 2023-01-01, gives monitoring history with matured outcomes, labeled as evidence, never as a registered result; each weekly full run measures drift of the features and risks against the trials served on 2026-11-03; alerts open GitHub issues. A quarterly retrain on the laptop trains a challenger, but the promotion gate waits until 12-month outcomes have matured for predictions made after the champion's training data, about November 2027, rather than compare the two models on data the champion was trained on ([ADR 0080](docs/adr/0080-retrain-on-the-laptop-and-a-gate-that-waits.md)).
+
+## How this compares
+
+Published studies have predicted trial termination from ClinicalTrials.gov; [docs/related_work.md](docs/related_work.md) sets four peer-reviewed ones beside TrialPulse, with their data, setup and results quoted as reported. Their numbers are not comparable with TrialPulse's, and nothing here claims to beat them:
+
+- Three classify trials that had already ended, as of the download date, from the record as downloaded; TrialPulse ranks open trials from what was known on each prediction date.
+- They test on random or cross-validated shares of the same years; TrialPulse tests on later years, locked behind a registration.
+- None models completion as a competing event; the one survival study treats completion as its event.
+
+TrialPulse's 12-month AUC is close to that of the largest of these studies, which classified ended trials, and below that of a study of 772 COVID-19 trials; the page explains why neither difference measures which approach is better.
 
 ## Architecture
 
@@ -90,7 +115,7 @@ Stack: Python, uv, DuckDB, LightGBM, scikit-learn, lifelines, Optuna, MLflow, Po
 | Data, cohort, features, models, locked test, explanations, model and data cards, scoring pipeline (roadmap Steps 1 to 13) | Built and run on the full data |
 | Daily job, API and dashboard (Steps 14 to 16) | Built and tested in CI against Postgres, recorded API responses and a seeded database |
 | Live database on Neon, daily job and API (Steps 14 and 15) | Live since 2026-11-08: the daily job runs on GitHub Actions, and the read-only API is at https://trialpulse-api.onrender.com (its documentation at https://trialpulse-api.onrender.com/docs). The free instance sleeps when idle and takes about a minute to wake ([ADR 0065](docs/adr/0065-the-api-runs-on-renders-free-web-service.md)). Measured on 2026-11-17 for one trial's risk, over the public internet: warm p50 250 ms, p95 305 ms and maximum 837 ms over 50 trials; after 16 and 17 minutes without requests, under 2 seconds each (the instance had not spun down) |
-| Dashboard on Streamlit Community Cloud (Step 16) | Live since 2026-11-17 at https://trialpulse-demo.streamlit.app, reading only the API; every page checked against the deployed API (7 of 7). The free app sleeps when idle; opening it wakes it, and a page waiting for the API says why ([ADR 0054](docs/adr/0054-waking-the-api.md)) |
+| Dashboard on Streamlit Community Cloud (Step 16) | Live since 2026-11-17 at https://trialpulse-demo.streamlit.app, reading only the API; every page checked against the deployed API (8 of 8, the memo section included). The free app sleeps when idle; opening it wakes it, and a page waiting for the API says why ([ADR 0054](docs/adr/0054-waking-the-api.md)) |
 | Monitoring, drift reports, grading of matured predictions, retraining (Step 17) | Live since 2026-11-17: a monthly grading workflow, a replay of 2023 and 2024 (monitoring evidence, never a registered result) on the Model health page, a weekly drift summary in the daily job's full run, the quarterly retrain on the laptop with its promotion gate (no promotion before matured outcomes exist after the champion's training data, about November 2027) and alerts as GitHub issues |
 
 Progress, step by step, with evidence and the open items: [docs/progress.md](docs/progress.md).

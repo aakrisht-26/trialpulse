@@ -16,6 +16,7 @@ One entry per roadmap step (CLAUDE.md, Section 18), newest first. Dates are the 
 
 - README brought up to date with the live system, Step 17's monitoring and the current limitations; this changelog.
 - The dashboard's public link in the README (https://trialpulse-demo.streamlit.app).
+- The README opens with an at-a-glance summary (badges, positioning, headline results, live links, what makes this different), and docs/related_work.md compares TrialPulse's setup with four published studies of trial termination (2026-11-22).
 - The drift alert also fires when one of the 5 most important features drifts (ADR 0081, amended 2026-11-17).
 - The 7 packages pip-audit flagged upgraded (streamlit to 1.67.0 with pillow 13); no known vulnerability left.
 
