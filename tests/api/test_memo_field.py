@@ -29,7 +29,7 @@ def test_a_current_memo_stays_hidden_while_memos_are_not_public(
     seeded: str, make_client: Callable[..., Any]
 ) -> None:
     _store(seeded, "NCT00000002", seeding.DAY)
-    client, _, _ = make_client()  # the configured default: memo_public false
+    client, _, _ = make_client(memo_public=False)  # the switch off (on since 2026-11-21)
     body = client.get("/v1/trials/NCT00000002/risk").json()
     assert body["status"] == "scored"
     assert body["memo"] is None

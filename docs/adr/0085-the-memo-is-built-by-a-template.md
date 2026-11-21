@@ -100,3 +100,7 @@ The medium finding: the rate sentence said "from 1 other ended trial of the spon
 - **The class rate comes before its name** ("smoothed toward 16.5%, the class rate for other sponsors (mostly universities and hospitals)"; "16.0%, the class rate for industry sponsors, as the sponsor has no track record"), so no class's name is followed by "of 16.5%", which read as part of the name; the decision's phrase is kept word for word.
 - **The class words for the rate** (`RATE_CLASS_WORDS`): "industry sponsors", "the US national research institutes", "US federal agencies", "other government sponsors", "research networks", "individual sponsors", "other sponsors (mostly universities and hospitals)", "sponsors of unknown class", "sponsors of ambiguous class"; without a stored class, "the overall rate".
 - Payload version 6 and memo version memo_v6, so every stored memo is rebuilt.
+
+### Outcome (2026-11-21)
+
+Memo run 12 rebuilt all 143 chosen memos as memo_v6 with 0 rejected. The light audit of 20 of them (data/memo_review/2026-11-21-2-audit.md, one auditor, one adversarial verifier) confirmed 5 findings, all low, and refuted 1; the auditor reported one as medium (memo 14: "no earlier version of this trial is held" beside earlier change dates), and the verifier, whose severity every audit of this ADR has used, confirmed it as low, since the sentence before it limits "held" to versions since go-live and the statement is true. With 0 high and 0 medium confirmed, `api.memo_public` was turned on the same day (decision 3).

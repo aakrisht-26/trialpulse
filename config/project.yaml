@@ -125,7 +125,7 @@ api:
   forwarded_diagnostic: false      # ADR 0065's measurement: logs the headers' shape only
   cache_entries: 20000
   page_size_max: 200
-  memo_public: false               # ADR 0084: memos stay off the API until Aakrisht's review
+  memo_public: true                # on since 2026-11-21: the memo_v6 audit, 0 high, 0 medium (ADR 0085)
 
 retraining:                       # Section 14's promotion gate (ADR 0080)
   auc_margin: 0.005               # challenger AUC at 12 months >= champion's minus this
