@@ -9,6 +9,7 @@ One entry per roadmap step (CLAUDE.md, Section 18), newest first. Dates are the 
 - memo_v4: the language model is retired; a template builds every paragraph, the check tests the template at every generation, and no workflow reads `GROQ_API_KEY` (ADR 0085). This deviates from the roadmap's "written by an LLM", and the ADR says why.
 - The Trial detail timeline names a trial's first posting "First posted" instead of a status change (ADR 0043, amended 2026-11-18; migration 0009).
 - memo_v5: the daily job stores the inputs of each served sponsor rate (migration 0010), so the memo says exactly how the rate was made; one name per marker group ("recruitment status", "dates or status verification") in the memo and the API; review files are never overwritten (ADR 0085, amended 2026-11-19).
+- memo_v6: the rate sentence says what its ended trials count, every sponsor class reads "the class rate for <its sponsors>", the change list names code 32 "interventions or phase named in the title" in the memo and the API, and a change without an earlier version says there is nothing to compare it with (ADR 0085, amended 2026-11-21).
 
 ## Step 18: Documentation and polish (approved 2026-11-17, in progress)
 

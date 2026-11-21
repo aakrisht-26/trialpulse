@@ -1,6 +1,6 @@
 # 0085. The memo is built by a template; the language model is retired
 
-- Status: **Accepted.** Decided by Aakrisht on 2026-11-19, after the audit of the memo_v3 memos. Amends ADR 0084 and deviates from CLAUDE.md's Stretch item 2, which asks for a memo "written by an LLM". **Amended 2026-11-19** (memo_v5, below): the sponsor rate says exactly how it was made, from inputs the daily job stores with each score (migration 0010), and the memo flag is turned on only if the audit of the regenerated memos finds no high or medium problem.
+- Status: **Accepted.** Decided by Aakrisht on 2026-11-19, after the audit of the memo_v3 memos. Amends ADR 0084 and deviates from CLAUDE.md's Stretch item 2, which asks for a memo "written by an LLM". **Amended 2026-11-19** (memo_v5, below): the sponsor rate says exactly how it was made, from inputs the daily job stores with each score (migration 0010), and the memo flag is turned on only if the audit of the regenerated memos finds no high or medium problem. **Amended again 2026-11-21** (memo_v6, below): the rate sentence says what its ended trials count, the change list uses the label's own words, every class reads naturally, and a change without an earlier version says so plainly.
 
 ## Context
 
@@ -80,3 +80,23 @@ The medium finding: the sponsor rate's display named both ways a rate can be mad
 
 - The daily job's score rows are about 17 bytes wider each (about 1.5 MB for 85,000 rows), well inside Neon's headroom.
 - Neon must be migrated to 0010 before the push, since the daily job refuses a database not at its head.
+
+## Amendment of 2026-11-21: memo_v6
+
+Decided by Aakrisht on 2026-11-21, after the read-only audit of the memo_v5 memos (data/memo_review/2026-11-21-audit.md: 4 findings, 0 high, 1 medium, 3 low; the memo_v4 medium finding fixed, every rate display matching its payload).
+
+### What the audit found
+
+The medium finding: the rate sentence said "from 1 other ended trial of the sponsor" beside "0 other interventional trials first posted under the sponsor" (memo 2; 2,075 ended against 1,732 first posted in memo 5). Both are true, because ended trials listed under a sponsor include trials first posted under another sponsor (features/sponsor.py), but the rate sentence left out the qualifier its own count's label carries, so a reader saw more ended trials than were ever posted. The low findings: "intervention types or title phase" in the change list against the label "phase named in the title"; "the other (mostly universities and hospitals) class rate" read as "the other class"; a change of 2026-11-12 without an earlier held version left unexplained.
+
+### Decision
+
+1. **The rate sentence carries the ended count's qualifier:** "<rate>, from <N> other ended trial(s) listed under the sponsor, trials first posted under another sponsor included, smoothed toward <class rate>, the class rate for <the class's sponsors>" (tested with the memo 2 case, 1 ended and 0 first posted, and the memo 5 case, 2,075 against 1,732).
+2. **The low findings:** the change list names code 32 "interventions or phase named in the title" in the memo and the API (ADR 0043's table of words, the dashboard's stubs recorded again); the OTHER class reads "the class rate for other sponsors (mostly universities and hospitals)", and every class reads "the class rate for <its sponsors>" in the same sentence (tested for all nine); a change with no earlier held version says "no earlier version of this trial is held, so there is nothing to compare it with".
+3. **The flag:** turned on only if the light audit of the regenerated memos confirms 0 high and 0 medium findings; then the API's memo is checked on a top-100 trial, `scripts/check_dashboard.py` also checks the memo section, a screenshot goes into the README with one sentence and the model card's live system gains a line.
+
+### Implementation details decided while building (flagged for review)
+
+- **The class rate comes before its name** ("smoothed toward 16.5%, the class rate for other sponsors (mostly universities and hospitals)"; "16.0%, the class rate for industry sponsors, as the sponsor has no track record"), so no class's name is followed by "of 16.5%", which read as part of the name; the decision's phrase is kept word for word.
+- **The class words for the rate** (`RATE_CLASS_WORDS`): "industry sponsors", "the US national research institutes", "US federal agencies", "other government sponsors", "research networks", "individual sponsors", "other sponsors (mostly universities and hospitals)", "sponsors of unknown class", "sponsors of ambiguous class"; without a stored class, "the overall rate".
+- Payload version 6 and memo version memo_v6, so every stored memo is rebuilt.

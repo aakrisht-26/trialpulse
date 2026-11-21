@@ -436,3 +436,10 @@ One entry per roadmap step: what was built, the key decision and why, the reject
 - **Key decision and why:** store the inputs where the score is made. The memo is written days after some scores, and only the daily job has the exact values behind each served rate; recomputing them later from the current sponsor record would give numbers that disagree with the rate shown.
 - **Rejected alternative:** recomputing the inputs in the memo job (no schema change). For a score from an earlier date, its count would be today's, so the memo could state a count that does not produce the rate beside it.
 - **Likely question:** "Why change the scoring pipeline's schema for a wording problem?" Answer: the wording problem was a missing fact. A sentence can only be exact about what the system kept, and the honest fix for an ambiguous sentence is to keep the fact, not to hedge it.
+
+## Stretch item 2: memo_v6, a true sentence that read as false (2026-11-21)
+
+- **What was built:** the rate sentence now carries the qualifier of the count it quotes ("other ended trials listed under the sponsor, trials first posted under another sponsor included"), every sponsor class reads "the class rate for <its sponsors>", the change list uses the label's own words for the interventions group, and a change without an earlier version says there is nothing to compare it with.
+- **Key decision and why:** reuse the qualifier of the ended count's own label inside the rate sentence. The audit found two true numbers that read as a contradiction (1 ended trial beside 0 trials first posted), because one sentence dropped the words that made the other count exact.
+- **Rejected alternative:** dropping the ended count from the rate sentence. It would remove the contradiction and the information that makes the rate meaningful (a rate from 1 trial is not a rate from 2,075).
+- **Likely question:** "Every number was correct, so why was it a finding?" Answer: a reader compares numbers across sentences. Two counts of different things placed side by side need the same qualifiers, or the reader infers an impossibility.
