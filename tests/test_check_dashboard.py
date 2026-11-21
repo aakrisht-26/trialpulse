@@ -29,10 +29,13 @@ CHECK = check_dashboard.Check("Model health", "/model-health",
 class Stub:
     """A page whose text moves through `texts` on each read, with error boxes counted."""
 
-    def __init__(self, texts: Sequence[str], errors: int = 0, wake: bool = False) -> None:
+    def __init__(self, texts: Sequence[str], errors: int = 0, wake: bool = False,
+                 labels: Sequence[str] = ()) -> None:  # fmt: skip
         self.texts, self.reads, self.errors, self.wake = list(texts), 0, errors, wake
         self.opened: list[str] = []
         self.clicked = 0
+        self.labels = list(labels)
+        self.expanded: list[str] = []
 
     def open(self, url: str) -> None:
         self.opened.append(url)
@@ -48,6 +51,12 @@ class Stub:
     def click_text(self, text: str) -> bool:
         if self.wake and text == check_dashboard.WAKE:
             self.clicked += 1
+            return True
+        return False
+
+    def click_label(self, text: str) -> bool:
+        if text in self.labels:
+            self.expanded.append(text)
             return True
         return False
 
@@ -111,4 +120,30 @@ def test_trial_detail_is_checked_for_a_score_and_for_the_not_found_message() -> 
     missing = names["Trial detail (not served)"]
     assert missing.path == "/trial?nct=NCT00000000"
     assert "TrialPulse serves no trial with the id NCT00000000" in missing.expect
-    assert len(check_dashboard.pages()) == 7
+    assert len(check_dashboard.pages()) == 8  # with the memo section (ADR 0085)
+
+
+MEMO_CHECK = next(c for c in check_dashboard.pages() if c.name == "Trial detail (memo)")
+OPENED = (
+    f"Trial detail\n{check_dashboard.NOTICE}\n{check_dashboard.MEMO_LABEL}\nFirst paragraph."
+    f"\nBuilt on 2026-11-21 by the template (memo_v6). Every paragraph ... "
+    f"{check_dashboard.MEMO_NOTE} (ADR 0085).\n{check_dashboard.NOTICE}\n{FOOTER}"
+)
+
+
+def test_the_memo_section_is_opened_by_its_label_and_checked() -> None:
+    """ADR 0085: the memo trial's page shows the section's label, its note and its own copy of
+    the notice once the section is opened."""
+    assert MEMO_CHECK.path == f"/trial?nct={check_dashboard.MEMO_ID}"
+    stub = Stub([OPENED], labels=[check_dashboard.MEMO_LABEL])
+    assert _check(stub, MEMO_CHECK) == []
+    assert stub.expanded == [check_dashboard.MEMO_LABEL]
+
+
+def test_a_page_without_the_memo_section_fails() -> None:
+    assert _check(Stub([OPENED]), MEMO_CHECK) == [
+        f"no section labeled {check_dashboard.MEMO_LABEL!r}"
+    ]
+    one_notice = OPENED.replace(f"(ADR 0085).\n{check_dashboard.NOTICE}", "(ADR 0085).")
+    failures = _check(Stub([one_notice], labels=[check_dashboard.MEMO_LABEL]), MEMO_CHECK)
+    assert failures == ["the notice 1 times, not 2"]

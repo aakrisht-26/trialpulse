@@ -8,8 +8,11 @@ app and waits for each to finish, within the dashboard's own waking budget (ADR 
 minutes) plus a margin; a Community Cloud app that sleeps is woken with its own button. A page
 passes when it shows the notice, the source attribution with a data-as-of date (ADR 0008),
 its own content, and no error box or traceback. Trial detail must show a scored trial's score
-card, and the plain not-found message for NCT00000000. It prints one line per page and exits
-1 on any failure. It reads pages only; it types nothing but a registry id in the address.
+card, the plain not-found message for NCT00000000, and, for a trial with a public memo (ADR
+0085), the memo section, opened by its label, with its label, its note that a template built
+it and its own copy of the notice. It prints one line per page and exits 1 on any failure. It
+reads pages only; it types nothing but a registry id in the address and clicks nothing but the
+memo section's label (and a sleeping app's wake button).
 """
 
 import argparse
@@ -28,6 +31,9 @@ WAKE = "get this app back up"  # Community Cloud's button on a sleeping app
 BUDGET_SECONDS = 240.0  # the dashboard's 3-minute waking budget, plus a margin
 SCORED_ID = "NCT06447662"  # scored, not flagged, on 2026-11-10
 MISSING_ID = "NCT00000000"
+MEMO_ID = "NCT06660810"  # in the top 100 with a memo_v6 memo on 2026-11-21
+MEMO_LABEL = "Summary of the stored drivers and record changes, built by a fixed template"
+MEMO_NOTE = "no language model writes any part of it"
 
 
 class Probe(Protocol):
@@ -37,6 +43,7 @@ class Probe(Protocol):
     def text(self) -> str: ...
     def count(self, selector: str) -> int: ...
     def click_text(self, text: str) -> bool: ...
+    def click_label(self, text: str) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -45,9 +52,11 @@ class Check:
     path: str
     expect: tuple[str, ...]  # text the page must show besides the frame
     needs_date: bool = True
+    expand: str | None = None  # a collapsed section to open, by its label, before checking
+    notices: int = 1  # copies of the notice the page must show
 
 
-def pages(scored: str = SCORED_ID) -> list[Check]:
+def pages(scored: str = SCORED_ID, memo: str = MEMO_ID) -> list[Check]:
     return [
         Check("Overview", "/", ("Trials with a score",)),
         Check("Portfolio", "/portfolio", ("Sponsor name starts with",), needs_date=False),
@@ -60,6 +69,13 @@ def pages(scored: str = SCORED_ID) -> list[Check]:
             "Trial detail (not served)",
             f"/trial?nct={MISSING_ID}",
             (f"TrialPulse serves no trial with the id {MISSING_ID}",),
+        ),
+        Check(  # ADR 0085: the memo section, with its label, its note and its own notice
+            "Trial detail (memo)",
+            f"/trial?nct={memo}",
+            (MEMO_LABEL, MEMO_NOTE, "Built on"),
+            expand=MEMO_LABEL,
+            notices=2,
         ),
         Check("Landscape", "/landscape", ("distinct open trials in all",)),
         Check("Why trials stop", "/why-trials-stop", ("free-text reasons sponsors gave",)),
@@ -90,10 +106,16 @@ def check_page(probe: Probe, base: str, check: Check, budget: float = BUDGET_SEC
     probe.open(base.rstrip("/") + check.path)
     if not wait_finished(probe, budget, now, sleep):
         return [f"the page did not finish within {budget:.0f} s"]
+    if check.expand:
+        if not probe.click_label(check.expand):
+            return [f"no section labeled {check.expand!r}"]
+        sleep(1.0)  # the section's contents are drawn on opening
     text = probe.text()
     failures = []
     if NOTICE not in text:
         failures.append("no notice")
+    elif text.count(NOTICE) < check.notices:
+        failures.append(f"the notice {text.count(NOTICE)} times, not {check.notices}")
     if SOURCE not in text:
         failures.append("no source attribution")
     if check.needs_date and not DATA_AS_OF.search(text):
@@ -137,11 +159,20 @@ class PlaywrightProbe:
                 return True
         return False
 
+    def click_label(self, text: str) -> bool:
+        for frame in self._frames():
+            label = frame.get_by_text(text, exact=True)  # type: ignore[attr-defined]
+            if label.count():
+                label.first.click()
+                return True
+        return False
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--url", required=True, help="the dashboard's address")
     parser.add_argument("--scored", default=SCORED_ID, help="a scored trial's registry id")
+    parser.add_argument("--memo", default=MEMO_ID, help="a trial with a public memo")
     args = parser.parse_args(argv)
     from playwright.sync_api import sync_playwright
 
@@ -150,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         browser = p.chromium.launch(channel="chrome", headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 900})
         probe = PlaywrightProbe(page)
-        for check in pages(args.scored):
+        for check in pages(args.scored, args.memo):
             started = time.monotonic()
             failures = check_page(probe, args.url, check)
             seconds = time.monotonic() - started
